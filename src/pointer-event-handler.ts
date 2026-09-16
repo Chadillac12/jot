@@ -3,6 +3,11 @@ import { createHoldIndicator } from './hold-indicator';
 import { pdfPathFromKey } from './jot-file';
 import { LongPressDetector } from './long-press';
 import type { Handedness, Palette, ToolState } from './palette';
+import {
+	type PaletteActivation,
+	usesPencilLongPress,
+	usesTwoFingerHold,
+} from './palette-activation';
 import { OVERLAY_KEY_ATTR, OverlayManager } from './overlay-manager';
 import { PenStrokeState } from './pen-stroke-state';
 import type { SidecarStore } from './sidecar-store';
@@ -30,6 +35,8 @@ export interface PointerEventHandlerDeps {
 	undo: UndoController;
 	toolState: () => ToolState;
 	handedness: () => Handedness;
+	paletteActivation: () => PaletteActivation;
+	pencilLongPressMs: () => number;
 }
 
 export class PointerEventHandler {
@@ -72,7 +79,9 @@ export class PointerEventHandler {
 
 	private onPointerDown(e: PointerEvent): void {
 		if (e.pointerType === 'touch') {
-			this.twoFingerHold.pointerDown(e.pointerId, e.clientX, e.clientY);
+			if (usesTwoFingerHold(this.deps.paletteActivation())) {
+				this.twoFingerHold.pointerDown(e.pointerId, e.clientX, e.clientY);
+			}
 			return;
 		}
 		if (e.pointerType !== 'pen' && e.pointerType !== 'mouse') return;
@@ -84,14 +93,21 @@ export class PointerEventHandler {
 		if (this.state.isDrawing()) {
 			this.state.appendDrawingPoint(this.toNormalized(e));
 		}
-		this.showHoldIndicator(e.clientX, e.clientY);
-		this.longPress.start(e.clientX, e.clientY);
+		if (this.shouldArmLongPress(e.pointerType)) {
+			const durationMs = this.deps.pencilLongPressMs();
+			this.showHoldIndicator(e.clientX, e.clientY, durationMs);
+			this.longPress.start(e.clientX, e.clientY, durationMs);
+		}
 		e.preventDefault();
 	}
 
 	private onPointerMove(e: PointerEvent): void {
 		if (e.pointerType === 'touch') {
-			this.twoFingerHold.pointerMove(e.pointerId, e.clientX, e.clientY);
+			if (usesTwoFingerHold(this.deps.paletteActivation())) {
+				this.twoFingerHold.pointerMove(e.pointerId, e.clientX, e.clientY);
+			} else {
+				this.twoFingerHold.cancel();
+			}
 			return;
 		}
 		this.longPress.move(e.clientX, e.clientY);
@@ -131,7 +147,11 @@ export class PointerEventHandler {
 	}
 
 	private onTwoFingerArm(cx: number, cy: number): void {
-		if (this.deps.palette.isOpen() || this.state.isBusy()) {
+		if (
+			!usesTwoFingerHold(this.deps.paletteActivation()) ||
+			this.deps.palette.isOpen() ||
+			this.state.isBusy()
+		) {
 			this.twoFingerHold.cancel();
 			return;
 		}
@@ -140,8 +160,15 @@ export class PointerEventHandler {
 	}
 
 	private onTwoFingerFire(cx: number, cy: number): void {
-		if (this.deps.palette.isOpen()) return;
+		this.removeTwoFingerIndicator();
+		if (!usesTwoFingerHold(this.deps.paletteActivation()) || this.deps.palette.isOpen()) return;
 		this.openPaletteAt(cx, cy);
+	}
+
+	private shouldArmLongPress(pointerType: string): boolean {
+		// Preserve the existing desktop mouse gesture. The preference controls
+		// Apple Pencil/stylus activation only.
+		return pointerType === 'mouse' || usesPencilLongPress(this.deps.paletteActivation());
 	}
 
 	private continueDrawingStroke(e: PointerEvent): void {
@@ -224,8 +251,8 @@ export class PointerEventHandler {
 		this.deps.palette.show(activeDocument.body, x, y, this.deps.handedness());
 	}
 
-	private showHoldIndicator(x: number, y: number): void {
-		this.holdIndicator = createHoldIndicator(activeDocument, x, y, LONG_PRESS_MS);
+	private showHoldIndicator(x: number, y: number, durationMs: number): void {
+		this.holdIndicator = createHoldIndicator(activeDocument, x, y, durationMs);
 		activeDocument.body.appendChild(this.holdIndicator);
 	}
 
