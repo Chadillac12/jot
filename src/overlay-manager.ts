@@ -13,12 +13,15 @@ const OVERLAY_CLASS = 'jot-overlay';
 const PAGE_ANCHOR_CLASS = 'jot-page-anchor';
 const PASSTHROUGH_CLASS = 'jot-passthrough';
 const PAGE_OBSERVED_ATTR = 'data-jot-observed';
+const ZOOM_SETTLE_MS = 120;
 
 export const OVERLAY_KEY_ATTR = 'data-jot-key';
 
 export class OverlayManager {
 	private containerObservers = new Map<WorkspaceLeaf, MutationObserver>();
+	private containerFilePaths = new Map<WorkspaceLeaf, string>();
 	private pageFilePaths = new WeakMap<HTMLElement, string>();
+	private pageResizeTimers = new WeakMap<HTMLElement, number>();
 
 	constructor(
 		private app: App,
@@ -33,15 +36,23 @@ export class OverlayManager {
 		if (!filePath) return;
 		const container = leaf.view.containerEl;
 
+		const existingObserver = this.containerObservers.get(leaf);
+		if (existingObserver && this.containerFilePaths.get(leaf) === filePath) return;
+		if (existingObserver) {
+			existingObserver.disconnect();
+			this.containerObservers.delete(leaf);
+			this.containerFilePaths.delete(leaf);
+		}
+
 		this.upgradePages(container, filePath);
-		if (this.containerObservers.has(leaf)) return;
-		const observer = new MutationObserver(() => {
+		const observer = new MutationObserver((records) => {
 			const currentPath = this.filePathForLeaf(leaf);
 			if (!currentPath) return;
-			this.upgradePages(container, currentPath);
+			this.upgradeAddedPages(records, currentPath);
 		});
 		observer.observe(container, { childList: true, subtree: true });
 		this.containerObservers.set(leaf, observer);
+		this.containerFilePaths.set(leaf, filePath);
 	}
 
 	pruneClosedObservers(): void {
@@ -52,6 +63,7 @@ export class OverlayManager {
 			if (!live.has(leaf)) {
 				observer.disconnect();
 				this.containerObservers.delete(leaf);
+				this.containerFilePaths.delete(leaf);
 			}
 		}
 	}
@@ -59,6 +71,7 @@ export class OverlayManager {
 	disconnectAll(): void {
 		this.containerObservers.forEach((observer) => observer.disconnect());
 		this.containerObservers.clear();
+		this.containerFilePaths.clear();
 	}
 
 	redrawPage(canvas: HTMLCanvasElement): void {
@@ -126,6 +139,19 @@ export class OverlayManager {
 			.forEach((page) => this.ensureOverlayOnPage(page, filePath));
 	}
 
+	private upgradeAddedPages(records: MutationRecord[], filePath: string): void {
+		for (const record of records) {
+			for (const node of record.addedNodes) {
+				if (node.nodeType !== 1) continue;
+				const element = node as HTMLElement;
+				if (element.matches('.page')) this.ensureOverlayOnPage(element, filePath);
+				element
+					.querySelectorAll<HTMLElement>('.page')
+					.forEach((page) => this.ensureOverlayOnPage(page, filePath));
+			}
+		}
+	}
+
 	private ensureOverlayOnPage(page: HTMLElement, filePath: string): void {
 		const pageNumberAttr = page.getAttribute('data-page-number');
 		const pageNumber = pageNumberAttr ? parseInt(pageNumberAttr, 10) : NaN;
@@ -179,10 +205,44 @@ export class OverlayManager {
 				this.ensureOverlayOnPage(page, filePath);
 				return;
 			}
+
+			// During a live pinch, only stretch the existing bitmap with CSS. Resizing
+			// canvas.width/height reallocates and clears the backing store, so doing it
+			// on every ResizeObserver tick causes visible flashes and heavy redraw work.
+			this.sizeOverlayCssToPage(current, page);
+			this.disableTextLayerInteraction(page);
+			this.scheduleSettledResize(page, filePath);
+		}).observe(page);
+	}
+
+	private scheduleSettledResize(page: HTMLElement, filePath: string): void {
+		const win = page.ownerDocument.defaultView ?? window;
+		const previous = this.pageResizeTimers.get(page);
+		if (previous !== undefined) win.clearTimeout(previous);
+
+		const timer = win.setTimeout(() => {
+			this.pageResizeTimers.delete(page);
+			if (!page.isConnected) return;
+			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
+			if (!current) {
+				this.ensureOverlayOnPage(page, filePath);
+				return;
+			}
 			this.sizeOverlayToPage(current, page);
 			this.disableTextLayerInteraction(page);
 			this.redrawPage(current);
-		}).observe(page);
+		}, ZOOM_SETTLE_MS);
+
+		this.pageResizeTimers.set(page, timer);
+	}
+
+	private sizeOverlayCssToPage(overlay: HTMLCanvasElement, page: HTMLElement): void {
+		const rect = page.getBoundingClientRect();
+		if (rect.width === 0 || rect.height === 0) return;
+		const width = `${rect.width}px`;
+		const height = `${rect.height}px`;
+		if (overlay.style.width === width && overlay.style.height === height) return;
+		overlay.setCssStyles({ width, height });
 	}
 
 	private sizeOverlayToPage(overlay: HTMLCanvasElement, page: HTMLElement): void {
