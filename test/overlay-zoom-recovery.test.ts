@@ -1,6 +1,6 @@
 /* @vitest-environment happy-dom */
 /* eslint-disable obsidianmd/prefer-active-doc, @typescript-eslint/no-explicit-any */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OverlayManager, OVERLAY_KEY_ATTR } from '../src/overlay-manager';
 import { StrokeStore } from '../src/stroke-store';
 
@@ -67,6 +67,7 @@ function makeHarness() {
 }
 
 beforeEach(() => {
+	vi.useFakeTimers();
 	document.body.innerHTML = '';
 	ResizeObserverMock.instances = [];
 	(globalThis as any).activeDocument = document;
@@ -79,6 +80,10 @@ beforeEach(() => {
 		setTransform: vi.fn(),
 		clearRect: vi.fn(),
 	} as any);
+});
+
+afterEach(() => {
+	vi.useRealTimers();
 });
 
 describe('OverlayManager zoom recovery', () => {
@@ -99,7 +104,7 @@ describe('OverlayManager zoom recovery', () => {
 		expect(wire).toHaveBeenCalledTimes(2);
 	});
 
-	it('resizes the existing overlay after the PDF page zoom changes', () => {
+	it('stretches the overlay during live zoom and rebuilds the backing store only after zoom settles', () => {
 		const { page, manager, wire } = makeHarness();
 		manager.attachToActivePdf();
 		const overlay = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
@@ -109,19 +114,51 @@ describe('OverlayManager zoom recovery', () => {
 		setRect(page, 1600, 2000);
 		ResizeObserverMock.instances[0]?.fire();
 
+		// CSS follows the live pinch immediately, but the expensive bitmap
+		// allocation remains untouched until the gesture has gone quiet.
 		expect(overlay?.style.width).toBe('1600px');
 		expect(overlay?.style.height).toBe('2000px');
+		expect(overlay?.width).toBe(1600);
+		expect(overlay?.height).toBe(2000);
+
+		vi.advanceTimersByTime(119);
+		expect(overlay?.width).toBe(1600);
+		vi.advanceTimersByTime(1);
+
+		expect(overlay?.width).toBe(3200);
+		expect(overlay?.height).toBe(4000);
 		expect((overlay?.width ?? 0) * (overlay?.height ?? 0)).toBeLessThanOrEqual(16_777_216);
 		expect(wire).toHaveBeenCalledTimes(1);
 	});
 
-	it('does not create duplicate overlays across repeated resize notifications', () => {
+	it('coalesces repeated resize notifications into one settled backing-store update', () => {
 		const { page, manager } = makeHarness();
 		manager.attachToActivePdf();
+		const overlay = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+
+		setRect(page, 1000, 1250);
+		ResizeObserverMock.instances[0]?.fire();
 		setRect(page, 1200, 1500);
 		ResizeObserverMock.instances[0]?.fire();
+		setRect(page, 1400, 1750);
 		ResizeObserverMock.instances[0]?.fire();
-		ResizeObserverMock.instances[0]?.fire();
+
 		expect(page.querySelectorAll('canvas.jot-overlay')).toHaveLength(1);
+		expect(overlay?.width).toBe(1600);
+		vi.advanceTimersByTime(120);
+		expect(overlay?.style.width).toBe('1400px');
+		expect(overlay?.style.height).toBe('1750px');
+		expect(overlay?.width).not.toBe(1600);
+	});
+
+	it('does not redraw every page again when attach is repeated for the same PDF leaf', () => {
+		const { manager } = makeHarness();
+		manager.attachToActivePdf();
+		const redraw = vi.spyOn(manager, 'redrawPage');
+
+		manager.attachToActivePdf();
+		manager.attachToActivePdf();
+
+		expect(redraw).not.toHaveBeenCalled();
 	});
 });
