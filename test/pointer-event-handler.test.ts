@@ -16,10 +16,11 @@ interface Harness {
 	palette: Palette;
 	strokes: StrokeStore;
 	sidecar: SidecarStore;
+	undo: UndoController;
 	activation: { value: PaletteActivation };
 }
 
-function makeHarness(activation: PaletteActivation = 'two-finger'): Harness {
+function makeHarness(activation: PaletteActivation = 'pencil-double-tap-hold'): Harness {
 	const canvas = document.createElement('canvas');
 	canvas.setAttribute('data-jot-key', 'notes.pdf::1');
 	canvas.getBoundingClientRect = () =>
@@ -45,7 +46,15 @@ function makeHarness(activation: PaletteActivation = 'two-finger'): Harness {
 	const strokes = new StrokeStore();
 	const sidecar = { scheduleSave: vi.fn() } as unknown as SidecarStore;
 	const overlays = { redrawPage: vi.fn() } as unknown as OverlayManager;
-	const undo = { push: vi.fn() } as unknown as UndoController;
+	const undo = {
+		push: vi.fn(),
+		discardLatestTransient: vi.fn((_pdfPath: string, key: string) => {
+			const current = strokes.forKey(key);
+			if (current.length === 0) return false;
+			strokes.setForKey(key, current.slice(0, -1));
+			return true;
+		}),
+	} as unknown as UndoController;
 	const currentActivation = { value: activation };
 
 	new PointerEventHandler(canvas, {} as CanvasRenderingContext2D, {
@@ -60,7 +69,7 @@ function makeHarness(activation: PaletteActivation = 'two-finger'): Harness {
 		pencilLongPressMs: () => 300,
 	}).attach();
 
-	return { canvas, palette, strokes, sidecar, activation: currentActivation };
+	return { canvas, palette, strokes, sidecar, undo, activation: currentActivation };
 }
 
 function pointer(
@@ -102,27 +111,28 @@ describe('PointerEventHandler palette activation', () => {
 		vi.useRealTimers();
 	});
 
-	it('does not arm LongPressDetector on Pencil down when Pencil long-press is disabled', () => {
+	it('does not arm LongPressDetector on ordinary Pencil down in double-tap-hold mode', () => {
 		const start = vi.spyOn(LongPressDetector.prototype, 'start');
-		const { canvas } = makeHarness('two-finger');
+		const { canvas } = makeHarness();
 
 		pointer(canvas, 'pointerdown', 'pen', 1, 20, 20);
 
 		expect(start).not.toHaveBeenCalled();
 	});
 
-	it('does not show a hold indicator when ordinary Pencil writing begins', () => {
-		const { canvas } = makeHarness('two-finger');
+	it('does not show a hold indicator on the first Pencil tap', () => {
+		const { canvas } = makeHarness();
 
 		pointer(canvas, 'pointerdown', 'pen', 1, 20, 20);
 
 		expect(document.querySelector('.jot-hold-indicator')).toBeNull();
 	});
 
-	it('still records and schedules a Pencil stroke with long-press disabled', () => {
-		const { canvas, strokes, sidecar } = makeHarness('two-finger');
+	it('still records and schedules an ordinary Pencil tap', () => {
+		const { canvas, strokes, sidecar } = makeHarness();
 
 		pointer(canvas, 'pointerdown', 'pen', 1, 20, 30);
+		vi.advanceTimersByTime(50);
 		pointer(canvas, 'pointerup', 'pen', 1, 20, 30);
 
 		expect(strokes.forKey('notes.pdf::1')).toHaveLength(1);
@@ -134,7 +144,36 @@ describe('PointerEventHandler palette activation', () => {
 		expect(sidecar.scheduleSave).toHaveBeenCalledWith('notes.pdf');
 	});
 
-	it('opens the palette after a two-finger hold', () => {
+	it('opens the palette on a quick Pencil tap followed by a nearby hold and removes the gesture mark', () => {
+		const { canvas, palette, strokes, undo } = makeHarness();
+
+		pointer(canvas, 'pointerdown', 'pen', 1, 25, 25);
+		vi.advanceTimersByTime(50);
+		pointer(canvas, 'pointerup', 'pen', 1, 25, 25);
+		expect(strokes.forKey('notes.pdf::1')).toHaveLength(1);
+
+		vi.advanceTimersByTime(100);
+		pointer(canvas, 'pointerdown', 'pen', 2, 27, 26);
+		expect(document.querySelector('.jot-hold-indicator')).not.toBeNull();
+		vi.advanceTimersByTime(280);
+
+		expect(palette.show).toHaveBeenCalledTimes(1);
+		expect(strokes.forKey('notes.pdf::1')).toHaveLength(0);
+		expect(undo.discardLatestTransient).toHaveBeenCalledWith('notes.pdf', 'notes.pdf::1');
+		expect(document.querySelector('.jot-hold-indicator')).toBeNull();
+	});
+
+	it('does not treat two fingers as palette activation in double-tap-hold mode', () => {
+		const { canvas, palette } = makeHarness();
+
+		pointer(canvas, 'pointerdown', 'touch', 10, 20, 40);
+		pointer(canvas, 'pointerdown', 'touch', 11, 40, 40);
+		vi.advanceTimersByTime(500);
+
+		expect(palette.show).not.toHaveBeenCalled();
+	});
+
+	it('keeps two-finger hold available when explicitly selected', () => {
 		const { canvas, palette } = makeHarness('two-finger');
 
 		pointer(canvas, 'pointerdown', 'touch', 10, 20, 40);
@@ -156,16 +195,12 @@ describe('PointerEventHandler palette activation', () => {
 		expect(palette.show).toHaveBeenCalledTimes(1);
 	});
 
-	it('allows both Pencil long-press and two-finger hold in both mode', () => {
+	it('allows Pencil long-press and two-finger hold in legacy both mode', () => {
 		const start = vi.spyOn(LongPressDetector.prototype, 'start');
 		const { canvas, palette } = makeHarness('both');
 
 		pointer(canvas, 'pointerdown', 'pen', 1, 25, 25);
 		expect(start).toHaveBeenCalledTimes(1);
-
-		// Finish the Pencil gesture without dragging. This test verifies that both
-		// activation paths coexist; rendering during a Pencil drag is covered by
-		// the renderer tests and requires a full CanvasRenderingContext2D mock.
 		pointer(canvas, 'pointerup', 'pen', 1, 25, 25);
 
 		pointer(canvas, 'pointerdown', 'touch', 10, 20, 40);
