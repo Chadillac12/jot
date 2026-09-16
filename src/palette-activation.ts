@@ -1,4 +1,8 @@
-export type PaletteActivation = 'two-finger' | 'pencil-long-press' | 'both';
+export type PaletteActivation =
+	| 'pencil-double-tap-hold'
+	| 'two-finger'
+	| 'pencil-long-press'
+	| 'both';
 export type FloatingPaletteButtonPosition = 'off' | 'left' | 'right';
 
 export interface PalettePreferences {
@@ -11,10 +15,14 @@ export const MIN_PENCIL_LONG_PRESS_MS = 250;
 export const MAX_PENCIL_LONG_PRESS_MS = 1000;
 
 export const DEFAULT_PALETTE_PREFERENCES: PalettePreferences = {
-	paletteActivation: 'two-finger',
+	paletteActivation: 'pencil-double-tap-hold',
 	pencilLongPressMs: 300,
 	floatingPaletteButtonPosition: 'right',
 };
+
+export function usesPencilDoubleTapHold(activation: PaletteActivation): boolean {
+	return activation === 'pencil-double-tap-hold';
+}
 
 export function usesPencilLongPress(activation: PaletteActivation): boolean {
 	return activation === 'pencil-long-press' || activation === 'both';
@@ -57,7 +65,12 @@ export function normalizePalettePreferences(
 }
 
 function isPaletteActivation(value: unknown): value is PaletteActivation {
-	return value === 'two-finger' || value === 'pencil-long-press' || value === 'both';
+	return (
+		value === 'pencil-double-tap-hold' ||
+		value === 'two-finger' ||
+		value === 'pencil-long-press' ||
+		value === 'both'
+	);
 }
 
 function isFloatingPaletteButtonPosition(value: unknown): value is FloatingPaletteButtonPosition {
