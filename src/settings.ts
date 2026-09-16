@@ -68,13 +68,14 @@ export class JotSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName('Palette activation')
 			.setDesc(
-				'Apple Pencil strokes start immediately unless Pencil long-press is enabled. Mouse long-press remains available on desktop.',
+				'Double-tap + hold: make one quick Pencil-tip tap, then press nearby again and hold briefly. This leaves two-finger pinch zoom free for the PDF.',
 			)
 			.addDropdown((d) =>
 				d
-					.addOption('two-finger', 'Two-finger hold (recommended)')
+					.addOption('pencil-double-tap-hold', 'Pencil double-tap + hold (recommended)')
 					.addOption('pencil-long-press', 'Pencil long-press')
-					.addOption('both', 'Both')
+					.addOption('two-finger', 'Two-finger hold (may conflict with PDF zoom)')
+					.addOption('both', 'Pencil long-press + two-finger hold (legacy)')
 					.setValue(this.plugin.settings.paletteActivation)
 					.onChange(async (value) => {
 						this.plugin.settings.paletteActivation = value as PaletteActivation;
@@ -115,7 +116,7 @@ export class JotSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName('Apple Pencil Pro squeeze')
 			.setDesc(
-				'Optional: assign Pencil Pro squeeze to an iPad Shortcut that opens obsidian://jot-palette. This opens the existing radial palette without enabling Pencil long-press.',
+				'Optional: assign Pencil Pro squeeze to an iPad Shortcut that opens obsidian://jot-palette. This opens the radial palette without using a PDF touch gesture.',
 			);
 
 		new Setting(containerEl)
