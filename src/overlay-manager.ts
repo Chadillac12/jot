@@ -140,16 +140,16 @@ export class OverlayManager {
 	}
 
 	private upgradeAddedPages(records: MutationRecord[], filePath: string): void {
-		for (const record of records) {
-			for (const node of record.addedNodes) {
-				if (node.nodeType !== 1) continue;
+		records.forEach((record) => {
+			record.addedNodes.forEach((node) => {
+				if (node.nodeType !== 1) return;
 				const element = node as HTMLElement;
 				if (element.matches('.page')) this.ensureOverlayOnPage(element, filePath);
 				element
 					.querySelectorAll<HTMLElement>('.page')
 					.forEach((page) => this.ensureOverlayOnPage(page, filePath));
-			}
-		}
+			});
+		});
 	}
 
 	private ensureOverlayOnPage(page: HTMLElement, filePath: string): void {
