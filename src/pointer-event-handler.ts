@@ -5,6 +5,7 @@ import { LongPressDetector } from './long-press';
 import type { Handedness, Palette, ToolState } from './palette';
 import {
 	type PaletteActivation,
+	usesPencilDoubleTapHold,
 	usesPencilLongPress,
 	usesTwoFingerHold,
 } from './palette-activation';
@@ -27,6 +28,21 @@ const LONG_PRESS_MOVE_PX = 15;
 const TWO_FINGER_HOLD_MS = 300;
 const TWO_FINGER_MOVE_PX = 25;
 
+const PENCIL_TAP_MAX_MS = 220;
+const PENCIL_TAP_MOVE_PX = 14;
+const PENCIL_DOUBLE_TAP_GAP_MS = 320;
+const PENCIL_DOUBLE_TAP_DISTANCE_PX = 36;
+const PENCIL_SECOND_HOLD_MS = 280;
+
+interface RecentPencilTap {
+	releasedAtMs: number;
+	clientX: number;
+	clientY: number;
+	pdfPath: string | null;
+	key: string | null;
+	hasUndoEntry: boolean;
+}
+
 export interface PointerEventHandlerDeps {
 	palette: Palette;
 	strokes: StrokeStore;
@@ -46,6 +62,16 @@ export class PointerEventHandler {
 	private twoFingerIndicator: HTMLElement | null = null;
 	private longPress: LongPressDetector;
 	private twoFingerHold: TwoFingerHoldDetector;
+
+	private penDownAtMs = 0;
+	private penDownX = 0;
+	private penDownY = 0;
+	private penMovedBeyondTapThreshold = false;
+	private recentPencilTap: RecentPencilTap | null = null;
+	private secondTapPointerId: number | null = null;
+	private secondTapX = 0;
+	private secondTapY = 0;
+	private secondTapTimer: number | null = null;
 
 	constructor(
 		private canvas: HTMLCanvasElement,
@@ -89,11 +115,20 @@ export class PointerEventHandler {
 
 		this.canvas.setPointerCapture(e.pointerId);
 		this.activePointerId = e.pointerId;
+
+		if (e.pointerType === 'pen') {
+			this.penDownAtMs = Date.now();
+			this.penDownX = e.clientX;
+			this.penDownY = e.clientY;
+			this.penMovedBeyondTapThreshold = false;
+			if (this.isSecondTapCandidate(e)) this.armPencilDoubleTapHold(e);
+		}
+
 		this.state.beginAt(e, this.deps.toolState().tool, () => this.snapshotCurrent());
 		if (this.state.isDrawing()) {
 			this.state.appendDrawingPoint(this.toNormalized(e));
 		}
-		if (this.shouldArmLongPress(e.pointerType)) {
+		if (!this.isPencilSecondTapArmed() && this.shouldArmLongPress(e.pointerType)) {
 			const durationMs = this.deps.pencilLongPressMs();
 			this.showHoldIndicator(e.clientX, e.clientY, durationMs);
 			this.longPress.start(e.clientX, e.clientY, durationMs);
@@ -110,6 +145,21 @@ export class PointerEventHandler {
 			}
 			return;
 		}
+
+		if (e.pointerType === 'pen') {
+			const moved = Math.hypot(e.clientX - this.penDownX, e.clientY - this.penDownY);
+			if (moved > PENCIL_TAP_MOVE_PX) this.penMovedBeyondTapThreshold = true;
+
+			if (this.isPencilSecondTapArmed() && e.pointerId === this.secondTapPointerId) {
+				const secondMove = Math.hypot(e.clientX - this.secondTapX, e.clientY - this.secondTapY);
+				if (secondMove <= PENCIL_TAP_MOVE_PX) {
+					e.preventDefault();
+					return;
+				}
+				this.cancelPencilDoubleTapHold();
+			}
+		}
+
 		this.longPress.move(e.clientX, e.clientY);
 		if (this.state.isErasing()) {
 			if (this.eraseAt(e)) this.state.markErased();
@@ -124,14 +174,25 @@ export class PointerEventHandler {
 			this.twoFingerHold.pointerUp(e.pointerId);
 			return;
 		}
+
+		if (e.pointerType === 'pen' && this.isPencilSecondTapArmed() && e.pointerId === this.secondTapPointerId) {
+			this.cancelPencilDoubleTapHold();
+		}
+
 		this.longPress.cancel();
+		const isQuickPencilTap = this.isQuickPencilTap(e);
+
 		if (this.state.isErasing()) {
-			this.finalizeEraserGesture();
+			const pushedUndo = this.finalizeEraserGesture();
+			if (isQuickPencilTap) this.rememberPencilTap(e, pushedUndo);
 			this.releasePointerCapture();
 			return;
 		}
 		if (this.state.isDrawing()) {
-			this.finalizeDrawingStroke();
+			const committed = this.finalizeDrawingStroke();
+			if (isQuickPencilTap && committed) {
+				this.rememberPencilTap(e, committed.hasUndoEntry, committed.key, committed.pdfPath);
+			}
 			window.requestAnimationFrame(() => this.deps.overlays.redrawPage(this.canvas));
 		}
 		this.releasePointerCapture();
@@ -165,6 +226,90 @@ export class PointerEventHandler {
 		this.openPaletteAt(cx, cy);
 	}
 
+	private isSecondTapCandidate(e: PointerEvent): boolean {
+		if (!usesPencilDoubleTapHold(this.deps.paletteActivation())) return false;
+		const previous = this.recentPencilTap;
+		if (!previous) return false;
+		const age = Date.now() - previous.releasedAtMs;
+		const distance = Math.hypot(e.clientX - previous.clientX, e.clientY - previous.clientY);
+		if (age < 0 || age > PENCIL_DOUBLE_TAP_GAP_MS || distance > PENCIL_DOUBLE_TAP_DISTANCE_PX) {
+			this.recentPencilTap = null;
+			return false;
+		}
+		return true;
+	}
+
+	private armPencilDoubleTapHold(e: PointerEvent): void {
+		this.secondTapPointerId = e.pointerId;
+		this.secondTapX = e.clientX;
+		this.secondTapY = e.clientY;
+		this.showHoldIndicator(e.clientX, e.clientY, PENCIL_SECOND_HOLD_MS);
+		this.secondTapTimer = window.setTimeout(() => this.onPencilDoubleTapHoldFire(), PENCIL_SECOND_HOLD_MS);
+	}
+
+	private onPencilDoubleTapHoldFire(): void {
+		if (!this.isPencilSecondTapArmed()) return;
+		const previous = this.recentPencilTap;
+		const x = this.secondTapX;
+		const y = this.secondTapY;
+
+		this.clearSecondTapTimer();
+		this.secondTapPointerId = null;
+		this.removeHoldIndicator();
+		this.recentPencilTap = null;
+		this.longPress.cancel();
+
+		if (previous?.hasUndoEntry && previous.pdfPath && previous.key) {
+			this.deps.undo.discardLatestTransient(previous.pdfPath, previous.key);
+		}
+
+		this.state.reset();
+		this.deps.overlays.redrawPage(this.canvas);
+		this.releasePointerCapture();
+		this.openPaletteAt(x, y);
+	}
+
+	private cancelPencilDoubleTapHold(): void {
+		this.clearSecondTapTimer();
+		this.secondTapPointerId = null;
+		this.removeHoldIndicator();
+		this.recentPencilTap = null;
+	}
+
+	private clearSecondTapTimer(): void {
+		if (this.secondTapTimer !== null) window.clearTimeout(this.secondTapTimer);
+		this.secondTapTimer = null;
+	}
+
+	private isPencilSecondTapArmed(): boolean {
+		return this.secondTapPointerId !== null;
+	}
+
+	private isQuickPencilTap(e: PointerEvent): boolean {
+		return (
+			e.pointerType === 'pen' &&
+			usesPencilDoubleTapHold(this.deps.paletteActivation()) &&
+			!this.penMovedBeyondTapThreshold &&
+			Date.now() - this.penDownAtMs <= PENCIL_TAP_MAX_MS
+		);
+	}
+
+	private rememberPencilTap(
+		e: PointerEvent,
+		hasUndoEntry: boolean,
+		key = this.canvas.getAttribute(OVERLAY_KEY_ATTR),
+		pdfPath = key ? pdfPathFromKey(key) : null,
+	): void {
+		this.recentPencilTap = {
+			releasedAtMs: Date.now(),
+			clientX: e.clientX,
+			clientY: e.clientY,
+			pdfPath,
+			key,
+			hasUndoEntry,
+		};
+	}
+
 	private shouldArmLongPress(pointerType: string): boolean {
 		// Preserve the existing desktop mouse gesture. The preference controls
 		// Apple Pencil/stylus activation only.
@@ -188,15 +333,21 @@ export class PointerEventHandler {
 		e.preventDefault();
 	}
 
-	private finalizeEraserGesture(): void {
+	private finalizeEraserGesture(): boolean {
 		const snapshot = this.state.takeEraserSnapshot();
 		if (snapshot) this.deps.undo.push(snapshot);
 		this.state.reset();
+		return snapshot !== null;
 	}
 
-	private finalizeDrawingStroke(): void {
+	private finalizeDrawingStroke(): {
+		key: string;
+		pdfPath: string | null;
+		hasUndoEntry: boolean;
+	} | null {
 		const points = this.state.drawingPoints();
 		const key = this.canvas.getAttribute(OVERLAY_KEY_ATTR);
+		let result: { key: string; pdfPath: string | null; hasUndoEntry: boolean } | null = null;
 		if (key && points.length > 0) {
 			const pdfPath = pdfPathFromKey(key);
 			const tool = this.deps.toolState();
@@ -210,8 +361,10 @@ export class PointerEventHandler {
 				tool: tool.tool,
 			});
 			if (pdfPath) this.deps.sidecar.scheduleSave(pdfPath);
+			result = { key, pdfPath, hasUndoEntry: pdfPath !== null };
 		}
 		this.state.reset();
+		return result;
 	}
 
 	private eraseAt(e: PointerEvent): boolean {
@@ -252,6 +405,7 @@ export class PointerEventHandler {
 	}
 
 	private showHoldIndicator(x: number, y: number, durationMs: number): void {
+		this.removeHoldIndicator();
 		this.holdIndicator = createHoldIndicator(activeDocument, x, y, durationMs);
 		activeDocument.body.appendChild(this.holdIndicator);
 	}
