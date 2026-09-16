@@ -46,6 +46,20 @@ export class UndoHistory {
 		return entry;
 	}
 
+	/**
+	 * Remove the newest undo entry only when it belongs to the expected page.
+	 * This is used for short-lived gesture strokes (for example the first tap
+	 * of Pencil double-tap-and-hold) so they do not leave an empty undo step.
+	 */
+	discardLatestMatching(pdfPath: string, key: string): UndoEntry | null {
+		const stack = this.undoStacks.get(pdfPath);
+		const entry = stack?.[stack.length - 1];
+		if (!entry || entry.key !== key) return null;
+		stack!.pop();
+		if (stack!.length === 0) this.undoStacks.delete(pdfPath);
+		return entry;
+	}
+
 	dropPath(pdfPath: string): void {
 		this.undoStacks.delete(pdfPath);
 		this.redoStacks.delete(pdfPath);
