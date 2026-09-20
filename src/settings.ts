@@ -68,7 +68,7 @@ export class JotSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName('Palette activation')
 			.setDesc(
-				'Double-tap + hold: make one quick Pencil-tip tap, then press nearby again and hold briefly. This leaves two-finger pinch zoom free for the PDF.',
+				'Double-tap + hold: make one quick pencil-tip tap, then press nearby again and hold briefly. This leaves two-finger pinch zoom free for the PDF.',
 			)
 			.addDropdown((d) =>
 				d
@@ -85,7 +85,7 @@ export class JotSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Pencil long-press duration')
-			.setDesc('Advanced: delay before the palette opens when Pencil long-press is enabled.')
+			.setDesc('Advanced: delay before the palette opens when pencil long-press is enabled.')
 			.addSlider((slider) =>
 				slider
 					.setLimits(MIN_PENCIL_LONG_PRESS_MS, MAX_PENCIL_LONG_PRESS_MS, 50)
@@ -98,7 +98,7 @@ export class JotSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Floating palette button')
-			.setDesc('Show a small edge button on the active PDF. Select Off to hide it.')
+			.setDesc('Show a small edge button on the active PDF. Select off to hide it.')
 			.addDropdown((d) =>
 				d
 					.addOption('off', 'Off')
@@ -114,9 +114,9 @@ export class JotSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName('Apple Pencil Pro squeeze')
+			.setName('Squeeze shortcut')
 			.setDesc(
-				'Optional: assign Pencil Pro squeeze to an iPad Shortcut that opens obsidian://jot-palette. This opens the radial palette without using a PDF touch gesture.',
+				'Optional: assign the stylus squeeze gesture to an iPad shortcut that opens obsidian://jot-palette. This opens the radial palette without using a PDF touch gesture.',
 			);
 
 		new Setting(containerEl)
