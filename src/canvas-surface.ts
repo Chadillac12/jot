@@ -43,7 +43,10 @@ export function safeBackingStoreDpr(
 	const byWidth = maxDimension / cssWidth;
 	const byHeight = maxDimension / cssHeight;
 	const byArea = Math.sqrt(maxArea / (cssWidth * cssHeight));
-	const effective = Math.min(dpr, byWidth, byHeight, byArea);
+	const capped = Math.min(dpr, byWidth, byHeight, byArea);
+	// Leave a tiny amount of headroom whenever a safety limit is active so
+	// independently rounded backing-store dimensions cannot cross the limit.
+	const effective = capped < dpr ? capped * 0.999 : capped;
 	return Number.isFinite(effective) && effective > 0 ? effective : dpr;
 }
 
