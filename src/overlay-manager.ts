@@ -3,6 +3,7 @@ import {
 	applyBackingStoreSize,
 	devicePixelRatioFor,
 	readCanvasSurface,
+	safeBackingStoreDpr,
 } from './canvas-surface';
 import { pageKey } from './jot-file';
 import { drawStroke } from './stroke-render';
@@ -12,11 +13,20 @@ const OVERLAY_CLASS = 'jot-overlay';
 const PAGE_ANCHOR_CLASS = 'jot-page-anchor';
 const PASSTHROUGH_CLASS = 'jot-passthrough';
 const PAGE_OBSERVED_ATTR = 'data-jot-observed';
+const ZOOM_SETTLE_MS = 120;
 
 export const OVERLAY_KEY_ATTR = 'data-jot-key';
 
+interface PendingResizeBatch {
+	timer: number;
+	pages: Map<HTMLElement, string>;
+}
+
 export class OverlayManager {
 	private containerObservers = new Map<WorkspaceLeaf, MutationObserver>();
+	private containerFilePaths = new Map<WorkspaceLeaf, string>();
+	private pageFilePaths = new WeakMap<HTMLElement, string>();
+	private resizeBatches = new Map<Document, PendingResizeBatch>();
 
 	constructor(
 		private app: App,
@@ -31,15 +41,23 @@ export class OverlayManager {
 		if (!filePath) return;
 		const container = leaf.view.containerEl;
 
+		const existingObserver = this.containerObservers.get(leaf);
+		if (existingObserver && this.containerFilePaths.get(leaf) === filePath) return;
+		if (existingObserver) {
+			existingObserver.disconnect();
+			this.containerObservers.delete(leaf);
+			this.containerFilePaths.delete(leaf);
+		}
+
 		this.upgradePages(container, filePath);
-		if (this.containerObservers.has(leaf)) return;
-		const observer = new MutationObserver(() => {
+		const observer = new MutationObserver((records) => {
 			const currentPath = this.filePathForLeaf(leaf);
 			if (!currentPath) return;
-			this.upgradePages(container, currentPath);
+			this.upgradeAddedPages(records, currentPath);
 		});
 		observer.observe(container, { childList: true, subtree: true });
 		this.containerObservers.set(leaf, observer);
+		this.containerFilePaths.set(leaf, filePath);
 	}
 
 	pruneClosedObservers(): void {
@@ -50,6 +68,7 @@ export class OverlayManager {
 			if (!live.has(leaf)) {
 				observer.disconnect();
 				this.containerObservers.delete(leaf);
+				this.containerFilePaths.delete(leaf);
 			}
 		}
 	}
@@ -57,6 +76,12 @@ export class OverlayManager {
 	disconnectAll(): void {
 		this.containerObservers.forEach((observer) => observer.disconnect());
 		this.containerObservers.clear();
+		this.containerFilePaths.clear();
+		this.resizeBatches.forEach((batch, doc) => {
+			const win = doc.defaultView ?? window;
+			win.clearTimeout(batch.timer);
+		});
+		this.resizeBatches.clear();
 	}
 
 	redrawPage(canvas: HTMLCanvasElement): void {
@@ -124,23 +149,39 @@ export class OverlayManager {
 			.forEach((page) => this.ensureOverlayOnPage(page, filePath));
 	}
 
+	private upgradeAddedPages(records: MutationRecord[], filePath: string): void {
+		records.forEach((record) => {
+			record.addedNodes.forEach((node) => {
+				if (node.nodeType !== 1) return;
+				const element = node as HTMLElement;
+				if (element.matches('.page')) this.ensureOverlayOnPage(element, filePath);
+				element
+					.querySelectorAll<HTMLElement>('.page')
+					.forEach((page) => this.ensureOverlayOnPage(page, filePath));
+			});
+		});
+	}
+
 	private ensureOverlayOnPage(page: HTMLElement, filePath: string): void {
 		const pageNumberAttr = page.getAttribute('data-page-number');
 		const pageNumber = pageNumberAttr ? parseInt(pageNumberAttr, 10) : NaN;
 		if (Number.isNaN(pageNumber)) return;
 		const key = pageKey(filePath, pageNumber);
+		this.pageFilePaths.set(page, filePath);
+		page.classList.add(PAGE_ANCHOR_CLASS);
 
 		const existing = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
 		if (existing) {
 			if (existing.getAttribute(OVERLAY_KEY_ATTR) === key) {
 				this.sizeOverlayToPage(existing, page);
+				this.disableTextLayerInteraction(page);
+				this.ensurePageObservers(page);
 				this.redrawPage(existing);
 				return;
 			}
 			existing.remove();
 		}
 
-		page.classList.add(PAGE_ANCHOR_CLASS);
 		const overlay = activeDocument.createElement('canvas');
 		overlay.className = OVERLAY_CLASS;
 		overlay.setAttribute(OVERLAY_KEY_ATTR, key);
@@ -148,38 +189,90 @@ export class OverlayManager {
 		page.appendChild(overlay);
 		this.disableTextLayerInteraction(page);
 		this.wireOverlay(overlay);
+		this.ensurePageObservers(page);
 		this.redrawPage(overlay);
+	}
 
+	private ensurePageObservers(page: HTMLElement): void {
 		if (page.getAttribute(PAGE_OBSERVED_ATTR) === '1') return;
 		page.setAttribute(PAGE_OBSERVED_ATTR, '1');
 
-		const findOverlay = () =>
-			page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
-
 		new MutationObserver(() => {
-			const current = findOverlay();
-			if (!current) return;
-			this.disableTextLayerInteraction(page);
-			if (!page.contains(current)) {
-				this.sizeOverlayToPage(current, page);
-				page.appendChild(current);
-				this.redrawPage(current);
+			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
+			if (!current) {
+				const filePath = this.pageFilePaths.get(page);
+				if (filePath) this.ensureOverlayOnPage(page, filePath);
+				return;
 			}
-		}).observe(page, { childList: true });
+			this.disableTextLayerInteraction(page);
+		}).observe(page, { childList: true, subtree: true });
 
 		new ResizeObserver(() => {
-			const current = findOverlay();
-			if (!current) return;
-			this.sizeOverlayToPage(current, page);
-			this.redrawPage(current);
+			const filePath = this.pageFilePaths.get(page);
+			if (!filePath) return;
+			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
+			if (!current) {
+				this.ensureOverlayOnPage(page, filePath);
+				return;
+			}
+
+			// During a live pinch, only stretch the existing bitmap with CSS. Resizing
+			// canvas.width/height reallocates and clears the backing store, so doing it
+			// on every ResizeObserver tick causes visible flashes and heavy redraw work.
+			const sizeChanged = this.sizeOverlayCssToPage(current, page);
+			this.disableTextLayerInteraction(page);
+			if (sizeChanged) this.scheduleSettledResize(page, filePath);
 		}).observe(page);
+	}
+
+	private scheduleSettledResize(page: HTMLElement, filePath: string): void {
+		const doc = page.ownerDocument;
+		const win = doc.defaultView ?? window;
+		const existing = this.resizeBatches.get(doc);
+		const pages = existing?.pages ?? new Map<HTMLElement, string>();
+		if (existing) win.clearTimeout(existing.timer);
+		pages.set(page, filePath);
+
+		const timer = win.setTimeout(() => {
+			const batch = this.resizeBatches.get(doc);
+			if (!batch || batch.timer !== timer) return;
+			this.resizeBatches.delete(doc);
+			this.flushSettledResizeBatch(batch.pages);
+		}, ZOOM_SETTLE_MS);
+
+		this.resizeBatches.set(doc, { timer, pages });
+	}
+
+	private flushSettledResizeBatch(pages: Map<HTMLElement, string>): void {
+		pages.forEach((filePath, page) => {
+			if (!page.isConnected) return;
+			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
+			if (!current) {
+				this.ensureOverlayOnPage(page, filePath);
+				return;
+			}
+			this.sizeOverlayToPage(current, page);
+			this.disableTextLayerInteraction(page);
+			this.redrawPage(current);
+		});
+	}
+
+	private sizeOverlayCssToPage(overlay: HTMLCanvasElement, page: HTMLElement): boolean {
+		const rect = page.getBoundingClientRect();
+		if (rect.width === 0 || rect.height === 0) return false;
+		const width = `${rect.width}px`;
+		const height = `${rect.height}px`;
+		if (overlay.style.width === width && overlay.style.height === height) return false;
+		overlay.setCssStyles({ width, height });
+		return true;
 	}
 
 	private sizeOverlayToPage(overlay: HTMLCanvasElement, page: HTMLElement): void {
 		const rect = page.getBoundingClientRect();
 		if (rect.width === 0 || rect.height === 0) return;
-		const dpr = devicePixelRatioFor(window);
-		applyBackingStoreSize(overlay, rect.width, rect.height, dpr);
+		const requestedDpr = devicePixelRatioFor(window);
+		const effectiveDpr = safeBackingStoreDpr(rect.width, rect.height, requestedDpr);
+		applyBackingStoreSize(overlay, rect.width, rect.height, effectiveDpr);
 		overlay.setCssStyles({
 			width: `${rect.width}px`,
 			height: `${rect.height}px`,
