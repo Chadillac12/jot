@@ -1,4 +1,3 @@
-/* eslint-disable obsidianmd/prefer-active-doc */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DragHandler } from '../src/drag-handler';
 
