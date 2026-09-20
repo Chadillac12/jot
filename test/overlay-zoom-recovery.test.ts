@@ -1,5 +1,4 @@
 /* @vitest-environment happy-dom */
-/* eslint-disable obsidianmd/prefer-active-doc, @typescript-eslint/no-explicit-any */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OverlayManager, OVERLAY_KEY_ATTR } from '../src/overlay-manager';
 import { StrokeStore } from '../src/stroke-store';
@@ -157,7 +156,7 @@ describe('OverlayManager zoom recovery', () => {
 	});
 
 	it('does not schedule settled work when a resize notification reports the same size', () => {
-		const { page, manager } = makeHarness();
+		const { manager } = makeHarness();
 		manager.attachToActivePdf();
 		const redraw = vi.spyOn(manager, 'redrawPage');
 
