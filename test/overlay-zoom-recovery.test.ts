@@ -222,6 +222,28 @@ describe('OverlayManager zoom recovery', () => {
 		expect(secondOverlay?.style.width).toBe('1000px');
 	});
 
+	it('caps eager backing-store allocation when many page containers appear at once', () => {
+		const { pages, manager } = makeHarness(10);
+		pages.forEach((page) => setRect(page, 800, 1000, 0));
+
+		manager.attachToActivePdf();
+
+		const fullBackings = pages.filter((page) => {
+			const overlay = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+			return (overlay?.width ?? 0) > 1 && (overlay?.height ?? 0) > 1;
+		});
+		expect(fullBackings).toHaveLength(3);
+
+		const fourth = pages[3];
+		if (!fourth) throw new Error('Expected a fourth PDF page');
+		const fourthOverlay = fourth.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+		expect(fourthOverlay?.width).toBe(1);
+
+		IntersectionObserverMock.instances[0]?.fire(fourth, true);
+		vi.advanceTimersByTime(136);
+		expect(fourthOverlay?.width).toBeGreaterThan(1);
+	});
+
 	it('keeps far-offscreen pages at a tiny backing store until they approach the viewport', () => {
 		const { pages, manager } = makeHarness(3);
 		const farPage = pages[2];
