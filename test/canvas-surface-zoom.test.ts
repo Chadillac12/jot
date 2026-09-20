@@ -11,8 +11,8 @@ function makeCanvas(): HTMLCanvasElement {
 }
 
 describe('safeBackingStoreDpr', () => {
-	it('preserves the requested DPR for ordinary PDF page sizes', () => {
-		expect(safeBackingStoreDpr(1024, 1365, 3)).toBe(3);
+	it('preserves the requested DPR for ordinary iPad PDF page sizes', () => {
+		expect(safeBackingStoreDpr(768, 1024, 3)).toBe(3);
 	});
 
 	it('reduces DPR when zoom would exceed the maximum canvas dimension', () => {
