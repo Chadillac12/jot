@@ -22,14 +22,22 @@ interface PendingResizeBatch {
 	pages: Map<HTMLElement, string>;
 }
 
+interface PageObservers {
+	mutation: MutationObserver;
+	resize: ResizeObserver;
+}
+
 export class OverlayManager {
 	private containerObservers = new Map<WorkspaceLeaf, MutationObserver>();
 	private containerFilePaths = new Map<WorkspaceLeaf, string>();
 	private pageFilePaths = new WeakMap<HTMLElement, string>();
-	private observedPages = new WeakSet<HTMLElement>();
+	private pageObservers = new Map<HTMLElement, PageObservers>();
 	private wiredOverlays = new WeakSet<HTMLCanvasElement>();
+	private renderablePages = new WeakSet<HTMLElement>();
+	private intersectionObservers = new Map<Document, IntersectionObserver>();
 	private resizeBatches = new Map<Document, PendingResizeBatch>();
 	private resizeFrames = new Map<Document, number>();
+	private resizeQueues = new Map<Document, Map<HTMLElement, string>>();
 
 	constructor(
 		private app: App,
@@ -54,6 +62,7 @@ export class OverlayManager {
 
 		this.upgradePages(container, filePath);
 		const observer = new MutationObserver((records) => {
+			this.cleanupRemovedPages(records);
 			const currentPath = this.filePathForLeaf(leaf);
 			if (!currentPath) return;
 			this.upgradeAddedPages(records, currentPath);
@@ -69,6 +78,7 @@ export class OverlayManager {
 		this.app.workspace.iterateAllLeaves((leaf) => live.add(leaf));
 		for (const [leaf, observer] of this.containerObservers) {
 			if (!live.has(leaf)) {
+				this.cleanupPagesIn(leaf.view.containerEl);
 				observer.disconnect();
 				this.containerObservers.delete(leaf);
 				this.containerFilePaths.delete(leaf);
@@ -80,6 +90,13 @@ export class OverlayManager {
 		this.containerObservers.forEach((observer) => observer.disconnect());
 		this.containerObservers.clear();
 		this.containerFilePaths.clear();
+		this.pageObservers.forEach(({ mutation, resize }) => {
+			mutation.disconnect();
+			resize.disconnect();
+		});
+		this.pageObservers.clear();
+		this.intersectionObservers.forEach((observer) => observer.disconnect());
+		this.intersectionObservers.clear();
 		this.resizeBatches.forEach((batch, doc) => {
 			const win = doc.defaultView ?? window;
 			win.clearTimeout(batch.timer);
@@ -90,6 +107,7 @@ export class OverlayManager {
 			win.cancelAnimationFrame(frame);
 		});
 		this.resizeFrames.clear();
+		this.resizeQueues.clear();
 	}
 
 	redrawPage(canvas: HTMLCanvasElement): void {
@@ -108,13 +126,17 @@ export class OverlayManager {
 	redrawOverlaysForActivePdf(): void {
 		const leaf = this.getActivePdfLeaf();
 		if (!leaf) return;
-		this.canvasesIn(leaf).forEach((canvas) => this.redrawPage(canvas));
+		this.canvasesIn(leaf).forEach((canvas) => {
+			if (this.isCanvasRenderable(canvas)) this.redrawPage(canvas);
+		});
 	}
 
 	redrawOverlaysForPdf(pdfPath: string): void {
 		this.app.workspace.iterateAllLeaves((leaf) => {
 			if (this.filePathForLeaf(leaf) !== pdfPath) return;
-			this.canvasesIn(leaf).forEach((canvas) => this.redrawPage(canvas));
+			this.canvasesIn(leaf).forEach((canvas) => {
+				if (this.isCanvasRenderable(canvas)) this.redrawPage(canvas);
+			});
 		});
 	}
 
@@ -138,6 +160,17 @@ export class OverlayManager {
 	getActivePdfFilePath(): string | null {
 		const leaf = this.getActivePdfLeaf();
 		return leaf ? this.filePathForLeaf(leaf) : null;
+	}
+
+	prepareForInput(canvas: HTMLCanvasElement): void {
+		const page = canvas.closest<HTMLElement>('.page');
+		if (!page) return;
+		this.renderablePages.add(page);
+		this.ensureOverlayWired(canvas);
+		const backingStoreChanged = this.sizeOverlayToPage(canvas, page);
+		this.disableTextLayerInteraction(page);
+		this.keepOverlayOnTop(page, canvas);
+		if (backingStoreChanged) this.redrawPage(canvas);
 	}
 
 	private filePathForLeaf(leaf: WorkspaceLeaf): string | null {
@@ -170,6 +203,20 @@ export class OverlayManager {
 		});
 	}
 
+	private cleanupRemovedPages(records: MutationRecord[]): void {
+		records.forEach((record) => {
+			record.removedNodes.forEach((node) => {
+				if (node.nodeType !== 1) return;
+				const element = node as HTMLElement;
+				if (element.matches('.page')) this.cleanupPage(element);
+				element
+					.querySelectorAll<HTMLElement>('.page')
+					.forEach((page) => this.cleanupPage(page));
+			});
+		});
+	}
+
+
 	private ensureOverlayOnPage(page: HTMLElement, filePath: string): void {
 		const pageNumberAttr = page.getAttribute('data-page-number');
 		const pageNumber = pageNumberAttr ? parseInt(pageNumberAttr, 10) : NaN;
@@ -177,16 +224,22 @@ export class OverlayManager {
 		const key = pageKey(filePath, pageNumber);
 		this.pageFilePaths.set(page, filePath);
 		page.classList.add(PAGE_ANCHOR_CLASS);
+		const renderNow = this.shouldRenderPage(page);
 
 		const existing = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
 		if (existing) {
 			if (existing.getAttribute(OVERLAY_KEY_ATTR) === key) {
-				this.sizeOverlayToPage(existing, page);
+				this.sizeOverlayCssToPage(existing, page);
+				if (renderNow) {
+					this.sizeOverlayToPage(existing, page);
+				} else {
+					this.releaseOverlayBackingStore(existing);
+				}
 				this.disableTextLayerInteraction(page);
 				this.ensureOverlayWired(existing);
 				this.ensurePageObservers(page);
 				this.keepOverlayOnTop(page, existing);
-				this.redrawPage(existing);
+				if (renderNow) this.redrawPage(existing);
 				return;
 			}
 			existing.remove();
@@ -195,20 +248,24 @@ export class OverlayManager {
 		const overlay = page.ownerDocument.createElement('canvas');
 		overlay.className = OVERLAY_CLASS;
 		overlay.setAttribute(OVERLAY_KEY_ATTR, key);
-		this.sizeOverlayToPage(overlay, page);
+		this.sizeOverlayCssToPage(overlay, page);
+		if (renderNow) {
+			this.sizeOverlayToPage(overlay, page);
+		} else {
+			this.releaseOverlayBackingStore(overlay);
+		}
 		page.appendChild(overlay);
 		this.disableTextLayerInteraction(page);
 		this.ensureOverlayWired(overlay);
 		this.ensurePageObservers(page);
-		this.redrawPage(overlay);
+		if (renderNow) this.redrawPage(overlay);
 	}
 
 	private ensurePageObservers(page: HTMLElement): void {
-		if (this.observedPages.has(page)) return;
-		this.observedPages.add(page);
+		if (this.pageObservers.has(page)) return;
 		page.setAttribute(PAGE_OBSERVED_ATTR, '1');
 
-		new MutationObserver(() => {
+		const mutation = new MutationObserver(() => {
 			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
 			if (!current) {
 				const filePath = this.pageFilePaths.get(page);
@@ -218,9 +275,10 @@ export class OverlayManager {
 			this.ensureOverlayWired(current);
 			this.disableTextLayerInteraction(page);
 			this.keepOverlayOnTop(page, current);
-		}).observe(page, { childList: true, subtree: true });
+		});
+		mutation.observe(page, { childList: true, subtree: true });
 
-		new ResizeObserver(() => {
+		const resize = new ResizeObserver(() => {
 			const filePath = this.pageFilePaths.get(page);
 			if (!filePath) return;
 			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
@@ -234,8 +292,16 @@ export class OverlayManager {
 			// on every ResizeObserver tick causes visible flashes and heavy redraw work.
 			const sizeChanged = this.sizeOverlayCssToPage(current, page);
 			this.disableTextLayerInteraction(page);
+			if (!this.shouldRenderPage(page)) {
+				this.releaseOverlayBackingStore(current);
+				return;
+			}
 			if (sizeChanged) this.scheduleSettledResize(page, filePath);
-		}).observe(page);
+		});
+		resize.observe(page);
+
+		this.pageObservers.set(page, { mutation, resize });
+		this.observePageVisibility(page);
 	}
 
 	private scheduleSettledResize(page: HTMLElement, filePath: string): void {
@@ -244,13 +310,19 @@ export class OverlayManager {
 		const existing = this.resizeBatches.get(doc);
 		const pages = existing?.pages ?? new Map<HTMLElement, string>();
 		if (existing) win.clearTimeout(existing.timer);
-		const pendingFrame = this.resizeFrames.get(doc);
-		if (pendingFrame !== undefined) {
-			win.cancelAnimationFrame(pendingFrame);
-			this.resizeFrames.delete(doc);
-		}
-		pages.set(page, filePath);
 
+		const activeQueue = this.resizeQueues.get(doc);
+		if (activeQueue) {
+			activeQueue.forEach((queuedPath, queuedPage) => pages.set(queuedPage, queuedPath));
+			this.resizeQueues.delete(doc);
+			const pendingFrame = this.resizeFrames.get(doc);
+			if (pendingFrame !== undefined) {
+				win.cancelAnimationFrame(pendingFrame);
+				this.resizeFrames.delete(doc);
+			}
+		}
+
+		pages.set(page, filePath);
 		const timer = win.setTimeout(() => {
 			const batch = this.resizeBatches.get(doc);
 			if (!batch || batch.timer !== timer) return;
@@ -263,17 +335,20 @@ export class OverlayManager {
 
 	private flushSettledResizeBatch(doc: Document, pages: Map<HTMLElement, string>): void {
 		const win = doc.defaultView ?? window;
-		const entries = Array.from(pages.entries());
-		let index = 0;
+		const queue = new Map(pages);
+		this.resizeQueues.set(doc, queue);
 
 		const processNext = () => {
 			this.resizeFrames.delete(doc);
-			const entry = entries[index];
-			if (!entry) return;
-			index += 1;
+			const iterator = queue.entries().next();
+			if (iterator.done) {
+				this.resizeQueues.delete(doc);
+				return;
+			}
 
-			const [page, filePath] = entry;
-			if (page.isConnected) {
+			const [page, filePath] = iterator.value;
+			queue.delete(page);
+			if (page.isConnected && this.shouldRenderPage(page)) {
 				const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
 				if (!current) {
 					this.ensureOverlayOnPage(page, filePath);
@@ -286,13 +361,15 @@ export class OverlayManager {
 				}
 			}
 
-			if (index < entries.length) {
+			if (queue.size > 0) {
 				const frame = win.requestAnimationFrame(processNext);
 				this.resizeFrames.set(doc, frame);
+			} else {
+				this.resizeQueues.delete(doc);
 			}
 		};
 
-		if (entries.length > 0) {
+		if (queue.size > 0) {
 			const frame = win.requestAnimationFrame(processNext);
 			this.resizeFrames.set(doc, frame);
 		}
@@ -309,6 +386,113 @@ export class OverlayManager {
 		page.appendChild(overlay);
 	}
 
+	private observePageVisibility(page: HTMLElement): void {
+		if (typeof IntersectionObserver === 'undefined') {
+			this.renderablePages.add(page);
+			return;
+		}
+
+		const doc = page.ownerDocument;
+		let observer = this.intersectionObservers.get(doc);
+		if (!observer) {
+			observer = new IntersectionObserver(
+				(entries) => {
+					entries.forEach((entry) => {
+						const target = entry.target as HTMLElement;
+						const filePath = this.pageFilePaths.get(target);
+						if (!filePath) return;
+						const overlay = target.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
+
+						if (entry.isIntersecting) {
+							this.renderablePages.add(target);
+							if (!overlay) {
+								this.ensureOverlayOnPage(target, filePath);
+								return;
+							}
+							this.ensureOverlayWired(overlay);
+							this.sizeOverlayCssToPage(overlay, target);
+							this.disableTextLayerInteraction(target);
+							this.keepOverlayOnTop(target, overlay);
+							this.scheduleSettledResize(target, filePath);
+							return;
+						}
+
+						this.renderablePages.delete(target);
+						if (overlay && !this.isPageNearViewport(target)) {
+							this.releaseOverlayBackingStore(overlay);
+						}
+					});
+				},
+				{ root: null, rootMargin: '100% 0px 100% 0px' },
+			);
+			this.intersectionObservers.set(doc, observer);
+		}
+		observer.observe(page);
+	}
+
+	private shouldRenderPage(page: HTMLElement): boolean {
+		return this.renderablePages.has(page) || this.isPageNearViewport(page);
+	}
+
+	private isPageNearViewport(page: HTMLElement): boolean {
+		const win = page.ownerDocument.defaultView;
+		if (!win || win.innerHeight <= 0) return true;
+		const rect = page.getBoundingClientRect();
+		const margin = Math.max(win.innerHeight, 800);
+		return rect.bottom >= -margin && rect.top <= win.innerHeight + margin;
+	}
+
+	private isCanvasRenderable(canvas: HTMLCanvasElement): boolean {
+		const page = canvas.closest<HTMLElement>('.page');
+		return page ? this.shouldRenderPage(page) : true;
+	}
+
+	private cleanupPagesIn(container: HTMLElement): void {
+		container
+			.querySelectorAll<HTMLElement>('.page')
+			.forEach((page) => this.cleanupPage(page));
+	}
+
+	private cleanupPage(page: HTMLElement): void {
+		const observers = this.pageObservers.get(page);
+		if (observers) {
+			observers.mutation.disconnect();
+			observers.resize.disconnect();
+			this.pageObservers.delete(page);
+		}
+		this.intersectionObservers.get(page.ownerDocument)?.unobserve(page);
+		this.renderablePages.delete(page);
+		this.pageFilePaths.delete(page);
+
+		const doc = page.ownerDocument;
+		const batch = this.resizeBatches.get(doc);
+		if (batch) {
+			batch.pages.delete(page);
+			if (batch.pages.size === 0) {
+				const win = doc.defaultView ?? window;
+				win.clearTimeout(batch.timer);
+				this.resizeBatches.delete(doc);
+			}
+		}
+
+		const queue = this.resizeQueues.get(doc);
+		if (queue) {
+			queue.delete(page);
+			if (queue.size === 0) {
+				const win = doc.defaultView ?? window;
+				const frame = this.resizeFrames.get(doc);
+				if (frame !== undefined) win.cancelAnimationFrame(frame);
+				this.resizeFrames.delete(doc);
+				this.resizeQueues.delete(doc);
+			}
+		}
+	}
+
+	private releaseOverlayBackingStore(overlay: HTMLCanvasElement): void {
+		if (overlay.width !== 1) overlay.width = 1;
+		if (overlay.height !== 1) overlay.height = 1;
+	}
+
 	private sizeOverlayCssToPage(overlay: HTMLCanvasElement, page: HTMLElement): boolean {
 		const rect = page.getBoundingClientRect();
 		if (rect.width === 0 || rect.height === 0) return false;
@@ -319,16 +503,18 @@ export class OverlayManager {
 		return true;
 	}
 
-	private sizeOverlayToPage(overlay: HTMLCanvasElement, page: HTMLElement): void {
+	private sizeOverlayToPage(overlay: HTMLCanvasElement, page: HTMLElement): boolean {
 		const rect = page.getBoundingClientRect();
-		if (rect.width === 0 || rect.height === 0) return;
-		const requestedDpr = devicePixelRatioFor(window);
+		if (rect.width === 0 || rect.height === 0) return false;
+		const host = page.ownerDocument.defaultView ?? window;
+		const requestedDpr = devicePixelRatioFor(host);
 		const effectiveDpr = safeBackingStoreDpr(rect.width, rect.height, requestedDpr);
-		applyBackingStoreSize(overlay, rect.width, rect.height, effectiveDpr);
+		const changed = applyBackingStoreSize(overlay, rect.width, rect.height, effectiveDpr);
 		overlay.setCssStyles({
 			width: `${rect.width}px`,
 			height: `${rect.height}px`,
 		});
+		return changed;
 	}
 
 	private disableTextLayerInteraction(page: HTMLElement): void {
