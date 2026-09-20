@@ -17,6 +17,7 @@ interface Harness {
 	strokes: StrokeStore;
 	sidecar: SidecarStore;
 	undo: UndoController;
+	overlays: OverlayManager;
 	activation: { value: PaletteActivation };
 }
 
@@ -45,7 +46,10 @@ function makeHarness(activation: PaletteActivation = 'pencil-double-tap-hold'): 
 	} as unknown as Palette;
 	const strokes = new StrokeStore();
 	const sidecar = { scheduleSave: vi.fn() } as unknown as SidecarStore;
-	const overlays = { redrawPage: vi.fn() } as unknown as OverlayManager;
+	const overlays = {
+		redrawPage: vi.fn(),
+		prepareForInput: vi.fn(),
+	} as unknown as OverlayManager;
 	const undo = {
 		push: vi.fn(),
 		discardLatestTransient: vi.fn((_pdfPath: string, key: string) => {
@@ -69,7 +73,7 @@ function makeHarness(activation: PaletteActivation = 'pencil-double-tap-hold'): 
 		pencilLongPressMs: () => 300,
 	}).attach();
 
-	return { canvas, palette, strokes, sidecar, undo, activation: currentActivation };
+	return { canvas, palette, strokes, sidecar, undo, overlays, activation: currentActivation };
 }
 
 function pointer(
@@ -109,6 +113,14 @@ describe('PointerEventHandler palette activation', () => {
 		document.body.innerHTML = '';
 		vi.restoreAllMocks();
 		vi.useRealTimers();
+	});
+
+	it('prepares a virtualized overlay before Pencil input starts', () => {
+		const { canvas, overlays } = makeHarness();
+
+		pointer(canvas, 'pointerdown', 'pen', 1, 20, 20);
+
+		expect(overlays.prepareForInput).toHaveBeenCalledWith(canvas);
 	});
 
 	it('does not arm LongPressDetector on ordinary Pencil down in double-tap-hold mode', () => {
