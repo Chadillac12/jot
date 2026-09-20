@@ -1,4 +1,4 @@
-/* eslint-disable obsidianmd/prefer-active-doc, obsidianmd/no-static-styles-assignment */
+/* eslint-disable obsidianmd/prefer-active-doc */
 import { describe, expect, it } from 'vitest';
 import {
 	applyBackingStoreSize,
