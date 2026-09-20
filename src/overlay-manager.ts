@@ -26,7 +26,10 @@ export class OverlayManager {
 	private containerObservers = new Map<WorkspaceLeaf, MutationObserver>();
 	private containerFilePaths = new Map<WorkspaceLeaf, string>();
 	private pageFilePaths = new WeakMap<HTMLElement, string>();
+	private observedPages = new WeakSet<HTMLElement>();
+	private wiredOverlays = new WeakSet<HTMLCanvasElement>();
 	private resizeBatches = new Map<Document, PendingResizeBatch>();
+	private resizeFrames = new Map<Document, number>();
 
 	constructor(
 		private app: App,
@@ -82,6 +85,11 @@ export class OverlayManager {
 			win.clearTimeout(batch.timer);
 		});
 		this.resizeBatches.clear();
+		this.resizeFrames.forEach((frame, doc) => {
+			const win = doc.defaultView ?? window;
+			win.cancelAnimationFrame(frame);
+		});
+		this.resizeFrames.clear();
 	}
 
 	redrawPage(canvas: HTMLCanvasElement): void {
@@ -175,26 +183,29 @@ export class OverlayManager {
 			if (existing.getAttribute(OVERLAY_KEY_ATTR) === key) {
 				this.sizeOverlayToPage(existing, page);
 				this.disableTextLayerInteraction(page);
+				this.ensureOverlayWired(existing);
 				this.ensurePageObservers(page);
+				this.keepOverlayOnTop(page, existing);
 				this.redrawPage(existing);
 				return;
 			}
 			existing.remove();
 		}
 
-		const overlay = activeDocument.createElement('canvas');
+		const overlay = page.ownerDocument.createElement('canvas');
 		overlay.className = OVERLAY_CLASS;
 		overlay.setAttribute(OVERLAY_KEY_ATTR, key);
 		this.sizeOverlayToPage(overlay, page);
 		page.appendChild(overlay);
 		this.disableTextLayerInteraction(page);
-		this.wireOverlay(overlay);
+		this.ensureOverlayWired(overlay);
 		this.ensurePageObservers(page);
 		this.redrawPage(overlay);
 	}
 
 	private ensurePageObservers(page: HTMLElement): void {
-		if (page.getAttribute(PAGE_OBSERVED_ATTR) === '1') return;
+		if (this.observedPages.has(page)) return;
+		this.observedPages.add(page);
 		page.setAttribute(PAGE_OBSERVED_ATTR, '1');
 
 		new MutationObserver(() => {
@@ -204,7 +215,9 @@ export class OverlayManager {
 				if (filePath) this.ensureOverlayOnPage(page, filePath);
 				return;
 			}
+			this.ensureOverlayWired(current);
 			this.disableTextLayerInteraction(page);
+			this.keepOverlayOnTop(page, current);
 		}).observe(page, { childList: true, subtree: true });
 
 		new ResizeObserver(() => {
@@ -231,30 +244,69 @@ export class OverlayManager {
 		const existing = this.resizeBatches.get(doc);
 		const pages = existing?.pages ?? new Map<HTMLElement, string>();
 		if (existing) win.clearTimeout(existing.timer);
+		const pendingFrame = this.resizeFrames.get(doc);
+		if (pendingFrame !== undefined) {
+			win.cancelAnimationFrame(pendingFrame);
+			this.resizeFrames.delete(doc);
+		}
 		pages.set(page, filePath);
 
 		const timer = win.setTimeout(() => {
 			const batch = this.resizeBatches.get(doc);
 			if (!batch || batch.timer !== timer) return;
 			this.resizeBatches.delete(doc);
-			this.flushSettledResizeBatch(batch.pages);
+			this.flushSettledResizeBatch(doc, batch.pages);
 		}, ZOOM_SETTLE_MS);
 
 		this.resizeBatches.set(doc, { timer, pages });
 	}
 
-	private flushSettledResizeBatch(pages: Map<HTMLElement, string>): void {
-		pages.forEach((filePath, page) => {
-			if (!page.isConnected) return;
-			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
-			if (!current) {
-				this.ensureOverlayOnPage(page, filePath);
-				return;
+	private flushSettledResizeBatch(doc: Document, pages: Map<HTMLElement, string>): void {
+		const win = doc.defaultView ?? window;
+		const entries = Array.from(pages.entries());
+		let index = 0;
+
+		const processNext = () => {
+			this.resizeFrames.delete(doc);
+			const entry = entries[index];
+			if (!entry) return;
+			index += 1;
+
+			const [page, filePath] = entry;
+			if (page.isConnected) {
+				const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
+				if (!current) {
+					this.ensureOverlayOnPage(page, filePath);
+				} else {
+					this.ensureOverlayWired(current);
+					this.sizeOverlayToPage(current, page);
+					this.disableTextLayerInteraction(page);
+					this.keepOverlayOnTop(page, current);
+					this.redrawPage(current);
+				}
 			}
-			this.sizeOverlayToPage(current, page);
-			this.disableTextLayerInteraction(page);
-			this.redrawPage(current);
-		});
+
+			if (index < entries.length) {
+				const frame = win.requestAnimationFrame(processNext);
+				this.resizeFrames.set(doc, frame);
+			}
+		};
+
+		if (entries.length > 0) {
+			const frame = win.requestAnimationFrame(processNext);
+			this.resizeFrames.set(doc, frame);
+		}
+	}
+
+	private ensureOverlayWired(overlay: HTMLCanvasElement): void {
+		if (this.wiredOverlays.has(overlay)) return;
+		this.wiredOverlays.add(overlay);
+		this.wireOverlay(overlay);
+	}
+
+	private keepOverlayOnTop(page: HTMLElement, overlay: HTMLCanvasElement): void {
+		if (page.lastElementChild === overlay) return;
+		page.appendChild(overlay);
 	}
 
 	private sizeOverlayCssToPage(overlay: HTMLCanvasElement, page: HTMLElement): boolean {
