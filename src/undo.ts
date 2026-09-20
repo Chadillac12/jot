@@ -53,10 +53,11 @@ export class UndoHistory {
 	 */
 	discardLatestMatching(pdfPath: string, key: string): UndoEntry | null {
 		const stack = this.undoStacks.get(pdfPath);
-		const entry = stack?.[stack.length - 1];
+		if (!stack || stack.length === 0) return null;
+		const entry = stack[stack.length - 1];
 		if (!entry || entry.key !== key) return null;
-		stack!.pop();
-		if (stack!.length === 0) this.undoStacks.delete(pdfPath);
+		stack.pop();
+		if (stack.length === 0) this.undoStacks.delete(pdfPath);
 		return entry;
 	}
 
