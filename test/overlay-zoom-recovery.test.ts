@@ -39,13 +39,18 @@ async function flushMutations(): Promise<void> {
 	await Promise.resolve();
 }
 
-function makeHarness() {
+function makeHarness(pageCount = 1) {
 	const container = document.createElement('div');
-	const page = document.createElement('div');
-	page.className = 'page';
-	page.setAttribute('data-page-number', '1');
-	setRect(page, 800, 1000);
-	container.appendChild(page);
+	const pages = Array.from({ length: pageCount }, (_, index) => {
+		const page = document.createElement('div');
+		page.className = 'page';
+		page.setAttribute('data-page-number', String(index + 1));
+		setRect(page, 800, 1000);
+		container.appendChild(page);
+		return page;
+	});
+	const page = pages[0];
+	if (!page) throw new Error('Harness requires at least one PDF page');
 	document.body.appendChild(container);
 
 	const leaf = {
@@ -63,7 +68,7 @@ function makeHarness() {
 	};
 	const wire = vi.fn();
 	const manager = new OverlayManager(app as any, new StrokeStore(), wire);
-	return { container, page, manager, wire };
+	return { container, page, pages, manager, wire };
 }
 
 beforeEach(() => {
@@ -149,6 +154,39 @@ describe('OverlayManager zoom recovery', () => {
 		expect(overlay?.style.width).toBe('1400px');
 		expect(overlay?.style.height).toBe('1750px');
 		expect(overlay?.width).not.toBe(1600);
+	});
+
+	it('does not schedule settled work when a resize notification reports the same size', () => {
+		const { page, manager } = makeHarness();
+		manager.attachToActivePdf();
+		const redraw = vi.spyOn(manager, 'redrawPage');
+
+		ResizeObserverMock.instances[0]?.fire();
+
+		expect(vi.getTimerCount()).toBe(0);
+		vi.advanceTimersByTime(500);
+		expect(redraw).not.toHaveBeenCalled();
+	});
+
+	it('shares one settle timer across multiple pages resized by the same pinch', () => {
+		const { pages, manager } = makeHarness(2);
+		const first = pages[0];
+		const second = pages[1];
+		if (!first || !second) throw new Error('Expected two PDF pages');
+		manager.attachToActivePdf();
+
+		setRect(first, 1000, 1250);
+		setRect(second, 1000, 1250);
+		ResizeObserverMock.instances[0]?.fire();
+		ResizeObserverMock.instances[1]?.fire();
+
+		expect(vi.getTimerCount()).toBe(1);
+		vi.advanceTimersByTime(120);
+
+		const firstOverlay = first.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+		const secondOverlay = second.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+		expect(firstOverlay?.style.width).toBe('1000px');
+		expect(secondOverlay?.style.width).toBe('1000px');
 	});
 
 	it('does not redraw every page again when attach is repeated for the same PDF leaf', () => {
