@@ -14,6 +14,7 @@ const PAGE_ANCHOR_CLASS = 'jot-page-anchor';
 const PASSTHROUGH_CLASS = 'jot-passthrough';
 const PAGE_OBSERVED_ATTR = 'data-jot-observed';
 const ZOOM_SETTLE_MS = 120;
+const EAGER_PAGE_LIMIT = 3;
 
 export const OVERLAY_KEY_ATTR = 'data-jot-key';
 
@@ -185,21 +186,32 @@ export class OverlayManager {
 	}
 
 	private upgradePages(container: HTMLElement, filePath: string): void {
-		container
-			.querySelectorAll<HTMLElement>('.page')
-			.forEach((page) => this.ensureOverlayOnPage(page, filePath));
+		let eagerRemaining = EAGER_PAGE_LIMIT;
+		container.querySelectorAll<HTMLElement>('.page').forEach((page) => {
+			const eager = eagerRemaining > 0 && this.isPageNearViewport(page);
+			this.ensureOverlayOnPage(page, filePath, eager);
+			if (eager) eagerRemaining -= 1;
+		});
 	}
 
 	private upgradeAddedPages(records: MutationRecord[], filePath: string): void {
+		const addedPages = new Set<HTMLElement>();
 		records.forEach((record) => {
 			record.addedNodes.forEach((node) => {
 				if (node.nodeType !== 1) return;
 				const element = node as HTMLElement;
-				if (element.matches('.page')) this.ensureOverlayOnPage(element, filePath);
+				if (element.matches('.page')) addedPages.add(element);
 				element
 					.querySelectorAll<HTMLElement>('.page')
-					.forEach((page) => this.ensureOverlayOnPage(page, filePath));
+					.forEach((page) => addedPages.add(page));
 			});
+		});
+
+		let eagerRemaining = EAGER_PAGE_LIMIT;
+		addedPages.forEach((page) => {
+			const eager = eagerRemaining > 0 && this.isPageNearViewport(page);
+			this.ensureOverlayOnPage(page, filePath, eager);
+			if (eager) eagerRemaining -= 1;
 		});
 	}
 
@@ -217,14 +229,19 @@ export class OverlayManager {
 	}
 
 
-	private ensureOverlayOnPage(page: HTMLElement, filePath: string): void {
+	private ensureOverlayOnPage(
+		page: HTMLElement,
+		filePath: string,
+		allowEagerRender = true,
+	): void {
 		const pageNumberAttr = page.getAttribute('data-page-number');
 		const pageNumber = pageNumberAttr ? parseInt(pageNumberAttr, 10) : NaN;
 		if (Number.isNaN(pageNumber)) return;
 		const key = pageKey(filePath, pageNumber);
 		this.pageFilePaths.set(page, filePath);
 		page.classList.add(PAGE_ANCHOR_CLASS);
-		const renderNow = this.shouldRenderPage(page);
+		const renderNow =
+			this.renderablePages.has(page) || (allowEagerRender && this.isPageNearViewport(page));
 
 		const existing = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
 		if (existing) {
