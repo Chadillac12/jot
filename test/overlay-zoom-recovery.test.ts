@@ -127,11 +127,13 @@ describe('OverlayManager zoom recovery', () => {
 
 		vi.advanceTimersByTime(119);
 		expect(overlay?.width).toBe(1600);
-		vi.advanceTimersByTime(1);
+		vi.advanceTimersByTime(17);
 
-		expect(overlay?.width).toBe(3200);
-		expect(overlay?.height).toBe(4000);
-		expect((overlay?.width ?? 0) * (overlay?.height ?? 0)).toBeLessThanOrEqual(16_777_216);
+		expect(overlay?.style.width).toBe('1600px');
+		expect(overlay?.style.height).toBe('2000px');
+		expect(overlay?.width).toBeGreaterThan(1600);
+		expect(overlay?.height).toBeGreaterThan(2000);
+		expect((overlay?.width ?? 0) * (overlay?.height ?? 0)).toBeLessThanOrEqual(8_388_608);
 		expect(wire).toHaveBeenCalledTimes(1);
 	});
 
@@ -149,7 +151,7 @@ describe('OverlayManager zoom recovery', () => {
 
 		expect(page.querySelectorAll('canvas.jot-overlay')).toHaveLength(1);
 		expect(overlay?.width).toBe(1600);
-		vi.advanceTimersByTime(120);
+		vi.advanceTimersByTime(136);
 		expect(overlay?.style.width).toBe('1400px');
 		expect(overlay?.style.height).toBe('1750px');
 		expect(overlay?.width).not.toBe(1600);
@@ -180,12 +182,48 @@ describe('OverlayManager zoom recovery', () => {
 		ResizeObserverMock.instances[1]?.fire();
 
 		expect(vi.getTimerCount()).toBe(1);
-		vi.advanceTimersByTime(120);
+		vi.advanceTimersByTime(152);
 
 		const firstOverlay = first.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
 		const secondOverlay = second.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
 		expect(firstOverlay?.style.width).toBe('1000px');
 		expect(secondOverlay?.style.width).toBe('1000px');
+	});
+
+	it('rewires an existing overlay that looks restored but has no live handler', () => {
+		const { page, manager, wire } = makeHarness();
+		const restored = document.createElement('canvas');
+		restored.className = 'jot-overlay';
+		restored.setAttribute(OVERLAY_KEY_ATTR, 'notes.pdf::1');
+		page.appendChild(restored);
+
+		manager.attachToActivePdf();
+
+		expect(wire).toHaveBeenCalledTimes(1);
+		expect(page.querySelector<HTMLCanvasElement>('canvas.jot-overlay')).toBe(restored);
+	});
+
+	it('re-observes a rebuilt page even if a copied DOM marker says it was observed', () => {
+		const { page, manager } = makeHarness();
+		page.setAttribute('data-jot-observed', '1');
+
+		manager.attachToActivePdf();
+
+		expect(ResizeObserverMock.instances).toHaveLength(1);
+	});
+
+	it('moves the overlay back above PDF layers appended after a zoom rebuild', async () => {
+		const { page, manager } = makeHarness();
+		manager.attachToActivePdf();
+		const overlay = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+		expect(overlay).not.toBeNull();
+
+		const rebuiltLayer = document.createElement('div');
+		rebuiltLayer.className = 'canvasWrapper';
+		page.appendChild(rebuiltLayer);
+		await flushMutations();
+
+		expect(page.lastElementChild).toBe(overlay);
 	});
 
 	it('does not redraw every page again when attach is repeated for the same PDF leaf', () => {
