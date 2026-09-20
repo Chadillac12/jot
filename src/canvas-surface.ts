@@ -9,11 +9,12 @@ export interface CanvasBackingStoreLimits {
 	maxArea: number;
 }
 
-// Keep individual canvases below conservative WebKit/iPad limits while still
-// allowing a 1024px-wide PDF page to render at roughly 3x Retina resolution.
+// Keep individual canvases below conservative WebKit/iPad limits. iPad PDF.js
+// already owns one or more large page canvases, so Jot should leave headroom
+// instead of consuming another ~64 MiB per annotation overlay at extreme zoom.
 export const DEFAULT_BACKING_STORE_LIMITS: CanvasBackingStoreLimits = {
 	maxDimension: 4096,
-	maxArea: 16_777_216,
+	maxArea: 8_388_608,
 };
 
 export function devicePixelRatioFor(host: { devicePixelRatio?: number }): number {
