@@ -18,15 +18,44 @@ class ResizeObserverMock {
 	}
 }
 
-function setRect(el: HTMLElement, width: number, height: number): void {
+class IntersectionObserverMock {
+	static instances: IntersectionObserverMock[] = [];
+	private observed = new Set<Element>();
+
+	constructor(private callback: IntersectionObserverCallback) {
+		IntersectionObserverMock.instances.push(this);
+	}
+
+	observe(target: Element): void {
+		this.observed.add(target);
+	}
+
+	unobserve(target: Element): void {
+		this.observed.delete(target);
+	}
+
+	disconnect(): void {
+		this.observed.clear();
+	}
+
+	fire(target: Element, isIntersecting: boolean): void {
+		if (!this.observed.has(target)) return;
+		this.callback(
+			[{ target, isIntersecting } as IntersectionObserverEntry],
+			this as unknown as IntersectionObserver,
+		);
+	}
+}
+
+function setRect(el: HTMLElement, width: number, height: number, top = 0): void {
 	el.getBoundingClientRect = () =>
 		({
 			x: 0,
-			y: 0,
+			y: top,
 			left: 0,
-			top: 0,
+			top,
 			right: width,
-			bottom: height,
+			bottom: top + height,
 			width,
 			height,
 			toJSON: () => ({}),
@@ -74,8 +103,11 @@ beforeEach(() => {
 	vi.useFakeTimers();
 	document.body.innerHTML = '';
 	ResizeObserverMock.instances = [];
+	IntersectionObserverMock.instances = [];
 	(globalThis as any).activeDocument = document;
 	(globalThis as any).ResizeObserver = ResizeObserverMock;
+	(globalThis as any).IntersectionObserver = IntersectionObserverMock;
+	Object.defineProperty(window, 'innerHeight', { value: 1000, configurable: true });
 	(globalThis as any).window.devicePixelRatio = 2;
 	(HTMLElement.prototype as any).setCssStyles = function (styles: Record<string, string>) {
 		Object.assign((this as HTMLElement).style, styles);
@@ -188,6 +220,58 @@ describe('OverlayManager zoom recovery', () => {
 		const secondOverlay = second.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
 		expect(firstOverlay?.style.width).toBe('1000px');
 		expect(secondOverlay?.style.width).toBe('1000px');
+	});
+
+	it('keeps far-offscreen pages at a tiny backing store until they approach the viewport', () => {
+		const { pages, manager } = makeHarness(3);
+		const farPage = pages[2];
+		if (!farPage) throw new Error('Expected a third PDF page');
+		setRect(farPage, 800, 1000, 10_000);
+
+		manager.attachToActivePdf();
+		const overlay = farPage.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+		expect(overlay?.style.width).toBe('800px');
+		expect(overlay?.style.height).toBe('1000px');
+		expect(overlay?.width).toBe(1);
+		expect(overlay?.height).toBe(1);
+
+		IntersectionObserverMock.instances[0]?.fire(farPage, true);
+		vi.advanceTimersByTime(136);
+		expect(overlay?.width).toBeGreaterThan(1);
+		expect(overlay?.height).toBeGreaterThan(1);
+
+		IntersectionObserverMock.instances[0]?.fire(farPage, false);
+		expect(overlay?.width).toBe(1);
+		expect(overlay?.height).toBe(1);
+	});
+
+	it('carries unfinished frame-spread redraws into a new pinch settle batch', () => {
+		const { pages, manager } = makeHarness(2);
+		const first = pages[0];
+		const second = pages[1];
+		if (!first || !second) throw new Error('Expected two PDF pages');
+		manager.attachToActivePdf();
+		const firstOverlay = first.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+		const secondOverlay = second.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+
+		setRect(first, 1000, 1250);
+		setRect(second, 1000, 1250);
+		ResizeObserverMock.instances[0]?.fire();
+		ResizeObserverMock.instances[1]?.fire();
+
+		// Settle the batch and allow only its first page frame to run.
+		vi.advanceTimersByTime(136);
+		expect(firstOverlay?.width).toBe(2000);
+		expect(secondOverlay?.width).toBe(1600);
+
+		// A new pinch starts before the queued second-page redraw. The second page
+		// must be carried forward rather than being dropped when that frame is cancelled.
+		setRect(first, 1100, 1375);
+		ResizeObserverMock.instances[0]?.fire();
+		vi.advanceTimersByTime(152);
+
+		expect(firstOverlay?.width).toBe(2200);
+		expect(secondOverlay?.width).toBe(2000);
 	});
 
 	it('rewires an existing overlay that looks restored but has no live handler', () => {
