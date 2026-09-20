@@ -113,6 +113,7 @@ export class PointerEventHandler {
 		if (e.pointerType !== 'pen' && e.pointerType !== 'mouse') return;
 		if (this.deps.palette.isOpen()) return;
 
+		this.deps.overlays.prepareForInput(this.canvas);
 		this.canvas.setPointerCapture(e.pointerId);
 		this.activePointerId = e.pointerId;
 
