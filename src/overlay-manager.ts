@@ -418,9 +418,7 @@ export class OverlayManager {
 						}
 
 						this.renderablePages.delete(target);
-						if (overlay && !this.isPageNearViewport(target)) {
-							this.releaseOverlayBackingStore(overlay);
-						}
+						if (overlay) this.releaseOverlayBackingStore(overlay);
 					});
 				},
 				{ root: null, rootMargin: '100% 0px 100% 0px' },
