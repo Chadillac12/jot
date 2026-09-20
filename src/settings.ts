@@ -116,7 +116,7 @@ export class JotSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName('Squeeze shortcut')
 			.setDesc(
-				'Optional: assign the stylus squeeze gesture to a shortcut that runs the Jot palette action. This opens the radial palette without using a PDF touch gesture.',
+				'Optional: assign the stylus squeeze gesture to a shortcut that runs the palette action. This opens the radial palette without using a PDF touch gesture.',
 			);
 
 		new Setting(containerEl)
