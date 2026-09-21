@@ -14,6 +14,8 @@ const PAGE_ANCHOR_CLASS = 'jot-page-anchor';
 const PASSTHROUGH_CLASS = 'jot-passthrough';
 const PAGE_OBSERVED_ATTR = 'data-jot-observed';
 const ZOOM_SETTLE_MS = 120;
+const PAGE_PREFETCH_MARGIN_PX = 1600;
+const DISCONNECTED_PAGE_PRUNE_MS = 300;
 
 export const OVERLAY_KEY_ATTR = 'data-jot-key';
 
@@ -22,11 +24,28 @@ interface PendingResizeBatch {
 	pages: Map<HTMLElement, string>;
 }
 
+interface PageRegistration {
+	leaf: WorkspaceLeaf;
+	filePath: string;
+	key: string;
+	pageNumber: number;
+}
+
+interface ActivePageObservers {
+	mutation: MutationObserver;
+	resize: ResizeObserver;
+}
+
 export class OverlayManager {
 	private containerObservers = new Map<WorkspaceLeaf, MutationObserver>();
 	private containerFilePaths = new Map<WorkspaceLeaf, string>();
+	private intersectionObservers = new Map<WorkspaceLeaf, IntersectionObserver>();
+	private pageRegistrations = new Map<HTMLElement, PageRegistration>();
+	private pagesByLeafKey = new Map<WorkspaceLeaf, Map<string, HTMLElement>>();
+	private activePageObservers = new Map<HTMLElement, ActivePageObservers>();
 	private pageFilePaths = new WeakMap<HTMLElement, string>();
 	private resizeBatches = new Map<Document, PendingResizeBatch>();
+	private disconnectedPruneTimers = new Map<WorkspaceLeaf, number>();
 
 	constructor(
 		private app: App,
@@ -43,17 +62,14 @@ export class OverlayManager {
 
 		const existingObserver = this.containerObservers.get(leaf);
 		if (existingObserver && this.containerFilePaths.get(leaf) === filePath) return;
-		if (existingObserver) {
-			existingObserver.disconnect();
-			this.containerObservers.delete(leaf);
-			this.containerFilePaths.delete(leaf);
-		}
+		if (existingObserver || this.intersectionObservers.has(leaf)) this.disposeLeaf(leaf);
 
-		this.upgradePages(container, filePath);
+		this.registerPages(container, filePath, leaf);
 		const observer = new MutationObserver((records) => {
 			const currentPath = this.filePathForLeaf(leaf);
 			if (!currentPath) return;
-			this.upgradeAddedPages(records, currentPath);
+			const hadRemovals = this.registerAddedPages(records, currentPath, leaf);
+			if (hadRemovals) this.scheduleDisconnectedPagePrune(leaf);
 		});
 		observer.observe(container, { childList: true, subtree: true });
 		this.containerObservers.set(leaf, observer);
@@ -61,22 +77,32 @@ export class OverlayManager {
 	}
 
 	pruneClosedObservers(): void {
-		if (this.containerObservers.size === 0) return;
+		if (this.containerObservers.size === 0 && this.intersectionObservers.size === 0) return;
 		const live = new Set<WorkspaceLeaf>();
 		this.app.workspace.iterateAllLeaves((leaf) => live.add(leaf));
-		for (const [leaf, observer] of this.containerObservers) {
-			if (!live.has(leaf)) {
-				observer.disconnect();
-				this.containerObservers.delete(leaf);
-				this.containerFilePaths.delete(leaf);
-			}
-		}
+		const observedLeaves = new Set<WorkspaceLeaf>([
+			...this.containerObservers.keys(),
+			...this.intersectionObservers.keys(),
+		]);
+		observedLeaves.forEach((leaf) => {
+			if (!live.has(leaf)) this.disposeLeaf(leaf);
+		});
 	}
 
 	disconnectAll(): void {
-		this.containerObservers.forEach((observer) => observer.disconnect());
+		const observedLeaves = new Set<WorkspaceLeaf>([
+			...this.containerObservers.keys(),
+			...this.intersectionObservers.keys(),
+		]);
+		observedLeaves.forEach((leaf) => this.disposeLeaf(leaf));
 		this.containerObservers.clear();
 		this.containerFilePaths.clear();
+		this.intersectionObservers.clear();
+		this.pagesByLeafKey.clear();
+		this.pageRegistrations.clear();
+		this.activePageObservers.clear();
+		this.disconnectedPruneTimers.clear();
+
 		this.resizeBatches.forEach((batch, doc) => {
 			const win = doc.defaultView ?? window;
 			win.clearTimeout(batch.timer);
@@ -143,48 +169,136 @@ export class OverlayManager {
 		);
 	}
 
-	private upgradePages(container: HTMLElement, filePath: string): void {
+	private registerPages(container: HTMLElement, filePath: string, leaf: WorkspaceLeaf): void {
 		container
 			.querySelectorAll<HTMLElement>('.page')
-			.forEach((page) => this.ensureOverlayOnPage(page, filePath));
+			.forEach((page) => this.registerPage(page, filePath, leaf));
 	}
 
-	private upgradeAddedPages(records: MutationRecord[], filePath: string): void {
+	private registerAddedPages(
+		records: MutationRecord[],
+		filePath: string,
+		leaf: WorkspaceLeaf,
+	): boolean {
+		let hadRemovals = false;
 		records.forEach((record) => {
+			if (record.removedNodes.length > 0) hadRemovals = true;
 			record.addedNodes.forEach((node) => {
 				if (node.nodeType !== 1) return;
 				const element = node as HTMLElement;
-				if (element.matches('.page')) this.ensureOverlayOnPage(element, filePath);
+				if (element.matches('.page')) this.registerPage(element, filePath, leaf);
 				element
 					.querySelectorAll<HTMLElement>('.page')
-					.forEach((page) => this.ensureOverlayOnPage(page, filePath));
+					.forEach((page) => this.registerPage(page, filePath, leaf));
 			});
 		});
+		return hadRemovals;
 	}
 
-	private ensureOverlayOnPage(page: HTMLElement, filePath: string): void {
+	private registerPage(page: HTMLElement, filePath: string, leaf: WorkspaceLeaf): void {
 		const pageNumberAttr = page.getAttribute('data-page-number');
 		const pageNumber = pageNumberAttr ? parseInt(pageNumberAttr, 10) : NaN;
 		if (Number.isNaN(pageNumber)) return;
+
 		const key = pageKey(filePath, pageNumber);
+		const existingRegistration = this.pageRegistrations.get(page);
+		if (
+			existingRegistration?.leaf === leaf &&
+			existingRegistration.filePath === filePath &&
+			existingRegistration.key === key
+		) {
+			return;
+		}
+		if (existingRegistration) this.unregisterPage(page);
+
+		const pagesForLeaf = this.pagesByLeafKey.get(leaf) ?? new Map<string, HTMLElement>();
+		const previousPage = pagesForLeaf.get(key);
+		if (previousPage && previousPage !== page) this.unregisterPage(previousPage);
+
 		this.pageFilePaths.set(page, filePath);
+		this.pageRegistrations.set(page, { leaf, filePath, key, pageNumber });
+		pagesForLeaf.set(key, page);
+		this.pagesByLeafKey.set(leaf, pagesForLeaf);
 		page.classList.add(PAGE_ANCHOR_CLASS);
 
+		// A plugin reload can leave canvases from the previous instance in the DOM.
+		// Remove them before lazy observation so only near-viewport pages are materialized.
+		this.deactivatePage(page);
+
+		const intersectionObserver = this.intersectionObserverFor(leaf, page.ownerDocument);
+		if (!intersectionObserver) {
+			// Old/unsupported WebViews fall back to the previous eager behavior.
+			this.activatePage(page);
+			return;
+		}
+		intersectionObserver.observe(page);
+	}
+
+	private unregisterPage(page: HTMLElement): void {
+		const registration = this.pageRegistrations.get(page);
+		if (!registration) return;
+
+		this.intersectionObservers.get(registration.leaf)?.unobserve(page);
+		this.deactivatePage(page);
+		this.pageRegistrations.delete(page);
+		this.pageFilePaths.delete(page);
+		page.classList.remove(PAGE_ANCHOR_CLASS);
+
+		const pagesForLeaf = this.pagesByLeafKey.get(registration.leaf);
+		if (pagesForLeaf?.get(registration.key) === page) pagesForLeaf.delete(registration.key);
+		if (pagesForLeaf?.size === 0) this.pagesByLeafKey.delete(registration.leaf);
+	}
+
+	private intersectionObserverFor(
+		leaf: WorkspaceLeaf,
+		doc: Document,
+	): IntersectionObserver | null {
+		const existing = this.intersectionObservers.get(leaf);
+		if (existing) return existing;
+
+		const ObserverCtor = doc.defaultView?.IntersectionObserver ?? globalThis.IntersectionObserver;
+		if (typeof ObserverCtor !== 'function') return null;
+
+		const observer = new ObserverCtor(
+			(entries) => {
+				entries.forEach((entry) => {
+					const page = entry.target as HTMLElement;
+					if (!this.pageRegistrations.has(page)) return;
+					if (entry.isIntersecting) {
+						this.activatePage(page);
+					} else {
+						this.deactivatePage(page);
+					}
+				});
+			},
+			{
+				root: null,
+				rootMargin: `${PAGE_PREFETCH_MARGIN_PX}px 0px ${PAGE_PREFETCH_MARGIN_PX}px 0px`,
+				threshold: 0,
+			},
+		);
+		this.intersectionObservers.set(leaf, observer);
+		return observer;
+	}
+
+	private activatePage(page: HTMLElement): void {
+		const registration = this.pageRegistrations.get(page);
+		if (!registration || !page.isConnected) return;
+
 		const existing = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
-		if (existing) {
-			if (existing.getAttribute(OVERLAY_KEY_ATTR) === key) {
-				this.sizeOverlayToPage(existing, page);
-				this.disableTextLayerInteraction(page);
-				this.ensurePageObservers(page);
-				this.redrawPage(existing);
-				return;
-			}
-			existing.remove();
+		if (
+			existing &&
+			existing.getAttribute(OVERLAY_KEY_ATTR) === registration.key &&
+			this.activePageObservers.has(page)
+		) {
+			return;
 		}
 
-		const overlay = activeDocument.createElement('canvas');
+		if (existing) existing.remove();
+
+		const overlay = page.ownerDocument.createElement('canvas');
 		overlay.className = OVERLAY_CLASS;
-		overlay.setAttribute(OVERLAY_KEY_ATTR, key);
+		overlay.setAttribute(OVERLAY_KEY_ATTR, registration.key);
 		this.sizeOverlayToPage(overlay, page);
 		page.appendChild(overlay);
 		this.disableTextLayerInteraction(page);
@@ -193,26 +307,41 @@ export class OverlayManager {
 		this.redrawPage(overlay);
 	}
 
+	private deactivatePage(page: HTMLElement): void {
+		const observers = this.activePageObservers.get(page);
+		if (observers) {
+			observers.mutation.disconnect();
+			observers.resize.disconnect();
+			this.activePageObservers.delete(page);
+		}
+		page.removeAttribute(PAGE_OBSERVED_ATTR);
+		this.removePageFromResizeBatches(page);
+		page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`)?.remove();
+		this.enableTextLayerInteraction(page);
+	}
+
 	private ensurePageObservers(page: HTMLElement): void {
-		if (page.getAttribute(PAGE_OBSERVED_ATTR) === '1') return;
+		if (this.activePageObservers.has(page)) return;
 		page.setAttribute(PAGE_OBSERVED_ATTR, '1');
 
-		new MutationObserver(() => {
+		const mutation = new MutationObserver(() => {
+			if (!this.activePageObservers.has(page)) return;
 			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
 			if (!current) {
-				const filePath = this.pageFilePaths.get(page);
-				if (filePath) this.ensureOverlayOnPage(page, filePath);
+				this.activatePage(page);
 				return;
 			}
 			this.disableTextLayerInteraction(page);
-		}).observe(page, { childList: true, subtree: true });
+		});
+		mutation.observe(page, { childList: true, subtree: true });
 
-		new ResizeObserver(() => {
+		const resize = new ResizeObserver(() => {
+			if (!this.activePageObservers.has(page)) return;
 			const filePath = this.pageFilePaths.get(page);
 			if (!filePath) return;
 			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
 			if (!current) {
-				this.ensureOverlayOnPage(page, filePath);
+				this.activatePage(page);
 				return;
 			}
 
@@ -222,7 +351,10 @@ export class OverlayManager {
 			const sizeChanged = this.sizeOverlayCssToPage(current, page);
 			this.disableTextLayerInteraction(page);
 			if (sizeChanged) this.scheduleSettledResize(page, filePath);
-		}).observe(page);
+		});
+		resize.observe(page);
+
+		this.activePageObservers.set(page, { mutation, resize });
 	}
 
 	private scheduleSettledResize(page: HTMLElement, filePath: string): void {
@@ -244,17 +376,64 @@ export class OverlayManager {
 	}
 
 	private flushSettledResizeBatch(pages: Map<HTMLElement, string>): void {
-		pages.forEach((filePath, page) => {
-			if (!page.isConnected) return;
+		pages.forEach((_filePath, page) => {
+			if (!page.isConnected || !this.activePageObservers.has(page)) return;
 			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
 			if (!current) {
-				this.ensureOverlayOnPage(page, filePath);
+				this.activatePage(page);
 				return;
 			}
 			this.sizeOverlayToPage(current, page);
 			this.disableTextLayerInteraction(page);
 			this.redrawPage(current);
 		});
+	}
+
+	private removePageFromResizeBatches(page: HTMLElement): void {
+		this.resizeBatches.forEach((batch, doc) => {
+			if (!batch.pages.delete(page) || batch.pages.size > 0) return;
+			const win = doc.defaultView ?? window;
+			win.clearTimeout(batch.timer);
+			this.resizeBatches.delete(doc);
+		});
+	}
+
+	private scheduleDisconnectedPagePrune(leaf: WorkspaceLeaf): void {
+		const doc = leaf.view.containerEl.ownerDocument;
+		const win = doc.defaultView ?? window;
+		const existing = this.disconnectedPruneTimers.get(leaf);
+		if (existing !== undefined) win.clearTimeout(existing);
+
+		const timer = win.setTimeout(() => {
+			if (this.disconnectedPruneTimers.get(leaf) !== timer) return;
+			this.disconnectedPruneTimers.delete(leaf);
+			for (const [page, registration] of this.pageRegistrations) {
+				if (registration.leaf === leaf && !page.isConnected) this.unregisterPage(page);
+			}
+		}, DISCONNECTED_PAGE_PRUNE_MS);
+		this.disconnectedPruneTimers.set(leaf, timer);
+	}
+
+	private disposeLeaf(leaf: WorkspaceLeaf): void {
+		this.containerObservers.get(leaf)?.disconnect();
+		this.containerObservers.delete(leaf);
+		this.containerFilePaths.delete(leaf);
+
+		this.intersectionObservers.get(leaf)?.disconnect();
+		this.intersectionObservers.delete(leaf);
+
+		const timer = this.disconnectedPruneTimers.get(leaf);
+		if (timer !== undefined) {
+			const doc = leaf.view.containerEl.ownerDocument;
+			const win = doc.defaultView ?? window;
+			win.clearTimeout(timer);
+			this.disconnectedPruneTimers.delete(leaf);
+		}
+
+		for (const [page, registration] of [...this.pageRegistrations]) {
+			if (registration.leaf === leaf) this.unregisterPage(page);
+		}
+		this.pagesByLeafKey.delete(leaf);
 	}
 
 	private sizeOverlayCssToPage(overlay: HTMLCanvasElement, page: HTMLElement): boolean {
@@ -282,5 +461,10 @@ export class OverlayManager {
 	private disableTextLayerInteraction(page: HTMLElement): void {
 		page.querySelector<HTMLElement>('.textLayer')?.classList.add(PASSTHROUGH_CLASS);
 		page.querySelector<HTMLElement>('.annotationLayer')?.classList.add(PASSTHROUGH_CLASS);
+	}
+
+	private enableTextLayerInteraction(page: HTMLElement): void {
+		page.querySelector<HTMLElement>('.textLayer')?.classList.remove(PASSTHROUGH_CLASS);
+		page.querySelector<HTMLElement>('.annotationLayer')?.classList.remove(PASSTHROUGH_CLASS);
 	}
 }
