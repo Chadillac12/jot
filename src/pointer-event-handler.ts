@@ -1,5 +1,4 @@
 import { readCanvasSurface } from './canvas-surface';
-import { jotDebug, jotDebugId } from './debug-log';
 import { createHoldIndicator } from './hold-indicator';
 import { pdfPathFromKey } from './jot-file';
 import { LongPressDetector } from './long-press';
@@ -112,13 +111,6 @@ export class PointerEventHandler {
 			return;
 		}
 		if (e.pointerType !== 'pen' && e.pointerType !== 'mouse') return;
-		if (e.pointerType === 'pen') {
-			jotDebug('pointerdown', {
-				overlay: jotDebugId(this.canvas, 'overlay'),
-				key: this.canvas.getAttribute(OVERLAY_KEY_ATTR),
-				connected: this.canvas.isConnected ? 1 : 0,
-			});
-		}
 		if (this.deps.palette.isOpen()) return;
 
 		this.canvas.setPointerCapture(e.pointerId);
