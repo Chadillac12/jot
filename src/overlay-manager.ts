@@ -20,6 +20,7 @@ const PAGE_ANCHOR_CLASS = 'jot-page-anchor';
 const PASSTHROUGH_CLASS = 'jot-passthrough';
 const PAGE_OBSERVED_ATTR = 'data-jot-observed';
 const ZOOM_SETTLE_MS = 120;
+const LAZY_ROOT_MARGIN = '150% 0px';
 
 export const OVERLAY_KEY_ATTR = 'data-jot-key';
 
@@ -28,10 +29,17 @@ interface PendingResizeBatch {
 	pages: Map<HTMLElement, string>;
 }
 
+interface PageObservers {
+	mutation: MutationObserver;
+	resize: ResizeObserver;
+}
+
 export class OverlayManager {
 	private containerObservers = new Map<WorkspaceLeaf, MutationObserver>();
 	private containerFilePaths = new Map<WorkspaceLeaf, string>();
+	private intersectionObservers = new Map<WorkspaceLeaf, IntersectionObserver>();
 	private pageFilePaths = new WeakMap<HTMLElement, string>();
+	private pageObservers = new WeakMap<HTMLElement, PageObservers>();
 	private resizeBatches = new Map<Document, PendingResizeBatch>();
 
 	constructor(
@@ -53,22 +61,25 @@ export class OverlayManager {
 			countZoomDiagnostic('attachDedup');
 			return;
 		}
-		if (existingObserver) {
-			existingObserver.disconnect();
-			this.containerObservers.delete(leaf);
-			this.containerFilePaths.delete(leaf);
+		if (existingObserver) this.disconnectLeaf(leaf);
+
+		const intersectionObserver = this.createIntersectionObserver();
+		if (intersectionObserver) {
+			this.intersectionObservers.set(leaf, intersectionObserver);
 		}
 
-		this.upgradePages(container, filePath);
+		this.registerPages(container, filePath, leaf);
 		if (isZoomDiagnosticsEnabled()) {
 			recordZoomDiagnosticEvent(`PDF leaf attached path=${filePath}`);
 		}
+
 		const observer = new MutationObserver((records) => {
 			countZoomDiagnostic('containerMutationCallbacks');
 			countZoomDiagnostic('containerMutationRecords', records.length);
 			const currentPath = this.filePathForLeaf(leaf);
 			if (!currentPath) return;
-			this.upgradeAddedPages(records, currentPath);
+			this.registerAddedPages(records, currentPath, leaf);
+			this.unregisterDirectlyRemovedPages(records, leaf);
 		});
 		observer.observe(container, { childList: true, subtree: true });
 		this.containerObservers.set(leaf, observer);
@@ -79,19 +90,17 @@ export class OverlayManager {
 		if (this.containerObservers.size === 0) return;
 		const live = new Set<WorkspaceLeaf>();
 		this.app.workspace.iterateAllLeaves((leaf) => live.add(leaf));
-		for (const [leaf, observer] of this.containerObservers) {
-			if (!live.has(leaf)) {
-				observer.disconnect();
-				this.containerObservers.delete(leaf);
-				this.containerFilePaths.delete(leaf);
-			}
+		for (const leaf of this.containerObservers.keys()) {
+			if (!live.has(leaf)) this.disconnectLeaf(leaf);
 		}
 	}
 
 	disconnectAll(): void {
-		this.containerObservers.forEach((observer) => observer.disconnect());
-		this.containerObservers.clear();
-		this.containerFilePaths.clear();
+		const leaves = new Set<WorkspaceLeaf>([
+			...this.containerObservers.keys(),
+			...this.intersectionObservers.keys(),
+		]);
+		leaves.forEach((leaf) => this.disconnectLeaf(leaf));
 		this.resizeBatches.forEach((batch, doc) => {
 			const win = doc.defaultView ?? window;
 			win.clearTimeout(batch.timer);
@@ -165,10 +174,19 @@ export class OverlayManager {
 		const annotationLayerCount = pages.filter((page) =>
 			page.querySelector('.annotationLayer'),
 		).length;
+		const activePages = pages.filter((page) =>
+			page.querySelector(`canvas.${OVERLAY_CLASS}`),
+		);
+		const inactivePages = pages.filter(
+			(page) => !page.querySelector(`canvas.${OVERLAY_CLASS}`),
+		);
+		const reportPages = [...activePages, ...inactivePages].slice(0, 12);
 		const lines = [
 			`activePdf=${this.filePathForLeaf(leaf) ?? 'unknown'}`,
 			`pages=${pages.length}`,
 			`overlays=${overlays.length}`,
+			`activePages=${activePages.length}`,
+			`inactivePages=${inactivePages.length}`,
 			`textLayers=${textLayerCount}`,
 			`annotationLayers=${annotationLayerCount}`,
 			`overlayBackingPixels=${backingPixels}`,
@@ -176,7 +194,7 @@ export class OverlayManager {
 			`estimatedRgbaMiB=${(estimatedRgbaBytes / 1024 / 1024).toFixed(1)}`,
 		];
 
-		pages.slice(0, 12).forEach((page) => {
+		reportPages.forEach((page) => {
 			const pageNumber = page.getAttribute('data-page-number') ?? '?';
 			const pageOverlays = page.querySelectorAll<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
 			const textLayer = page.querySelector<HTMLElement>('.textLayer');
@@ -186,6 +204,7 @@ export class OverlayManager {
 					`page=${pageNumber}`,
 					`node=${zoomDiagnosticId(page, 'page')}`,
 					`connected=${page.isConnected ? 1 : 0}`,
+					`active=${pageOverlays.length > 0 ? 1 : 0}`,
 					`observed=${page.getAttribute(PAGE_OBSERVED_ATTR) === '1' ? 1 : 0}`,
 					`overlayCount=${pageOverlays.length}`,
 					`textPass=${textLayer?.classList.contains(PASSTHROUGH_CLASS) ? 1 : 0}`,
@@ -212,7 +231,9 @@ export class OverlayManager {
 			);
 		});
 
-		if (pages.length > 12) lines.push(`pagesOmitted=${pages.length - 12}`);
+		if (pages.length > reportPages.length) {
+			lines.push(`pagesOmitted=${pages.length - reportPages.length}`);
+		}
 		return lines;
 	}
 
@@ -227,26 +248,80 @@ export class OverlayManager {
 		);
 	}
 
-	private upgradePages(container: HTMLElement, filePath: string): void {
-		container
-			.querySelectorAll<HTMLElement>('.page')
-			.forEach((page) => this.ensureOverlayOnPage(page, filePath));
+	private createIntersectionObserver(): IntersectionObserver | null {
+		if (typeof IntersectionObserver === 'undefined') return null;
+		return new IntersectionObserver(
+			(entries) => {
+				entries.forEach((entry) => {
+					const page = entry.target;
+					if (!(page instanceof HTMLElement)) return;
+					const filePath = this.pageFilePaths.get(page);
+					if (!filePath) return;
+					if (entry.isIntersecting || entry.intersectionRatio > 0) {
+						this.activatePage(page, filePath);
+					} else {
+						this.deactivatePage(page);
+					}
+				});
+			},
+			{
+				root: null,
+				rootMargin: LAZY_ROOT_MARGIN,
+				threshold: 0,
+			},
+		);
 	}
 
-	private upgradeAddedPages(records: MutationRecord[], filePath: string): void {
+	private registerPages(container: HTMLElement, filePath: string, leaf: WorkspaceLeaf): void {
+		container
+			.querySelectorAll<HTMLElement>('.page')
+			.forEach((page) => this.registerPage(page, filePath, leaf));
+	}
+
+	private registerAddedPages(
+		records: MutationRecord[],
+		filePath: string,
+		leaf: WorkspaceLeaf,
+	): void {
 		records.forEach((record) => {
 			record.addedNodes.forEach((node) => {
 				if (node.nodeType !== 1) return;
 				const element = node as HTMLElement;
-				if (element.matches('.page')) this.ensureOverlayOnPage(element, filePath);
+				if (element.matches('.page')) this.registerPage(element, filePath, leaf);
 				element
 					.querySelectorAll<HTMLElement>('.page')
-					.forEach((page) => this.ensureOverlayOnPage(page, filePath));
+					.forEach((page) => this.registerPage(page, filePath, leaf));
 			});
 		});
 	}
 
-	private ensureOverlayOnPage(page: HTMLElement, filePath: string): void {
+	private unregisterDirectlyRemovedPages(records: MutationRecord[], leaf: WorkspaceLeaf): void {
+		const intersectionObserver = this.intersectionObservers.get(leaf);
+		records.forEach((record) => {
+			record.removedNodes.forEach((node) => {
+				if (node.nodeType !== 1) return;
+				const element = node as HTMLElement;
+				if (!element.matches('.page')) return;
+				intersectionObserver?.unobserve(element);
+				this.deactivatePage(element);
+			});
+		});
+	}
+
+	private registerPage(page: HTMLElement, filePath: string, leaf: WorkspaceLeaf): void {
+		this.pageFilePaths.set(page, filePath);
+		const intersectionObserver = this.intersectionObservers.get(leaf);
+		if (intersectionObserver) {
+			intersectionObserver.observe(page);
+			countZoomDiagnostic('lazyPagesObserved');
+			return;
+		}
+
+		// Compatibility fallback for environments without IntersectionObserver.
+		this.activatePage(page, filePath);
+	}
+
+	private activatePage(page: HTMLElement, filePath: string): void {
 		const pageNumberAttr = page.getAttribute('data-page-number');
 		const pageNumber = pageNumberAttr ? parseInt(pageNumberAttr, 10) : NaN;
 		if (Number.isNaN(pageNumber)) return;
@@ -255,26 +330,26 @@ export class OverlayManager {
 		page.classList.add(PAGE_ANCHOR_CLASS);
 
 		const existing = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
-		if (existing) {
-			if (existing.getAttribute(OVERLAY_KEY_ATTR) === key) {
-				this.sizeOverlayToPage(existing, page);
-				this.disableTextLayerInteraction(page);
-				this.ensurePageObservers(page);
-				this.redrawPage(existing);
-				return;
-			}
-			existing.remove();
+		if (existing?.getAttribute(OVERLAY_KEY_ATTR) === key) {
+			this.sizeOverlayToPage(existing, page);
+			this.disableTextLayerInteraction(page);
+			this.ensurePageObservers(page);
+			this.redrawPage(existing);
+			return;
 		}
+		if (existing) this.releaseOverlay(existing);
 
-		const overlay = activeDocument.createElement('canvas');
+		const doc = page.ownerDocument;
+		const overlay = doc.createElement('canvas');
 		overlay.className = OVERLAY_CLASS;
 		overlay.setAttribute(OVERLAY_KEY_ATTR, key);
 		this.sizeOverlayToPage(overlay, page);
 		page.appendChild(overlay);
 		countZoomDiagnostic('overlayCreates');
+		countZoomDiagnostic('lazyPageActivations');
 		if (isZoomDiagnosticsEnabled()) {
 			recordZoomDiagnosticEvent(
-				`overlay created page=${pageNumber} pageNode=${zoomDiagnosticId(page, 'page')} overlay=${zoomDiagnosticId(overlay, 'overlay')}`,
+				`page activated page=${pageNumber} pageNode=${zoomDiagnosticId(page, 'page')} overlay=${zoomDiagnosticId(overlay, 'overlay')}`,
 			);
 		}
 		this.disableTextLayerInteraction(page);
@@ -283,39 +358,98 @@ export class OverlayManager {
 		this.redrawPage(overlay);
 	}
 
-	private ensurePageObservers(page: HTMLElement): void {
-		if (page.getAttribute(PAGE_OBSERVED_ATTR) === '1') return;
-		page.setAttribute(PAGE_OBSERVED_ATTR, '1');
+	private deactivatePage(page: HTMLElement): void {
+		this.cancelPendingResize(page);
+		this.disconnectPageObservers(page);
 
-		new MutationObserver((records) => {
+		const overlay = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
+		if (overlay) {
+			countZoomDiagnostic('lazyPageDeactivations');
+			if (isZoomDiagnosticsEnabled()) {
+				recordZoomDiagnosticEvent(
+					`page deactivated page=${page.getAttribute('data-page-number') ?? '?'} pageNode=${zoomDiagnosticId(page, 'page')}`,
+				);
+			}
+			this.releaseOverlay(overlay);
+		}
+		this.enableTextLayerInteraction(page);
+		page.classList.remove(PAGE_ANCHOR_CLASS);
+	}
+
+	private releaseOverlay(overlay: HTMLCanvasElement): void {
+		// Drop the backing store before removing the node so WebKit can reclaim
+		// the large RGBA allocation immediately instead of waiting for GC.
+		overlay.width = 0;
+		overlay.height = 0;
+		overlay.remove();
+	}
+
+	private ensurePageObservers(page: HTMLElement): void {
+		if (this.pageObservers.has(page)) return;
+
+		const mutation = new MutationObserver((records) => {
 			countZoomDiagnostic('pageMutationCallbacks');
 			countZoomDiagnostic('pageMutationRecords', records.length);
 			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
 			if (!current) {
 				const filePath = this.pageFilePaths.get(page);
-				if (filePath) this.ensureOverlayOnPage(page, filePath);
+				if (filePath && page.isConnected) this.activatePage(page, filePath);
 				return;
 			}
 			this.disableTextLayerInteraction(page);
-		}).observe(page, { childList: true, subtree: true });
+		});
+		mutation.observe(page, { childList: true, subtree: true });
 
-		new ResizeObserver(() => {
+		const resize = new ResizeObserver(() => {
 			countZoomDiagnostic('resizeCallbacks');
 			const filePath = this.pageFilePaths.get(page);
 			if (!filePath) return;
 			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
-			if (!current) {
-				this.ensureOverlayOnPage(page, filePath);
-				return;
-			}
+			if (!current) return;
 
-			// During a live pinch, only stretch the existing bitmap with CSS. Resizing
-			// canvas.width/height reallocates and clears the backing store, so doing it
-			// on every ResizeObserver tick causes visible flashes and heavy redraw work.
+			// During a live pinch, only stretch the existing bitmap with CSS.
 			const sizeChanged = this.sizeOverlayCssToPage(current, page);
 			this.disableTextLayerInteraction(page);
 			if (sizeChanged) this.scheduleSettledResize(page, filePath);
-		}).observe(page);
+		});
+		resize.observe(page);
+
+		this.pageObservers.set(page, { mutation, resize });
+		page.setAttribute(PAGE_OBSERVED_ATTR, '1');
+	}
+
+	private disconnectPageObservers(page: HTMLElement): void {
+		const observers = this.pageObservers.get(page);
+		if (observers) {
+			observers.mutation.disconnect();
+			observers.resize.disconnect();
+			this.pageObservers.delete(page);
+		}
+		page.removeAttribute(PAGE_OBSERVED_ATTR);
+	}
+
+	private disconnectLeaf(leaf: WorkspaceLeaf): void {
+		this.containerObservers.get(leaf)?.disconnect();
+		this.containerObservers.delete(leaf);
+		this.containerFilePaths.delete(leaf);
+
+		this.intersectionObservers.get(leaf)?.disconnect();
+		this.intersectionObservers.delete(leaf);
+
+		leaf.view.containerEl
+			.querySelectorAll<HTMLElement>('.page')
+			.forEach((page) => this.deactivatePage(page));
+	}
+
+	private cancelPendingResize(page: HTMLElement): void {
+		const doc = page.ownerDocument;
+		const batch = this.resizeBatches.get(doc);
+		if (!batch) return;
+		batch.pages.delete(page);
+		if (batch.pages.size > 0) return;
+		const win = doc.defaultView ?? window;
+		win.clearTimeout(batch.timer);
+		this.resizeBatches.delete(doc);
 	}
 
 	private scheduleSettledResize(page: HTMLElement, filePath: string): void {
@@ -342,13 +476,10 @@ export class OverlayManager {
 		if (isZoomDiagnosticsEnabled()) {
 			recordZoomDiagnosticEvent(`settle batch pages=${pages.size}`);
 		}
-		pages.forEach((filePath, page) => {
+		pages.forEach((_filePath, page) => {
 			if (!page.isConnected) return;
 			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
-			if (!current) {
-				this.ensureOverlayOnPage(page, filePath);
-				return;
-			}
+			if (!current) return;
 			this.sizeOverlayToPage(current, page);
 			this.disableTextLayerInteraction(page);
 			this.redrawPage(current);
@@ -368,7 +499,7 @@ export class OverlayManager {
 	private sizeOverlayToPage(overlay: HTMLCanvasElement, page: HTMLElement): void {
 		const rect = page.getBoundingClientRect();
 		if (rect.width === 0 || rect.height === 0) return;
-		const requestedDpr = devicePixelRatioFor(window);
+		const requestedDpr = devicePixelRatioFor(page.ownerDocument.defaultView ?? window);
 		const effectiveDpr = safeBackingStoreDpr(rect.width, rect.height, requestedDpr);
 		applyBackingStoreSize(overlay, rect.width, rect.height, effectiveDpr);
 		overlay.setCssStyles({
@@ -380,5 +511,10 @@ export class OverlayManager {
 	private disableTextLayerInteraction(page: HTMLElement): void {
 		page.querySelector<HTMLElement>('.textLayer')?.classList.add(PASSTHROUGH_CLASS);
 		page.querySelector<HTMLElement>('.annotationLayer')?.classList.add(PASSTHROUGH_CLASS);
+	}
+
+	private enableTextLayerInteraction(page: HTMLElement): void {
+		page.querySelector<HTMLElement>('.textLayer')?.classList.remove(PASSTHROUGH_CLASS);
+		page.querySelector<HTMLElement>('.annotationLayer')?.classList.remove(PASSTHROUGH_CLASS);
 	}
 }
