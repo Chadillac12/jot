@@ -1,5 +1,4 @@
 import { App, TFile, WorkspaceLeaf } from 'obsidian';
-import { jotDebug, jotDebugId } from './debug-log';
 import {
 	applyBackingStoreSize,
 	devicePixelRatioFor,
@@ -54,16 +53,11 @@ export class OverlayManager {
 		const observer = new MutationObserver((records) => {
 			const currentPath = this.filePathForLeaf(leaf);
 			if (!currentPath) return;
-			jotDebug('PDF container mutation', {
-				path: currentPath,
-				records: records.length,
-			});
 			this.upgradeAddedPages(records, currentPath);
 		});
 		observer.observe(container, { childList: true, subtree: true });
 		this.containerObservers.set(leaf, observer);
 		this.containerFilePaths.set(leaf, filePath);
-		jotDebug('PDF leaf attached', { path: filePath });
 	}
 
 	pruneClosedObservers(): void {
@@ -157,7 +151,6 @@ export class OverlayManager {
 
 	private upgradeAddedPages(records: MutationRecord[], filePath: string): void {
 		records.forEach((record) => {
-			record.removedNodes.forEach((node) => this.logRemovedPages(node));
 			record.addedNodes.forEach((node) => {
 				if (node.nodeType !== 1) return;
 				const element = node as HTMLElement;
@@ -169,31 +162,12 @@ export class OverlayManager {
 		});
 	}
 
-	private logRemovedPages(node: Node): void {
-		if (node.nodeType !== 1) return;
-		const element = node as HTMLElement;
-		if (element.matches('.page')) {
-			jotDebug('page removed', { node: jotDebugId(element, 'page') });
-		}
-		element.querySelectorAll<HTMLElement>('.page').forEach((page) => {
-			jotDebug('page removed', { node: jotDebugId(page, 'page') });
-		});
-	}
-
 	private ensureOverlayOnPage(page: HTMLElement, filePath: string): void {
 		const pageNumberAttr = page.getAttribute('data-page-number');
 		const pageNumber = pageNumberAttr ? parseInt(pageNumberAttr, 10) : NaN;
 		if (Number.isNaN(pageNumber)) return;
 		const key = pageKey(filePath, pageNumber);
-		const discovered = !this.pageFilePaths.has(page);
 		this.pageFilePaths.set(page, filePath);
-		if (discovered) {
-			jotDebug('page discovered', {
-				page: pageNumber,
-				node: jotDebugId(page, 'page'),
-				path: filePath,
-			});
-		}
 		page.classList.add(PAGE_ANCHOR_CLASS);
 
 		const existing = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
@@ -213,17 +187,8 @@ export class OverlayManager {
 		overlay.setAttribute(OVERLAY_KEY_ATTR, key);
 		this.sizeOverlayToPage(overlay, page);
 		page.appendChild(overlay);
-		jotDebug('overlay created', {
-			page: jotDebugId(page, 'page'),
-			overlay: jotDebugId(overlay, 'overlay'),
-			key,
-		});
 		this.disableTextLayerInteraction(page);
 		this.wireOverlay(overlay);
-		jotDebug('overlay wired', {
-			page: jotDebugId(page, 'page'),
-			overlay: jotDebugId(overlay, 'overlay'),
-		});
 		this.ensurePageObservers(page);
 		this.redrawPage(overlay);
 	}
@@ -232,20 +197,7 @@ export class OverlayManager {
 		if (page.getAttribute(PAGE_OBSERVED_ATTR) === '1') return;
 		page.setAttribute(PAGE_OBSERVED_ATTR, '1');
 
-		new MutationObserver((records) => {
-			const removedOverlay = records.some((record) =>
-				Array.from(record.removedNodes).some(
-					(node) =>
-						node.nodeType === 1 &&
-						(node as HTMLElement).classList.contains(OVERLAY_CLASS),
-				),
-			);
-			if (removedOverlay) {
-				jotDebug('overlay removed', {
-					page: jotDebugId(page, 'page'),
-				});
-			}
-
+		new MutationObserver(() => {
 			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
 			if (!current) {
 				const filePath = this.pageFilePaths.get(page);
@@ -253,7 +205,7 @@ export class OverlayManager {
 				return;
 			}
 			this.disableTextLayerInteraction(page);
-		}).observe(page, { childList: true });
+		}).observe(page, { childList: true, subtree: true });
 
 		new ResizeObserver(() => {
 			const filePath = this.pageFilePaths.get(page);
@@ -267,18 +219,9 @@ export class OverlayManager {
 			// During a live pinch, only stretch the existing bitmap with CSS. Resizing
 			// canvas.width/height reallocates and clears the backing store, so doing it
 			// on every ResizeObserver tick causes visible flashes and heavy redraw work.
-			const oldWidth = current.style.width;
-			const oldHeight = current.style.height;
 			const sizeChanged = this.sizeOverlayCssToPage(current, page);
 			this.disableTextLayerInteraction(page);
-			if (sizeChanged) {
-				jotDebug('resize', {
-					page: jotDebugId(page, 'page'),
-					old: `${oldWidth}x${oldHeight}`,
-					current: `${current.style.width}x${current.style.height}`,
-				});
-				this.scheduleSettledResize(page, filePath);
-			}
+			if (sizeChanged) this.scheduleSettledResize(page, filePath);
 		}).observe(page);
 	}
 
@@ -301,7 +244,6 @@ export class OverlayManager {
 	}
 
 	private flushSettledResizeBatch(pages: Map<HTMLElement, string>): void {
-		jotDebug('settle batch', { pages: pages.size });
 		pages.forEach((filePath, page) => {
 			if (!page.isConnected) return;
 			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
@@ -309,12 +251,6 @@ export class OverlayManager {
 				this.ensureOverlayOnPage(page, filePath);
 				return;
 			}
-			const rect = page.getBoundingClientRect();
-			jotDebug('backing resize', {
-				page: jotDebugId(page, 'page'),
-				width: Math.round(rect.width),
-				height: Math.round(rect.height),
-			});
 			this.sizeOverlayToPage(current, page);
 			this.disableTextLayerInteraction(page);
 			this.redrawPage(current);
