@@ -21,6 +21,12 @@ import {
 import { drawHighlighterPolyline, drawSegment } from './stroke-render';
 import type { StrokeStore } from './stroke-store';
 import { TwoFingerHoldDetector } from './two-finger-hold';
+import {
+	countZoomDiagnostic,
+	isZoomDiagnosticsEnabled,
+	recordZoomDiagnosticEvent,
+	zoomDiagnosticId,
+} from './zoom-diagnostics';
 import type { UndoController } from './undo-controller';
 
 const LONG_PRESS_MS = 300;
@@ -105,12 +111,28 @@ export class PointerEventHandler {
 
 	private onPointerDown(e: PointerEvent): void {
 		if (e.pointerType === 'touch') {
+			countZoomDiagnostic('touchPointerDowns');
 			if (usesTwoFingerHold(this.deps.paletteActivation())) {
 				this.twoFingerHold.pointerDown(e.pointerId, e.clientX, e.clientY);
 			}
 			return;
 		}
 		if (e.pointerType !== 'pen' && e.pointerType !== 'mouse') return;
+		if (e.pointerType === 'pen') {
+			countZoomDiagnostic('penPointerDowns');
+			if (isZoomDiagnosticsEnabled()) {
+				recordZoomDiagnosticEvent(
+					[
+						'pen pointerdown',
+						`overlay=${zoomDiagnosticId(this.canvas, 'overlay')}`,
+						`key=${this.canvas.getAttribute(OVERLAY_KEY_ATTR) ?? 'none'}`,
+						`connected=${this.canvas.isConnected ? 1 : 0}`,
+						`css=${this.canvas.style.width}x${this.canvas.style.height}`,
+						`backing=${this.canvas.width}x${this.canvas.height}`,
+					].join(' '),
+				);
+			}
+		}
 		if (this.deps.palette.isOpen()) return;
 
 		this.canvas.setPointerCapture(e.pointerId);
@@ -170,6 +192,14 @@ export class PointerEventHandler {
 	}
 
 	private onFinish(e: PointerEvent): void {
+		if (e.pointerType === 'pen' && e.type === 'pointercancel') {
+			countZoomDiagnostic('penPointerCancels');
+			if (isZoomDiagnosticsEnabled()) {
+				recordZoomDiagnosticEvent(
+					`pen pointercancel overlay=${zoomDiagnosticId(this.canvas, 'overlay')} connected=${this.canvas.isConnected ? 1 : 0}`,
+				);
+			}
+		}
 		if (e.pointerType === 'touch') {
 			this.twoFingerHold.pointerUp(e.pointerId);
 			return;
