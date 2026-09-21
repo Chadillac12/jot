@@ -8,6 +8,11 @@ import { StrokeStore } from '../src/stroke-store';
 import type { SidecarStore } from '../src/sidecar-store';
 import type { UndoController } from '../src/undo-controller';
 import type { OverlayManager } from '../src/overlay-manager';
+import {
+	buildZoomDiagnosticsReport,
+	resetZoomDiagnosticsForTests,
+	startZoomDiagnostics,
+} from '../src/zoom-diagnostics';
 
 vi.mock('../src/overlay-manager', () => ({ OVERLAY_KEY_ATTR: 'data-jot-key' }));
 
@@ -106,9 +111,23 @@ describe('PointerEventHandler palette activation', () => {
 	});
 
 	afterEach(() => {
+		resetZoomDiagnosticsForTests();
 		document.body.innerHTML = '';
 		vi.restoreAllMocks();
 		vi.useRealTimers();
+	});
+
+	it('records a connected Pencil pointerdown when diagnostics are enabled', () => {
+		startZoomDiagnostics();
+		const { canvas } = makeHarness();
+
+		pointer(canvas, 'pointerdown', 'pen', 1, 20, 20);
+
+		const report = buildZoomDiagnosticsReport([]);
+		expect(report).toContain('penPointerDowns=1');
+		expect(report).toContain('pen pointerdown overlay=overlay-1');
+		expect(report).toContain('key=notes.pdf::1');
+		expect(report).toContain('connected=1');
 	});
 
 	it('does not arm LongPressDetector on ordinary Pencil down in double-tap-hold mode', () => {
