@@ -1,0 +1,58 @@
+name: Publish Jot iPad BRAT build
+
+on:
+  push:
+    branches:
+      - feature/lazy-overlays
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          version="$(node -p "require('./manifest.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Publish BRAT release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          assets=(main.js manifest.json styles.css)
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" "${assets[@]}" --clobber
+            gh release edit "$VERSION" --title "$VERSION"
+          else
+            gh release create "$VERSION" "${assets[@]}" \
+              --target "$GITHUB_SHA" \
+              --title "$VERSION" \
+              --notes "Jot iPad BRAT build: lazy PDF overlays stabilized for pinch zoom."
+          fi
