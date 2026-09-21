@@ -6,6 +6,12 @@ import {
 	safeBackingStoreDpr,
 } from './canvas-surface';
 import { pageKey } from './jot-file';
+import {
+	countZoomDiagnostic,
+	isZoomDiagnosticsEnabled,
+	recordZoomDiagnosticEvent,
+	zoomDiagnosticId,
+} from './zoom-diagnostics';
 import { drawStroke } from './stroke-render';
 import type { StrokeStore } from './stroke-store';
 
@@ -41,8 +47,12 @@ export class OverlayManager {
 		if (!filePath) return;
 		const container = leaf.view.containerEl;
 
+		countZoomDiagnostic('attachCalls');
 		const existingObserver = this.containerObservers.get(leaf);
-		if (existingObserver && this.containerFilePaths.get(leaf) === filePath) return;
+		if (existingObserver && this.containerFilePaths.get(leaf) === filePath) {
+			countZoomDiagnostic('attachDedup');
+			return;
+		}
 		if (existingObserver) {
 			existingObserver.disconnect();
 			this.containerObservers.delete(leaf);
@@ -50,7 +60,12 @@ export class OverlayManager {
 		}
 
 		this.upgradePages(container, filePath);
+		if (isZoomDiagnosticsEnabled()) {
+			recordZoomDiagnosticEvent(`PDF leaf attached path=${filePath}`);
+		}
 		const observer = new MutationObserver((records) => {
+			countZoomDiagnostic('containerMutationCallbacks');
+			countZoomDiagnostic('containerMutationRecords', records.length);
 			const currentPath = this.filePathForLeaf(leaf);
 			if (!currentPath) return;
 			this.upgradeAddedPages(records, currentPath);
@@ -132,6 +147,61 @@ export class OverlayManager {
 		return leaf ? this.filePathForLeaf(leaf) : null;
 	}
 
+	zoomDiagnosticsSnapshot(): string[] {
+		const leaf = this.getActivePdfLeaf();
+		if (!leaf) return ['activePdf=none'];
+
+		const container = leaf.view.containerEl;
+		const pages = Array.from(container.querySelectorAll<HTMLElement>('.page'));
+		const overlays = Array.from(
+			container.querySelectorAll<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`),
+		);
+		const lines = [
+			`activePdf=${this.filePathForLeaf(leaf) ?? 'unknown'}`,
+			`pages=${pages.length}`,
+			`overlays=${overlays.length}`,
+		];
+
+		pages.slice(0, 12).forEach((page) => {
+			const pageNumber = page.getAttribute('data-page-number') ?? '?';
+			const pageOverlays = page.querySelectorAll<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
+			const textLayer = page.querySelector<HTMLElement>('.textLayer');
+			const annotationLayer = page.querySelector<HTMLElement>('.annotationLayer');
+			lines.push(
+				[
+					`page=${pageNumber}`,
+					`node=${zoomDiagnosticId(page, 'page')}`,
+					`connected=${page.isConnected ? 1 : 0}`,
+					`observed=${page.getAttribute(PAGE_OBSERVED_ATTR) === '1' ? 1 : 0}`,
+					`overlayCount=${pageOverlays.length}`,
+					`textPass=${textLayer?.classList.contains(PASSTHROUGH_CLASS) ? 1 : 0}`,
+					`annotationPass=${annotationLayer?.classList.contains(PASSTHROUGH_CLASS) ? 1 : 0}`,
+				].join(' '),
+			);
+
+			const overlay = pageOverlays.item(0);
+			if (!overlay) return;
+			const rect = overlay.getBoundingClientRect();
+			const win = overlay.ownerDocument.defaultView ?? window;
+			const style = win.getComputedStyle(overlay);
+			lines.push(
+				[
+					`overlay=${zoomDiagnosticId(overlay, 'overlay')}`,
+					`key=${overlay.getAttribute(OVERLAY_KEY_ATTR) ?? 'none'}`,
+					`connected=${overlay.isConnected ? 1 : 0}`,
+					`css=${overlay.style.width}x${overlay.style.height}`,
+					`rect=${Math.round(rect.width)}x${Math.round(rect.height)}`,
+					`backing=${overlay.width}x${overlay.height}`,
+					`pointerEvents=${style.pointerEvents}`,
+					`zIndex=${style.zIndex}`,
+				].join(' '),
+			);
+		});
+
+		if (pages.length > 12) lines.push(`pagesOmitted=${pages.length - 12}`);
+		return lines;
+	}
+
 	private filePathForLeaf(leaf: WorkspaceLeaf): string | null {
 		const file = (leaf.view as { file?: TFile }).file;
 		return file?.path ?? null;
@@ -187,6 +257,12 @@ export class OverlayManager {
 		overlay.setAttribute(OVERLAY_KEY_ATTR, key);
 		this.sizeOverlayToPage(overlay, page);
 		page.appendChild(overlay);
+		countZoomDiagnostic('overlayCreates');
+		if (isZoomDiagnosticsEnabled()) {
+			recordZoomDiagnosticEvent(
+				`overlay created page=${pageNumber} pageNode=${zoomDiagnosticId(page, 'page')} overlay=${zoomDiagnosticId(overlay, 'overlay')}`,
+			);
+		}
 		this.disableTextLayerInteraction(page);
 		this.wireOverlay(overlay);
 		this.ensurePageObservers(page);
@@ -197,7 +273,9 @@ export class OverlayManager {
 		if (page.getAttribute(PAGE_OBSERVED_ATTR) === '1') return;
 		page.setAttribute(PAGE_OBSERVED_ATTR, '1');
 
-		new MutationObserver(() => {
+		new MutationObserver((records) => {
+			countZoomDiagnostic('pageMutationCallbacks');
+			countZoomDiagnostic('pageMutationRecords', records.length);
 			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
 			if (!current) {
 				const filePath = this.pageFilePaths.get(page);
@@ -208,6 +286,7 @@ export class OverlayManager {
 		}).observe(page, { childList: true, subtree: true });
 
 		new ResizeObserver(() => {
+			countZoomDiagnostic('resizeCallbacks');
 			const filePath = this.pageFilePaths.get(page);
 			if (!filePath) return;
 			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
@@ -244,6 +323,11 @@ export class OverlayManager {
 	}
 
 	private flushSettledResizeBatch(pages: Map<HTMLElement, string>): void {
+		countZoomDiagnostic('settleBatches');
+		countZoomDiagnostic('settledPages', pages.size);
+		if (isZoomDiagnosticsEnabled()) {
+			recordZoomDiagnosticEvent(`settle batch pages=${pages.size}`);
+		}
 		pages.forEach((filePath, page) => {
 			if (!page.isConnected) return;
 			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
