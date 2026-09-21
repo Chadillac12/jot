@@ -46,6 +46,7 @@ export class OverlayManager {
 	private resizeBatches = new Map<Document, PendingResizeBatch>();
 	private deactivationTimers = new Map<HTMLElement, number>();
 	private pinnedPages = new Map<HTMLElement, number>();
+	private penCaptureHandlers = new Map<WorkspaceLeaf, (event: PointerEvent) => void>();
 
 	constructor(
 		private app: App,
@@ -89,6 +90,7 @@ export class OverlayManager {
 		observer.observe(container, { childList: true, subtree: true });
 		this.containerObservers.set(leaf, observer);
 		this.containerFilePaths.set(leaf, filePath);
+		this.installPenCaptureDiagnostics(leaf, container);
 	}
 
 	pruneClosedObservers(): void {
@@ -104,6 +106,7 @@ export class OverlayManager {
 		const leaves = new Set<WorkspaceLeaf>([
 			...this.containerObservers.keys(),
 			...this.intersectionObservers.keys(),
+			...this.penCaptureHandlers.keys(),
 		]);
 		leaves.forEach((leaf) => this.disconnectLeaf(leaf));
 		this.resizeBatches.forEach((batch, doc) => {
@@ -341,6 +344,45 @@ export class OverlayManager {
 		countZoomDiagnostic('lazyPageUnpins');
 	}
 
+	private installPenCaptureDiagnostics(leaf: WorkspaceLeaf, container: HTMLElement): void {
+		if (this.penCaptureHandlers.has(leaf)) return;
+		const handler = (event: PointerEvent) => {
+			if (event.pointerType !== 'pen') return;
+			countZoomDiagnostic('pdfPenPointerDowns');
+			const target = event.target as Element | null;
+			const page = target?.closest?.('.page') as HTMLElement | null;
+			if (!page) {
+				countZoomDiagnostic('penDownOutsidePdfPage');
+				return;
+			}
+			const overlay = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
+			if (overlay) {
+				countZoomDiagnostic('penSurfaceCaptureHits');
+				return;
+			}
+			countZoomDiagnostic('penSurfaceMisses');
+			if (isZoomDiagnosticsEnabled()) {
+				recordZoomDiagnosticEvent(
+					[
+						'pen surface miss',
+						`page=${page.getAttribute('data-page-number') ?? '?'}`,
+						`pendingDeactivate=${this.deactivationTimers.has(page) ? 1 : 0}`,
+						`pinned=${(this.pinnedPages.get(page) ?? 0) > 0 ? 1 : 0}`,
+					].join(' '),
+				);
+			}
+		};
+		container.addEventListener('pointerdown', handler, true);
+		this.penCaptureHandlers.set(leaf, handler);
+	}
+
+	private removePenCaptureDiagnostics(leaf: WorkspaceLeaf): void {
+		const handler = this.penCaptureHandlers.get(leaf);
+		if (!handler) return;
+		leaf.view.containerEl.removeEventListener('pointerdown', handler, true);
+		this.penCaptureHandlers.delete(leaf);
+	}
+
 	private registerPages(container: HTMLElement, filePath: string, leaf: WorkspaceLeaf): void {
 		container
 			.querySelectorAll<HTMLElement>('.page')
@@ -515,6 +557,7 @@ export class OverlayManager {
 	}
 
 	private disconnectLeaf(leaf: WorkspaceLeaf): void {
+		this.removePenCaptureDiagnostics(leaf);
 		this.containerObservers.get(leaf)?.disconnect();
 		this.containerObservers.delete(leaf);
 		this.containerFilePaths.delete(leaf);
