@@ -17,6 +17,7 @@ import {
 	buildZoomDiagnosticsReport,
 	countZoomDiagnostic,
 	recordZoomDiagnosticEvent,
+	resumeZoomDiagnosticsAfterReload,
 	startZoomDiagnostics,
 	stopZoomDiagnostics,
 } from './zoom-diagnostics';
@@ -38,6 +39,7 @@ export default class JotPlugin extends Plugin {
 	private undoController!: UndoController;
 
 	async onload() {
+		resumeZoomDiagnosticsAfterReload();
 		await this.loadSettings();
 		this.sidecar = new SidecarStore(this.app.vault.adapter, this.strokes);
 		this.overlays = new OverlayManager(this.app, this.strokes, (canvas) =>
