@@ -256,7 +256,7 @@ export class OverlayManager {
 		const existing = this.intersectionObservers.get(leaf);
 		if (existing) return existing;
 
-		const ObserverCtor = doc.defaultView?.IntersectionObserver ?? globalThis.IntersectionObserver;
+		const ObserverCtor = doc.defaultView?.IntersectionObserver ?? window.IntersectionObserver;
 		if (typeof ObserverCtor !== 'function') return null;
 
 		const observer = new ObserverCtor(
