@@ -221,7 +221,7 @@ describe('OverlayManager zoom recovery', () => {
 	});
 
 	it('does not schedule settled work when a resize notification reports the same size', () => {
-		const { manager } = makeHarness();
+		const { page, manager } = makeHarness();
 		manager.attachToActivePdf();
 		activate(page);
 		const redraw = vi.spyOn(manager, 'redrawPage');
