@@ -126,7 +126,7 @@ export class JotSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName('Debug overlay lifecycle logging')
 			.setDesc(
-				'Log PDF page, overlay, resize, and Pencil pointer lifecycle events to the developer console. Leave this off unless troubleshooting.',
+				'Log PDF page, overlay, resize, and pencil pointer lifecycle events to the developer console. Leave this off unless troubleshooting.',
 			)
 			.addToggle((toggle) =>
 				toggle
