@@ -138,8 +138,10 @@ export class PointerEventHandler {
 
 		this.canvas.setPointerCapture(e.pointerId);
 		this.activePointerId = e.pointerId;
-		this.deps.overlays.pinOverlay(this.canvas);
-		this.overlayPinned = true;
+		if (typeof this.deps.overlays.pinOverlay === 'function') {
+			this.deps.overlays.pinOverlay(this.canvas);
+			this.overlayPinned = true;
+		}
 
 		if (e.pointerType === 'pen') {
 			this.penDownAtMs = Date.now();
@@ -463,7 +465,9 @@ export class PointerEventHandler {
 			this.activePointerId = null;
 		}
 		if (this.overlayPinned) {
-			this.deps.overlays.unpinOverlay(this.canvas);
+			if (typeof this.deps.overlays.unpinOverlay === 'function') {
+				this.deps.overlays.unpinOverlay(this.canvas);
+			}
 			this.overlayPinned = false;
 		}
 	}
