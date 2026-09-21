@@ -40,6 +40,7 @@ export class OverlayManager {
 	private intersectionObservers = new Map<WorkspaceLeaf, IntersectionObserver>();
 	private pageFilePaths = new WeakMap<HTMLElement, string>();
 	private pageObservers = new WeakMap<HTMLElement, PageObservers>();
+	private ownedOverlays = new WeakSet<HTMLCanvasElement>();
 	private resizeBatches = new Map<Document, PendingResizeBatch>();
 
 	constructor(
@@ -330,7 +331,11 @@ export class OverlayManager {
 		page.classList.add(PAGE_ANCHOR_CLASS);
 
 		const existing = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
-		if (existing?.getAttribute(OVERLAY_KEY_ATTR) === key) {
+		if (
+			existing &&
+			this.ownedOverlays.has(existing) &&
+			existing.getAttribute(OVERLAY_KEY_ATTR) === key
+		) {
 			this.sizeOverlayToPage(existing, page);
 			this.disableTextLayerInteraction(page);
 			this.ensurePageObservers(page);
@@ -345,6 +350,7 @@ export class OverlayManager {
 		overlay.setAttribute(OVERLAY_KEY_ATTR, key);
 		this.sizeOverlayToPage(overlay, page);
 		page.appendChild(overlay);
+		this.ownedOverlays.add(overlay);
 		countZoomDiagnostic('overlayCreates');
 		countZoomDiagnostic('lazyPageActivations');
 		if (isZoomDiagnosticsEnabled()) {
@@ -379,6 +385,7 @@ export class OverlayManager {
 	private releaseOverlay(overlay: HTMLCanvasElement): void {
 		// Drop the backing store before removing the node so WebKit can reclaim
 		// the large RGBA allocation immediately instead of waiting for GC.
+		this.ownedOverlays.delete(overlay);
 		overlay.width = 0;
 		overlay.height = 0;
 		overlay.remove();
