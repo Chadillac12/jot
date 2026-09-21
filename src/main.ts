@@ -1,7 +1,6 @@
 import { Notice, Plugin, TFile } from 'obsidian';
 import { ConfirmClearModal } from './clear';
 import { collectClearOperations, countStrokes, toUndoEntries } from './clear-ops';
-import { setJotDebugEnabled } from './debug-log';
 import { FloatingPaletteButton } from './floating-palette-button';
 import { isSidecarPath, pdfPathFromSidecar } from './jot-file';
 import { MergeService } from './merge-service';
@@ -33,7 +32,6 @@ export default class JotPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
-		setJotDebugEnabled(this.settings.debugOverlayLifecycle);
 		this.sidecar = new SidecarStore(this.app.vault.adapter, this.strokes);
 		this.overlays = new OverlayManager(this.app, this.strokes, (canvas) =>
 			this.wirePointerEvents(canvas),
@@ -216,11 +214,6 @@ export default class JotPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
-	}
-
-	setDebugOverlayLifecycle(enabled: boolean): void {
-		this.settings.debugOverlayLifecycle = enabled;
-		setJotDebugEnabled(enabled);
 	}
 
 	refreshFloatingPaletteButton(): void {
