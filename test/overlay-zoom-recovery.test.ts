@@ -275,6 +275,21 @@ describe('OverlayManager zoom recovery', () => {
 		expect(wire).toHaveBeenCalledTimes(3);
 	});
 
+	it('reports only materialized pages in overlay memory totals', () => {
+		const { pages, manager } = makeHarness(81);
+		manager.attachToActivePdf();
+		activate(pages[0]!);
+		activate(pages[1]!);
+		activate(pages[2]!);
+
+		const report = manager.zoomDiagnosticsSnapshot().join('\n');
+		expect(report).toContain('pages=81');
+		expect(report).toContain('overlays=3');
+		expect(report).toContain('activePages=3');
+		expect(report).toContain('inactivePages=78');
+		expect(report).toContain('estimatedRgbaMiB=');
+	});
+
 	it('deactivates distant pages and releases their backing stores', () => {
 		const { page, manager } = makeHarness();
 		const textLayer = document.createElement('div');
