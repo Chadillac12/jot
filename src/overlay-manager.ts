@@ -20,7 +20,9 @@ const PAGE_ANCHOR_CLASS = 'jot-page-anchor';
 const PASSTHROUGH_CLASS = 'jot-passthrough';
 const PAGE_OBSERVED_ATTR = 'data-jot-observed';
 const ZOOM_SETTLE_MS = 120;
-const LAZY_ROOT_MARGIN = '150% 0px';
+const LAZY_ROOT_MARGIN = '1200px 0px';
+const LAZY_DEACTIVATE_GRACE_MS = 750;
+const PINNED_DEACTIVATE_RETRY_MS = 250;
 
 export const OVERLAY_KEY_ATTR = 'data-jot-key';
 
@@ -42,6 +44,8 @@ export class OverlayManager {
 	private pageObservers = new WeakMap<HTMLElement, PageObservers>();
 	private ownedOverlays = new WeakSet<HTMLCanvasElement>();
 	private resizeBatches = new Map<Document, PendingResizeBatch>();
+	private deactivationTimers = new Map<HTMLElement, number>();
+	private pinnedPages = new Map<HTMLElement, number>();
 
 	constructor(
 		private app: App,
@@ -64,7 +68,7 @@ export class OverlayManager {
 		}
 		if (existingObserver) this.disconnectLeaf(leaf);
 
-		const intersectionObserver = this.createIntersectionObserver();
+		const intersectionObserver = this.createIntersectionObserver(container);
 		if (intersectionObserver) {
 			this.intersectionObservers.set(leaf, intersectionObserver);
 		}
@@ -107,6 +111,8 @@ export class OverlayManager {
 			win.clearTimeout(batch.timer);
 		});
 		this.resizeBatches.clear();
+		this.clearAllDeactivationTimers();
+		this.pinnedPages.clear();
 	}
 
 	redrawPage(canvas: HTMLCanvasElement): void {
@@ -193,6 +199,8 @@ export class OverlayManager {
 			`overlayBackingPixels=${backingPixels}`,
 			`estimatedRgbaBytes=${estimatedRgbaBytes}`,
 			`estimatedRgbaMiB=${(estimatedRgbaBytes / 1024 / 1024).toFixed(1)}`,
+			`pendingDeactivations=${this.deactivationTimers.size}`,
+			`pinnedPages=${this.pinnedPages.size}`,
 		];
 
 		reportPages.forEach((page) => {
@@ -249,9 +257,17 @@ export class OverlayManager {
 		);
 	}
 
-	private createIntersectionObserver(): IntersectionObserver | null {
-		if (typeof IntersectionObserver === 'undefined') return null;
-		return new IntersectionObserver(
+	private createIntersectionObserver(container: HTMLElement): IntersectionObserver | null {
+		const win = container.ownerDocument.defaultView ?? window;
+		const ObserverCtor = win.IntersectionObserver ?? globalThis.IntersectionObserver;
+		if (typeof ObserverCtor !== 'function') return null;
+
+		const root =
+			container.querySelector<HTMLElement>('.pdf-viewer-container, .pdf-scroll-container') ??
+			null;
+		countZoomDiagnostic(root ? 'lazyObserverPdfRoot' : 'lazyObserverViewportRoot');
+
+		return new ObserverCtor(
 			(entries) => {
 				entries.forEach((entry) => {
 					const page = entry.target as HTMLElement;
@@ -261,16 +277,68 @@ export class OverlayManager {
 					if (entry.isIntersecting || entry.intersectionRatio > 0) {
 						this.activatePage(page, filePath);
 					} else {
-						this.deactivatePage(page);
+						this.schedulePageDeactivation(page);
 					}
 				});
 			},
 			{
-				root: null,
+				root,
 				rootMargin: LAZY_ROOT_MARGIN,
 				threshold: 0,
 			},
 		);
+	}
+
+	private schedulePageDeactivation(page: HTMLElement, delayMs = LAZY_DEACTIVATE_GRACE_MS): void {
+		if (this.deactivationTimers.has(page)) return;
+		const win = page.ownerDocument.defaultView ?? window;
+		countZoomDiagnostic('lazyDeactivationScheduled');
+		const timer = win.setTimeout(() => {
+			if (this.deactivationTimers.get(page) !== timer) return;
+			this.deactivationTimers.delete(page);
+
+			if ((this.pinnedPages.get(page) ?? 0) > 0) {
+				countZoomDiagnostic('lazyDeactivationDeferredForPointer');
+				this.schedulePageDeactivation(page, PINNED_DEACTIVATE_RETRY_MS);
+				return;
+			}
+			this.deactivatePage(page);
+		}, delayMs);
+		this.deactivationTimers.set(page, timer);
+	}
+
+	private cancelPageDeactivation(page: HTMLElement): void {
+		const timer = this.deactivationTimers.get(page);
+		if (timer === undefined) return;
+		const win = page.ownerDocument.defaultView ?? window;
+		win.clearTimeout(timer);
+		this.deactivationTimers.delete(page);
+		countZoomDiagnostic('lazyDeactivationCancelled');
+	}
+
+	private clearAllDeactivationTimers(): void {
+		for (const [page, timer] of this.deactivationTimers) {
+			const win = page.ownerDocument.defaultView ?? window;
+			win.clearTimeout(timer);
+		}
+		this.deactivationTimers.clear();
+	}
+
+	pinOverlay(overlay: HTMLCanvasElement): void {
+		const page = overlay.closest<HTMLElement>('.page');
+		if (!page) return;
+		this.cancelPageDeactivation(page);
+		this.pinnedPages.set(page, (this.pinnedPages.get(page) ?? 0) + 1);
+		countZoomDiagnostic('lazyPagePins');
+	}
+
+	unpinOverlay(overlay: HTMLCanvasElement): void {
+		const page = overlay.closest<HTMLElement>('.page');
+		if (!page) return;
+		const next = Math.max(0, (this.pinnedPages.get(page) ?? 0) - 1);
+		if (next === 0) this.pinnedPages.delete(page);
+		else this.pinnedPages.set(page, next);
+		countZoomDiagnostic('lazyPageUnpins');
 	}
 
 	private registerPages(container: HTMLElement, filePath: string, leaf: WorkspaceLeaf): void {
@@ -331,6 +399,7 @@ export class OverlayManager {
 	}
 
 	private activatePage(page: HTMLElement, filePath: string): void {
+		this.cancelPageDeactivation(page);
 		const pageNumberAttr = page.getAttribute('data-page-number');
 		const pageNumber = pageNumberAttr ? parseInt(pageNumberAttr, 10) : NaN;
 		if (Number.isNaN(pageNumber)) return;
@@ -373,6 +442,8 @@ export class OverlayManager {
 	}
 
 	private deactivatePage(page: HTMLElement): void {
+		this.cancelPageDeactivation(page);
+		this.pinnedPages.delete(page);
 		this.cancelPendingResize(page);
 		this.disconnectPageObservers(page);
 

@@ -78,6 +78,7 @@ export class PointerEventHandler {
 	private secondTapX = 0;
 	private secondTapY = 0;
 	private secondTapTimer: number | null = null;
+	private overlayPinned = false;
 
 	constructor(
 		private canvas: HTMLCanvasElement,
@@ -137,6 +138,8 @@ export class PointerEventHandler {
 
 		this.canvas.setPointerCapture(e.pointerId);
 		this.activePointerId = e.pointerId;
+		this.deps.overlays.pinOverlay(this.canvas);
+		this.overlayPinned = true;
 
 		if (e.pointerType === 'pen') {
 			this.penDownAtMs = Date.now();
@@ -451,13 +454,18 @@ export class PointerEventHandler {
 	}
 
 	private releasePointerCapture(): void {
-		if (this.activePointerId === null) return;
-		try {
-			this.canvas.releasePointerCapture(this.activePointerId);
-		} catch {
-			/* already released */
+		if (this.activePointerId !== null) {
+			try {
+				this.canvas.releasePointerCapture(this.activePointerId);
+			} catch {
+				/* already released */
+			}
+			this.activePointerId = null;
 		}
-		this.activePointerId = null;
+		if (this.overlayPinned) {
+			this.deps.overlays.unpinOverlay(this.canvas);
+			this.overlayPinned = false;
+		}
 	}
 
 	private toNormalized(e: PointerEvent): NormalizedPoint {

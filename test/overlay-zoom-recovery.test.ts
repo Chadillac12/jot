@@ -329,6 +329,8 @@ describe('OverlayManager zoom recovery', () => {
 		expect(textLayer.classList.contains('jot-passthrough')).toBe(true);
 
 		deactivate(page);
+		expect(page.querySelector('canvas.jot-overlay')).not.toBeNull();
+		vi.advanceTimersByTime(750);
 
 		expect(page.querySelector('canvas.jot-overlay')).toBeNull();
 		expect(overlay?.width).toBe(0);
@@ -339,30 +341,20 @@ describe('OverlayManager zoom recovery', () => {
 		expect(ResizeObserverMock.instances[0]?.disconnect).toHaveBeenCalledTimes(1);
 	});
 
-	it('recreates and rewires a page when it returns near the viewport', () => {
-		const { page, manager, wire, strokes } = makeHarness();
-		strokes.appendToKey('notes.pdf::1', {
-			points: [{ x: 0.25, y: 0.25, pressure: 0.5 }],
-			color: '#000000',
-			width: 0.0025,
-			tool: 'pen',
-		});
-		const redraw = vi.spyOn(manager, 'redrawPage').mockImplementation(() => undefined);
-
+	it('keeps the same overlay when a zoom briefly moves the page outside the lazy window', () => {
+		const { page, manager, wire } = makeHarness();
 		manager.attachToActivePdf();
 		activate(page);
 		const first = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
 
 		deactivate(page);
+		vi.advanceTimersByTime(500);
 		activate(page);
+		vi.advanceTimersByTime(500);
 		const second = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
 
-		expect(second).not.toBeNull();
-		expect(second).not.toBe(first);
-		expect(second?.getAttribute(OVERLAY_KEY_ATTR)).toBe('notes.pdf::1');
-		expect(wire).toHaveBeenCalledTimes(2);
-		expect(redraw).toHaveBeenCalledWith(second);
-		expect(strokes.forKey('notes.pdf::1')).toHaveLength(1);
+		expect(second).toBe(first);
+		expect(wire).toHaveBeenCalledTimes(1);
 	});
 
 	it('replaces a stale overlay from an older plugin instance instead of reusing it', () => {
@@ -381,6 +373,37 @@ describe('OverlayManager zoom recovery', () => {
 		expect(stale.width).toBe(0);
 		expect(stale.height).toBe(0);
 		expect(wire).toHaveBeenCalledTimes(1);
+	});
+
+	it('does not retire an overlay while a Pencil pointer owns it', () => {
+		const { page, manager } = makeHarness();
+		manager.attachToActivePdf();
+		activate(page);
+		const overlay = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+		if (!overlay) throw new Error('Expected active overlay');
+
+		manager.pinOverlay(overlay);
+		deactivate(page);
+		vi.advanceTimersByTime(1500);
+		expect(page.querySelector('canvas.jot-overlay')).toBe(overlay);
+
+		manager.unpinOverlay(overlay);
+		vi.advanceTimersByTime(300);
+		expect(page.querySelector('canvas.jot-overlay')).toBeNull();
+	});
+
+	it('roots lazy visibility to the native PDF scroll viewport when available', () => {
+		const { container, pages, manager } = makeHarness(2);
+		const scrollRoot = document.createElement('div');
+		scrollRoot.className = 'pdf-viewer-container';
+		for (const page of pages) scrollRoot.appendChild(page);
+		container.appendChild(scrollRoot);
+
+		manager.attachToActivePdf();
+
+		const observer = IntersectionObserverMock.instances[0];
+		expect(observer?.options?.root).toBe(scrollRoot);
+		expect(observer?.options?.rootMargin).toBe('1200px 0px');
 	});
 
 	it('disconnects lazy page observers and removes canvases on plugin shutdown', () => {
