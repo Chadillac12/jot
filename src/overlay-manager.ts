@@ -288,7 +288,14 @@ export class OverlayManager {
 			record.addedNodes.forEach((node) => {
 				if (node.nodeType !== 1) return;
 				const element = node as HTMLElement;
-				if (element.matches('.page')) this.registerPage(element, filePath, leaf);
+				if (element.matches('.page')) {
+					this.registerPage(element, filePath, leaf);
+					return;
+				}
+				// PDF.js adds many text/annotation descendants inside an already-known
+				// page. Those nodes cannot contain sibling PDF pages, so avoid a
+				// recursive page search for every glyph/layer mutation.
+				if (element.closest('.page')) return;
 				element
 					.querySelectorAll<HTMLElement>('.page')
 					.forEach((page) => this.registerPage(page, filePath, leaf));
