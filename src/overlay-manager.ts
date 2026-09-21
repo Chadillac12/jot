@@ -254,8 +254,8 @@ export class OverlayManager {
 		return new IntersectionObserver(
 			(entries) => {
 				entries.forEach((entry) => {
-					const page = entry.target;
-					if (!(page instanceof HTMLElement)) return;
+					const page = entry.target as HTMLElement;
+					if (!page.matches('.page')) return;
 					const filePath = this.pageFilePaths.get(page);
 					if (!filePath) return;
 					if (entry.isIntersecting || entry.intersectionRatio > 0) {
@@ -305,6 +305,7 @@ export class OverlayManager {
 				if (!element.matches('.page')) return;
 				intersectionObserver?.unobserve(element);
 				this.deactivatePage(element);
+				this.pageFilePaths.delete(element);
 			});
 		});
 	}
@@ -445,7 +446,10 @@ export class OverlayManager {
 
 		leaf.view.containerEl
 			.querySelectorAll<HTMLElement>('.page')
-			.forEach((page) => this.deactivatePage(page));
+			.forEach((page) => {
+				this.deactivatePage(page);
+				this.pageFilePaths.delete(page);
+			});
 	}
 
 	private cancelPendingResize(page: HTMLElement): void {
