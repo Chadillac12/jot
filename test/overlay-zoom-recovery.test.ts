@@ -7,14 +7,45 @@ vi.mock('obsidian', () => ({}));
 
 class ResizeObserverMock {
 	static instances: ResizeObserverMock[] = [];
+	disconnect = vi.fn();
 	constructor(private callback: ResizeObserverCallback) {
 		ResizeObserverMock.instances.push(this);
 	}
 	observe(): void {}
-	disconnect(): void {}
 	unobserve(): void {}
 	fire(): void {
 		this.callback([], this as unknown as ResizeObserver);
+	}
+}
+
+class IntersectionObserverMock {
+	static instances: IntersectionObserverMock[] = [];
+	readonly observed = new Set<Element>();
+	disconnect = vi.fn(() => this.observed.clear());
+	unobserve = vi.fn((target: Element) => this.observed.delete(target));
+
+	constructor(
+		private callback: IntersectionObserverCallback,
+		public readonly options?: IntersectionObserverInit,
+	) {
+		IntersectionObserverMock.instances.push(this);
+	}
+
+	observe(target: Element): void {
+		this.observed.add(target);
+	}
+
+	fire(target: Element, isIntersecting: boolean): void {
+		this.callback(
+			[
+				{
+					target,
+					isIntersecting,
+					intersectionRatio: isIntersecting ? 1 : 0,
+				} as IntersectionObserverEntry,
+			],
+			this as unknown as IntersectionObserver,
+		);
 	}
 }
 
@@ -66,16 +97,31 @@ function makeHarness(pageCount = 1) {
 		},
 	};
 	const wire = vi.fn();
-	const manager = new OverlayManager(app as any, new StrokeStore(), wire);
-	return { container, page, pages, manager, wire };
+	const strokes = new StrokeStore();
+	const manager = new OverlayManager(app as any, strokes, wire);
+	return { container, page, pages, manager, wire, strokes };
+}
+
+function activate(page: HTMLElement): void {
+	const observer = IntersectionObserverMock.instances[0];
+	if (!observer) throw new Error('Expected an IntersectionObserver');
+	observer.fire(page, true);
+}
+
+function deactivate(page: HTMLElement): void {
+	const observer = IntersectionObserverMock.instances[0];
+	if (!observer) throw new Error('Expected an IntersectionObserver');
+	observer.fire(page, false);
 }
 
 beforeEach(() => {
 	vi.useFakeTimers();
 	document.body.innerHTML = '';
 	ResizeObserverMock.instances = [];
+	IntersectionObserverMock.instances = [];
 	(globalThis as any).activeDocument = document;
 	(globalThis as any).ResizeObserver = ResizeObserverMock;
+	(globalThis as any).IntersectionObserver = IntersectionObserverMock;
 	(globalThis as any).window.devicePixelRatio = 2;
 	(HTMLElement.prototype as any).setCssStyles = function (styles: Record<string, string>) {
 		Object.assign((this as HTMLElement).style, styles);
@@ -94,6 +140,7 @@ describe('OverlayManager zoom recovery', () => {
 	it('recreates and rewires an overlay removed during a PDF.js page rebuild', async () => {
 		const { page, manager, wire } = makeHarness();
 		manager.attachToActivePdf();
+		activate(page);
 		const first = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
 		expect(first).not.toBeNull();
 		expect(wire).toHaveBeenCalledTimes(1);
@@ -127,6 +174,7 @@ describe('OverlayManager zoom recovery', () => {
 	it('stretches the overlay during live zoom and rebuilds the backing store only after zoom settles', () => {
 		const { page, manager, wire } = makeHarness();
 		manager.attachToActivePdf();
+		activate(page);
 		const overlay = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
 		expect(overlay?.width).toBe(1600);
 		expect(overlay?.height).toBe(2000);
@@ -154,6 +202,7 @@ describe('OverlayManager zoom recovery', () => {
 	it('coalesces repeated resize notifications into one settled backing-store update', () => {
 		const { page, manager } = makeHarness();
 		manager.attachToActivePdf();
+		activate(page);
 		const overlay = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
 
 		setRect(page, 1000, 1250);
@@ -174,6 +223,7 @@ describe('OverlayManager zoom recovery', () => {
 	it('does not schedule settled work when a resize notification reports the same size', () => {
 		const { manager } = makeHarness();
 		manager.attachToActivePdf();
+		activate(page);
 		const redraw = vi.spyOn(manager, 'redrawPage');
 
 		ResizeObserverMock.instances[0]?.fire();
@@ -189,6 +239,8 @@ describe('OverlayManager zoom recovery', () => {
 		const second = pages[1];
 		if (!first || !second) throw new Error('Expected two PDF pages');
 		manager.attachToActivePdf();
+		activate(first);
+		activate(second);
 
 		setRect(first, 1000, 1250);
 		setRect(second, 1000, 1250);
@@ -202,6 +254,113 @@ describe('OverlayManager zoom recovery', () => {
 		const secondOverlay = second.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
 		expect(firstOverlay?.style.width).toBe('1000px');
 		expect(secondOverlay?.style.width).toBe('1000px');
+	});
+
+	it('registers a large PDF without allocating Jot canvases up front', () => {
+		const { container, pages, manager, wire } = makeHarness(81);
+		manager.attachToActivePdf();
+
+		const observer = IntersectionObserverMock.instances[0];
+		expect(observer?.observed.size).toBe(81);
+		expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(0);
+		expect(ResizeObserverMock.instances).toHaveLength(0);
+		expect(wire).not.toHaveBeenCalled();
+
+		activate(pages[0]!);
+		activate(pages[1]!);
+		activate(pages[2]!);
+
+		expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(3);
+		expect(ResizeObserverMock.instances).toHaveLength(3);
+		expect(wire).toHaveBeenCalledTimes(3);
+	});
+
+	it('deactivates distant pages and releases their backing stores', () => {
+		const { page, manager } = makeHarness();
+		const textLayer = document.createElement('div');
+		textLayer.className = 'textLayer';
+		const annotationLayer = document.createElement('div');
+		annotationLayer.className = 'annotationLayer';
+		page.append(textLayer, annotationLayer);
+
+		manager.attachToActivePdf();
+		activate(page);
+
+		const overlay = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+		expect(overlay?.width).toBe(1600);
+		expect(page.getAttribute('data-jot-observed')).toBe('1');
+		expect(textLayer.classList.contains('jot-passthrough')).toBe(true);
+
+		deactivate(page);
+
+		expect(page.querySelector('canvas.jot-overlay')).toBeNull();
+		expect(overlay?.width).toBe(0);
+		expect(overlay?.height).toBe(0);
+		expect(page.hasAttribute('data-jot-observed')).toBe(false);
+		expect(textLayer.classList.contains('jot-passthrough')).toBe(false);
+		expect(annotationLayer.classList.contains('jot-passthrough')).toBe(false);
+		expect(ResizeObserverMock.instances[0]?.disconnect).toHaveBeenCalledTimes(1);
+	});
+
+	it('recreates and rewires a page when it returns near the viewport', () => {
+		const { page, manager, wire, strokes } = makeHarness();
+		strokes.appendToKey('notes.pdf::1', {
+			points: [{ x: 0.25, y: 0.25, pressure: 0.5 }],
+			color: '#000000',
+			width: 0.0025,
+			tool: 'pen',
+		});
+		const redraw = vi.spyOn(manager, 'redrawPage').mockImplementation(() => undefined);
+
+		manager.attachToActivePdf();
+		activate(page);
+		const first = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+
+		deactivate(page);
+		activate(page);
+		const second = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+
+		expect(second).not.toBeNull();
+		expect(second).not.toBe(first);
+		expect(second?.getAttribute(OVERLAY_KEY_ATTR)).toBe('notes.pdf::1');
+		expect(wire).toHaveBeenCalledTimes(2);
+		expect(redraw).toHaveBeenCalledWith(second);
+		expect(strokes.forKey('notes.pdf::1')).toHaveLength(1);
+	});
+
+	it('replaces a stale overlay from an older plugin instance instead of reusing it', () => {
+		const { page, manager, wire } = makeHarness();
+		const stale = document.createElement('canvas');
+		stale.className = 'jot-overlay';
+		stale.setAttribute(OVERLAY_KEY_ATTR, 'notes.pdf::1');
+		page.appendChild(stale);
+
+		manager.attachToActivePdf();
+		activate(page);
+
+		const current = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+		expect(current).not.toBeNull();
+		expect(current).not.toBe(stale);
+		expect(stale.width).toBe(0);
+		expect(stale.height).toBe(0);
+		expect(wire).toHaveBeenCalledTimes(1);
+	});
+
+	it('disconnects lazy page observers and removes canvases on plugin shutdown', () => {
+		const { page, manager } = makeHarness();
+		manager.attachToActivePdf();
+		activate(page);
+
+		const intersection = IntersectionObserverMock.instances[0];
+		const resize = ResizeObserverMock.instances[0];
+		expect(page.querySelector('canvas.jot-overlay')).not.toBeNull();
+
+		manager.disconnectAll();
+
+		expect(intersection?.disconnect).toHaveBeenCalledTimes(1);
+		expect(resize?.disconnect).toHaveBeenCalledTimes(1);
+		expect(page.querySelector('canvas.jot-overlay')).toBeNull();
+		expect(page.hasAttribute('data-jot-observed')).toBe(false);
 	});
 
 	it('does not redraw every page again when attach is repeated for the same PDF leaf', () => {
