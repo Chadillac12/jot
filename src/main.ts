@@ -13,6 +13,13 @@ import { SidecarStore } from './sidecar-store';
 import { StrokeStore } from './stroke-store';
 import { UndoEntry, UndoHistory } from './undo';
 import { UndoController } from './undo-controller';
+import {
+	buildZoomDiagnosticsReport,
+	countZoomDiagnostic,
+	recordZoomDiagnosticEvent,
+	startZoomDiagnostics,
+	stopZoomDiagnostics,
+} from './zoom-diagnostics';
 
 export type { Handedness } from './palette';
 
@@ -82,6 +89,30 @@ export default class JotPlugin extends Plugin {
 				return true;
 			},
 		});
+		this.addCommand({
+			id: 'start-zoom-diagnostics',
+			name: 'Start zoom diagnostics',
+			callback: () => {
+				startZoomDiagnostics();
+				recordZoomDiagnosticEvent(
+					`capture started on ${this.overlays.getActivePdfFilePath() ?? 'no active PDF'}`,
+				);
+				new Notice('Jot: zoom diagnostics started.');
+			},
+		});
+		this.addCommand({
+			id: 'copy-zoom-diagnostics',
+			name: 'Copy zoom diagnostics',
+			callback: () => void this.copyZoomDiagnostics(),
+		});
+		this.addCommand({
+			id: 'stop-zoom-diagnostics',
+			name: 'Stop zoom diagnostics',
+			callback: () => {
+				stopZoomDiagnostics();
+				new Notice('Jot: zoom diagnostics stopped.');
+			},
+		});
 
 		this.palette = new Palette(
 			this.toolState,
@@ -119,6 +150,8 @@ export default class JotPlugin extends Plugin {
 					this.refreshFloatingPaletteButton();
 					return;
 				}
+				countZoomDiagnostic('pdfFileOpenEvents');
+				recordZoomDiagnosticEvent(`PDF file-open path=${file.path}`);
 				await this.ensureLoaded(file.path);
 				window.setTimeout(() => {
 					this.overlays.attachToActivePdf();
@@ -129,6 +162,7 @@ export default class JotPlugin extends Plugin {
 
 		this.registerEvent(
 			this.app.workspace.on('layout-change', () => {
+				countZoomDiagnostic('layoutChangeEvents');
 				this.overlays.pruneClosedObservers();
 				this.overlays.attachToActivePdf();
 				this.refreshFloatingPaletteButton();
@@ -222,6 +256,17 @@ export default class JotPlugin extends Plugin {
 			leaf?.view.containerEl ?? null,
 			this.settings.floatingPaletteButtonPosition,
 		);
+	}
+
+	private async copyZoomDiagnostics(): Promise<void> {
+		const report = buildZoomDiagnosticsReport(this.overlays.zoomDiagnosticsSnapshot());
+		try {
+			await window.navigator.clipboard.writeText(report);
+			new Notice('Jot: zoom diagnostics copied.');
+		} catch (error) {
+			console.error(`${PLUGIN_LOG} could not copy zoom diagnostics`, error);
+			new Notice('Jot: could not copy zoom diagnostics.');
+		}
 	}
 
 	openPaletteForActivePdf(): void {
