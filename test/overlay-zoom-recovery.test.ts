@@ -155,6 +155,28 @@ describe('OverlayManager zoom recovery', () => {
 		expect(wire).toHaveBeenCalledTimes(2);
 	});
 
+	it('does not scan added text-layer subtrees for nested PDF pages', async () => {
+		const { page, manager } = makeHarness();
+		manager.attachToActivePdf();
+		activate(page);
+		await flushMutations();
+
+		const textLayer = document.createElement('div');
+		textLayer.className = 'textLayer';
+		page.appendChild(textLayer);
+		await flushMutations();
+
+		const glyphBatch = document.createElement('div');
+		for (let i = 0; i < 200; i++) {
+			glyphBatch.appendChild(document.createElement('span'));
+		}
+		const scan = vi.spyOn(glyphBatch, 'querySelectorAll');
+		textLayer.appendChild(glyphBatch);
+		await flushMutations();
+
+		expect(scan).not.toHaveBeenCalled();
+	});
+
 	it('does not inspect removed subtrees from the PDF container observer', async () => {
 		const { container, manager } = makeHarness();
 		manager.attachToActivePdf();
