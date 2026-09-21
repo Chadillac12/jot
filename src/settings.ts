@@ -26,7 +26,6 @@ export interface JotSettings extends PalettePreferences {
 	penState: ToolMemory;
 	highlighterState: ToolMemory;
 	colors: string[];
-	debugOverlayLifecycle: boolean;
 }
 
 export const DEFAULT_SETTINGS: JotSettings = {
@@ -35,7 +34,6 @@ export const DEFAULT_SETTINGS: JotSettings = {
 	penState: { ...DEFAULT_PEN_MEMORY },
 	highlighterState: { ...DEFAULT_HIGHLIGHTER_MEMORY },
 	colors: [...PALETTE_COLORS],
-	debugOverlayLifecycle: false,
 	...DEFAULT_PALETTE_PREFERENCES,
 };
 
@@ -119,22 +117,6 @@ export class JotSettingTab extends PluginSettingTab {
 			.setName('Squeeze shortcut')
 			.setDesc(
 				'Optional: assign the stylus squeeze gesture to a shortcut that runs the palette action. This opens the radial palette without using a PDF touch gesture.',
-			);
-
-		new Setting(containerEl).setName('Diagnostics').setHeading();
-
-		new Setting(containerEl)
-			.setName('Debug overlay lifecycle logging')
-			.setDesc(
-				'Log PDF page, overlay, resize, and pencil pointer lifecycle events to the developer console. Leave this off unless troubleshooting.',
-			)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.debugOverlayLifecycle)
-					.onChange(async (value) => {
-						this.plugin.setDebugOverlayLifecycle(value);
-						await this.plugin.saveSettings();
-					}),
 			);
 
 		new Setting(containerEl)
