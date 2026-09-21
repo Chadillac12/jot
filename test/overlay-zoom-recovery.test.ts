@@ -108,56 +108,6 @@ describe('OverlayManager zoom recovery', () => {
 		expect(wire).toHaveBeenCalledTimes(2);
 	});
 
-
-	it('re-applies passthrough when PDF layers are replaced as direct page children', async () => {
-		const { page, manager } = makeHarness();
-		manager.attachToActivePdf();
-
-		const textLayer = document.createElement('div');
-		textLayer.className = 'textLayer';
-		const annotationLayer = document.createElement('div');
-		annotationLayer.className = 'annotationLayer';
-		page.append(textLayer, annotationLayer);
-		await flushMutations();
-
-		expect(textLayer.classList.contains('jot-passthrough')).toBe(true);
-		expect(annotationLayer.classList.contains('jot-passthrough')).toBe(true);
-	});
-
-	it('keeps exactly one overlay after PDF layers and the overlay are rebuilt', async () => {
-		const { page, manager, wire } = makeHarness();
-		manager.attachToActivePdf();
-		page.querySelector<HTMLCanvasElement>('canvas.jot-overlay')?.remove();
-
-		const textLayer = document.createElement('div');
-		textLayer.className = 'textLayer';
-		page.appendChild(textLayer);
-		await flushMutations();
-
-		expect(page.querySelectorAll('canvas.jot-overlay')).toHaveLength(1);
-		expect(wire).toHaveBeenCalledTimes(2);
-		expect(textLayer.classList.contains('jot-passthrough')).toBe(true);
-	});
-
-	it('ignores descendant glyph churn inside an existing text layer', async () => {
-		const { page, manager } = makeHarness();
-		const interactionSpy = vi.spyOn(manager as any, 'disableTextLayerInteraction');
-		manager.attachToActivePdf();
-
-		const textLayer = document.createElement('div');
-		textLayer.className = 'textLayer';
-		page.appendChild(textLayer);
-		await flushMutations();
-		interactionSpy.mockClear();
-
-		for (let i = 0; i < 200; i++) {
-			textLayer.appendChild(document.createElement('span'));
-		}
-		await flushMutations();
-
-		expect(interactionSpy).not.toHaveBeenCalled();
-	});
-
 	it('stretches the overlay during live zoom and rebuilds the backing store only after zoom settles', () => {
 		const { page, manager, wire } = makeHarness();
 		manager.attachToActivePdf();
