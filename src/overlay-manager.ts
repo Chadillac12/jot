@@ -156,10 +156,24 @@ export class OverlayManager {
 		const overlays = Array.from(
 			container.querySelectorAll<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`),
 		);
+		const backingPixels = overlays.reduce(
+			(total, overlay) => total + overlay.width * overlay.height,
+			0,
+		);
+		const estimatedRgbaBytes = backingPixels * 4;
+		const textLayerCount = pages.filter((page) => page.querySelector('.textLayer')).length;
+		const annotationLayerCount = pages.filter((page) =>
+			page.querySelector('.annotationLayer'),
+		).length;
 		const lines = [
 			`activePdf=${this.filePathForLeaf(leaf) ?? 'unknown'}`,
 			`pages=${pages.length}`,
 			`overlays=${overlays.length}`,
+			`textLayers=${textLayerCount}`,
+			`annotationLayers=${annotationLayerCount}`,
+			`overlayBackingPixels=${backingPixels}`,
+			`estimatedRgbaBytes=${estimatedRgbaBytes}`,
+			`estimatedRgbaMiB=${(estimatedRgbaBytes / 1024 / 1024).toFixed(1)}`,
 		];
 
 		pages.slice(0, 12).forEach((page) => {
