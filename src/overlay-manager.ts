@@ -262,7 +262,7 @@ export class OverlayManager {
 
 	private createIntersectionObserver(container: HTMLElement): IntersectionObserver | null {
 		const win = container.ownerDocument.defaultView ?? window;
-		const ObserverCtor = win.IntersectionObserver ?? globalThis.IntersectionObserver;
+		const ObserverCtor = win.IntersectionObserver;
 		if (typeof ObserverCtor !== 'function') return null;
 
 		const root =
