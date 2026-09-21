@@ -108,6 +108,22 @@ describe('OverlayManager zoom recovery', () => {
 		expect(wire).toHaveBeenCalledTimes(2);
 	});
 
+	it('does not inspect removed subtrees from the PDF container observer', async () => {
+		const { container, manager } = makeHarness();
+		manager.attachToActivePdf();
+
+		const disposable = document.createElement('div');
+		disposable.appendChild(document.createElement('span'));
+		container.appendChild(disposable);
+		await flushMutations();
+
+		const scan = vi.spyOn(disposable, 'querySelectorAll');
+		disposable.remove();
+		await flushMutations();
+
+		expect(scan).not.toHaveBeenCalled();
+	});
+
 	it('stretches the overlay during live zoom and rebuilds the backing store only after zoom settles', () => {
 		const { page, manager, wire } = makeHarness();
 		manager.attachToActivePdf();
