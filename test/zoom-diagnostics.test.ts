@@ -5,6 +5,7 @@ import {
 	isZoomDiagnosticsEnabled,
 	recordZoomDiagnosticEvent,
 	resetZoomDiagnosticsForTests,
+	resumeZoomDiagnosticsAfterReload,
 	startZoomDiagnostics,
 	stopZoomDiagnostics,
 	zoomDiagnosticId,
@@ -42,6 +43,30 @@ describe('zoom diagnostics', () => {
 		expect(report).toContain('resizeCallbacks=3');
 		expect(report).toContain('+25ms settle batch pages=2');
 		expect(report).toContain('activePdf=notes.pdf');
+	});
+
+	it('resumes a capture after a plugin reload marker survives', () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-09-21T00:00:00Z'));
+		startZoomDiagnostics();
+
+		const raw = window.localStorage.getItem('jot-ipad-zoom-diagnostics-v1');
+		expect(raw).not.toBeNull();
+
+		// Simulate a fresh plugin module by resetting only in-memory state while
+		// restoring the persisted marker before the next onload.
+		const persisted = raw;
+		resetZoomDiagnosticsForTests();
+		if (persisted) window.localStorage.setItem('jot-ipad-zoom-diagnostics-v1', persisted);
+
+		vi.advanceTimersByTime(250);
+		expect(resumeZoomDiagnosticsAfterReload()).toBe(true);
+
+		const report = buildZoomDiagnosticsReport([]);
+		expect(report).toContain('captureEnabled=1');
+		expect(report).toContain('captureReloads=1');
+		expect(report).toContain('diagnosticReloadResumes=1');
+		expect(report).toContain('capture resumed after plugin reload count=1');
 	});
 
 	it('assigns stable ids only while capture is enabled', () => {
