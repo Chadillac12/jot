@@ -202,6 +202,40 @@ describe('OverlayManager lazy PDF overlays', () => {
 		expect(wire).toHaveBeenCalledTimes(3);
 	});
 
+	it('falls back to eager overlays when IntersectionObserver is unavailable', () => {
+		Object.defineProperty(window, 'IntersectionObserver', {
+			value: undefined,
+			configurable: true,
+			writable: true,
+		});
+		const { container, manager, wire } = makeHarness(2);
+
+		manager.attachToActivePdf();
+
+		expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(2);
+		expect(wire).toHaveBeenCalledTimes(2);
+	});
+
+	it('disconnectAll tears down materialized canvases without touching stored strokes', () => {
+		const { pages, container, manager, strokes } = makeHarness(3);
+		strokes.appendToKey('notes.pdf::1', {
+			points: [{ x: 0.1, y: 0.1, pressure: 0.5 }],
+			color: '#000000',
+			width: 0.0025,
+			tool: 'pen',
+		});
+		manager.attachToActivePdf();
+		intersection().fire(pages[0]!, true);
+		intersection().fire(pages[1]!, true);
+		expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(2);
+
+		manager.disconnectAll();
+
+		expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(0);
+		expect(strokes.forKey('notes.pdf::1')).toHaveLength(1);
+		expect(pages.every((page) => !page.classList.contains('jot-page-anchor'))).toBe(true);
+	});
+
 	it('removes the backing canvas and observers when a page leaves the prefetch window', () => {
 		const { page, manager } = makeHarness();
 		const textLayer = document.createElement('div');
