@@ -18,6 +18,7 @@ vi.mock('../src/overlay-manager', () => ({ OVERLAY_KEY_ATTR: 'data-jot-key' }));
 
 interface Harness {
 	canvas: HTMLCanvasElement;
+	handler: PointerEventHandler;
 	palette: Palette;
 	strokes: StrokeStore;
 	sidecar: SidecarStore;
@@ -62,7 +63,7 @@ function makeHarness(activation: PaletteActivation = 'pencil-double-tap-hold'): 
 	} as unknown as UndoController;
 	const currentActivation = { value: activation };
 
-	new PointerEventHandler(canvas, {} as CanvasRenderingContext2D, {
+	const handler = new PointerEventHandler(canvas, {} as CanvasRenderingContext2D, {
 		palette,
 		strokes,
 		overlays,
@@ -72,9 +73,10 @@ function makeHarness(activation: PaletteActivation = 'pencil-double-tap-hold'): 
 		handedness: () => 'right',
 		paletteActivation: () => currentActivation.value,
 		pencilLongPressMs: () => 300,
-	}).attach();
+	});
+	handler.attach();
 
-	return { canvas, palette, strokes, sidecar, undo, activation: currentActivation };
+	return { canvas, handler, palette, strokes, sidecar, undo, activation: currentActivation };
 }
 
 function pointer(
@@ -128,6 +130,37 @@ describe('PointerEventHandler palette activation', () => {
 		expect(report).toContain('pen pointerdown overlay=overlay-1');
 		expect(report).toContain('key=notes.pdf::1');
 		expect(report).toContain('connected=1');
+	});
+
+	it('processes a capture-routed Pencil event once even if it later reaches the canvas listener', () => {
+		startZoomDiagnostics();
+		const { canvas, handler, strokes } = makeHarness();
+		const down = new PointerEvent('pointerdown', {
+			bubbles: true,
+			pointerType: 'pen',
+			pointerId: 42,
+			clientX: 20,
+			clientY: 30,
+			pressure: 0.6,
+		});
+		handler.handleCapturedPointerEvent(down);
+		canvas.dispatchEvent(down);
+
+		const up = new PointerEvent('pointerup', {
+			bubbles: true,
+			pointerType: 'pen',
+			pointerId: 42,
+			clientX: 20,
+			clientY: 30,
+			pressure: 0.6,
+		});
+		handler.handleCapturedPointerEvent(up);
+		canvas.dispatchEvent(up);
+
+		const report = buildZoomDiagnosticsReport([]);
+		expect(report).toContain('penPointerDowns=1');
+		expect(report).toContain('penDirectDuplicatesSuppressed=2');
+		expect(strokes.forKey('notes.pdf::1')).toHaveLength(1);
 	});
 
 	it('does not arm LongPressDetector on ordinary Pencil down in double-tap-hold mode', () => {
