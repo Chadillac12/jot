@@ -1,9 +1,9 @@
 {
-	"id": "jot",
-	"name": "Jot",
-	"version": "1.0.5",
+	"id": "jot-ipad",
+	"name": "Jot iPad",
+	"version": "1.0.7-ipad.11",
 	"minAppVersion": "1.4.4",
-	"description": "Annotate PDFs with your Apple Pencil. Strokes save to a JSON sidecar; the PDF is never modified.",
+	"description": "Annotate PDFs with Apple Pencil, improved palette activation, and resilient PDF zoom handling. Strokes save to a JSON sidecar; the PDF is never modified.",
 	"author": "Ben Verbeken",
 	"authorUrl": "https://github.com/bverbeken",
 	"isDesktopOnly": false

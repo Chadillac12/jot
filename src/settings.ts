@@ -8,11 +8,19 @@ import {
 	ToolMemory,
 	ToolState,
 } from './palette';
+import {
+	DEFAULT_PALETTE_PREFERENCES,
+	FloatingPaletteButtonPosition,
+	MAX_PENCIL_LONG_PRESS_MS,
+	MIN_PENCIL_LONG_PRESS_MS,
+	PaletteActivation,
+	PalettePreferences,
+} from './palette-activation';
 import type JotPlugin from './main';
 
 export type { Handedness };
 
-export interface JotSettings {
+export interface JotSettings extends PalettePreferences {
 	handedness: Handedness;
 	toolState: ToolState;
 	penState: ToolMemory;
@@ -26,6 +34,7 @@ export const DEFAULT_SETTINGS: JotSettings = {
 	penState: { ...DEFAULT_PEN_MEMORY },
 	highlighterState: { ...DEFAULT_HIGHLIGHTER_MEMORY },
 	colors: [...PALETTE_COLORS],
+	...DEFAULT_PALETTE_PREFERENCES,
 };
 
 export class JotSettingTab extends PluginSettingTab {
@@ -54,6 +63,60 @@ export class JotSettingTab extends PluginSettingTab {
 						this.plugin.settings.handedness = value as Handedness;
 						await this.plugin.saveSettings();
 					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Palette activation')
+			.setDesc(
+				'Double-tap + hold: make one quick pencil-tip tap, then press nearby again and hold briefly. This leaves two-finger pinch zoom free for the PDF.',
+			)
+			.addDropdown((d) =>
+				d
+					.addOption('pencil-double-tap-hold', 'Pencil double-tap + hold (recommended)')
+					.addOption('pencil-long-press', 'Pencil long-press')
+					.addOption('two-finger', 'Two-finger hold (may conflict with PDF zoom)')
+					.addOption('both', 'Pencil long-press + two-finger hold (legacy)')
+					.setValue(this.plugin.settings.paletteActivation)
+					.onChange(async (value) => {
+						this.plugin.settings.paletteActivation = value as PaletteActivation;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Pencil long-press duration')
+			.setDesc('Advanced: delay before the palette opens when pencil long-press is enabled.')
+			.addSlider((slider) =>
+				slider
+					.setLimits(MIN_PENCIL_LONG_PRESS_MS, MAX_PENCIL_LONG_PRESS_MS, 50)
+					.setValue(this.plugin.settings.pencilLongPressMs)
+					.onChange(async (value) => {
+						this.plugin.settings.pencilLongPressMs = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Floating palette button')
+			.setDesc('Show a small edge button on the active PDF. Select off to hide it.')
+			.addDropdown((d) =>
+				d
+					.addOption('off', 'Off')
+					.addOption('left', 'Left edge')
+					.addOption('right', 'Right edge')
+					.setValue(this.plugin.settings.floatingPaletteButtonPosition)
+					.onChange(async (value) => {
+						this.plugin.settings.floatingPaletteButtonPosition =
+							value as FloatingPaletteButtonPosition;
+						await this.plugin.saveSettings();
+						this.plugin.refreshFloatingPaletteButton();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Squeeze shortcut')
+			.setDesc(
+				'Optional: assign the stylus squeeze gesture to a shortcut that runs the palette action. This opens the radial palette without using a PDF touch gesture.',
 			);
 
 		new Setting(containerEl)

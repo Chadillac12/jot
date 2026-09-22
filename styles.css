@@ -274,3 +274,44 @@
 		transform: none;
 	}
 }
+
+/* Small edge control for opening the existing Jot radial palette without
+   arming a Pencil long-press gesture. */
+.jot-floating-palette-button {
+	position: fixed;
+	width: 34px;
+	height: 34px;
+	transform: translate(-50%, -50%);
+	z-index: 9998;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	margin: 0;
+	border: 1px solid var(--background-modifier-border, rgba(0, 0, 0, 0.2));
+	border-radius: 50%;
+	background: var(--background-primary, #1e1e1e);
+	color: var(--text-normal, #ddd);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+	opacity: 0.72;
+	-webkit-appearance: none;
+	appearance: none;
+	touch-action: manipulation;
+	user-select: none;
+	cursor: pointer;
+}
+
+.jot-floating-palette-button:hover,
+.jot-floating-palette-button:focus-visible {
+	opacity: 1;
+}
+
+.jot-floating-palette-button:active {
+	transform: translate(-50%, -50%) scale(0.92);
+}
+
+.jot-floating-palette-button svg {
+	width: 17px;
+	height: 17px;
+	stroke: currentColor;
+}
