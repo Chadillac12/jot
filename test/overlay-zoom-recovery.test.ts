@@ -160,7 +160,7 @@ describe('OverlayManager zoom recovery', () => {
 		expect(pointerRouter.handleCapturedPointerEvent).toHaveBeenCalledTimes(1);
 	});
 
-	it('reattaches the existing overlay when PDF.js removes it during a page rebuild', async () => {
+	it('debounces PDF.js overlay removal and reattaches the same canvas after mutations settle', async () => {
 		const { page, manager, wire } = makeHarness();
 		manager.attachToActivePdf();
 		activate(page);
@@ -170,10 +170,16 @@ describe('OverlayManager zoom recovery', () => {
 
 		first?.remove();
 		await flushMutations();
+		expect(page.querySelector('canvas.jot-overlay')).toBeNull();
 
+		for (let i = 0; i < 20; i++) page.appendChild(document.createElement('span'));
+		await flushMutations();
+		vi.advanceTimersByTime(59);
+		expect(page.querySelector('canvas.jot-overlay')).toBeNull();
+
+		vi.advanceTimersByTime(1);
 		const replacement = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
 		expect(replacement).toBe(first);
-		expect(replacement?.getAttribute(OVERLAY_KEY_ATTR)).toBe('notes.pdf::1');
 		expect(wire).toHaveBeenCalledTimes(1);
 	});
 
@@ -199,20 +205,31 @@ describe('OverlayManager zoom recovery', () => {
 		expect(scan).not.toHaveBeenCalled();
 	});
 
-	it('reattaches the same wired canvas when PDF.js removes page children during zoom', async () => {
-		const { page, manager, wire } = makeHarness();
+	it('restores a cached overlay immediately when Pencil lands during the repair debounce', async () => {
+		const { page, manager, wire, pointerRouter } = makeHarness();
 		manager.attachToActivePdf();
 		activate(page);
 		const first = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
-		expect(first).not.toBeNull();
-		expect(wire).toHaveBeenCalledTimes(1);
+		if (!first) throw new Error('Expected Jot overlay');
 
-		first?.remove();
+		first.remove();
 		await flushMutations();
+		expect(page.querySelector('canvas.jot-overlay')).toBeNull();
+
+		page.dispatchEvent(
+			new PointerEvent('pointerdown', {
+				bubbles: true,
+				pointerType: 'pen',
+				pointerId: 91,
+				clientX: 20,
+				clientY: 20,
+			}),
+		);
 
 		const restored = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
 		expect(restored).toBe(first);
 		expect(wire).toHaveBeenCalledTimes(1);
+		expect(pointerRouter.handleCapturedPointerEvent).toHaveBeenCalledTimes(1);
 	});
 
 	it('does not inspect removed subtrees from the PDF container observer', async () => {
@@ -434,6 +451,8 @@ describe('OverlayManager zoom recovery', () => {
 		const { container, pages, manager } = makeHarness(2);
 		const scrollRoot = document.createElement('div');
 		scrollRoot.className = 'pdf-viewer-container';
+		Object.defineProperty(scrollRoot, 'clientHeight', { value: 800, configurable: true });
+		Object.defineProperty(scrollRoot, 'scrollHeight', { value: 5000, configurable: true });
 		for (const page of pages) scrollRoot.appendChild(page);
 		container.appendChild(scrollRoot);
 
@@ -442,6 +461,28 @@ describe('OverlayManager zoom recovery', () => {
 		const observer = IntersectionObserverMock.instances[0];
 		expect(observer?.options?.root).toBe(scrollRoot);
 		expect(observer?.options?.rootMargin).toBe('1200px 0px');
+	});
+
+	it('chooses the actually scrollable PDF ancestor instead of a document-sized wrapper', () => {
+		const { container, pages, manager } = makeHarness(2);
+		const outer = document.createElement('div');
+		outer.className = 'pdf-viewer-container';
+		Object.defineProperty(outer, 'clientHeight', { value: 5000, configurable: true });
+		Object.defineProperty(outer, 'scrollHeight', { value: 5000, configurable: true });
+
+		const scrollRoot = document.createElement('div');
+		scrollRoot.className = 'pdf-scroll-container';
+		Object.defineProperty(scrollRoot, 'clientHeight', { value: 800, configurable: true });
+		Object.defineProperty(scrollRoot, 'scrollHeight', { value: 5000, configurable: true });
+
+		for (const page of pages) scrollRoot.appendChild(page);
+		outer.appendChild(scrollRoot);
+		container.appendChild(outer);
+
+		manager.attachToActivePdf();
+
+		const observer = IntersectionObserverMock.instances[0];
+		expect(observer?.options?.root).toBe(scrollRoot);
 	});
 
 	it('disconnects lazy page observers and removes canvases on plugin shutdown', () => {

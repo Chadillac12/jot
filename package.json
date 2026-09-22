@@ -1,6 +1,6 @@
 {
 	"name": "jot-ipad",
-	"version": "1.0.7-ipad.9",
+	"version": "1.0.7-ipad.10",
 	"description": "Handwrite annotations in Obsidian with Apple Pencil.",
 	"main": "main.js",
 	"type": "module",
