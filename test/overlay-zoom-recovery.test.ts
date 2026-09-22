@@ -137,7 +137,7 @@ afterEach(() => {
 });
 
 describe('OverlayManager zoom recovery', () => {
-	it('recreates and rewires an overlay removed during a PDF.js page rebuild', async () => {
+	it('reattaches the existing overlay when PDF.js removes it during a page rebuild', async () => {
 		const { page, manager, wire } = makeHarness();
 		manager.attachToActivePdf();
 		activate(page);
@@ -149,10 +149,9 @@ describe('OverlayManager zoom recovery', () => {
 		await flushMutations();
 
 		const replacement = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
-		expect(replacement).not.toBeNull();
-		expect(replacement).not.toBe(first);
+		expect(replacement).toBe(first);
 		expect(replacement?.getAttribute(OVERLAY_KEY_ATTR)).toBe('notes.pdf::1');
-		expect(wire).toHaveBeenCalledTimes(2);
+		expect(wire).toHaveBeenCalledTimes(1);
 	});
 
 	it('does not scan added text-layer subtrees for nested PDF pages', async () => {
