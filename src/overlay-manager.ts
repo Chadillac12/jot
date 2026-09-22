@@ -43,6 +43,7 @@ export class OverlayManager {
 	private pageFilePaths = new WeakMap<HTMLElement, string>();
 	private pageObservers = new WeakMap<HTMLElement, PageObservers>();
 	private ownedOverlays = new WeakSet<HTMLCanvasElement>();
+	private pageOverlays = new WeakMap<HTMLElement, HTMLCanvasElement>();
 	private resizeBatches = new Map<Document, PendingResizeBatch>();
 	private deactivationTimers = new Map<HTMLElement, number>();
 	private pinnedPages = new Map<HTMLElement, number>();
@@ -358,6 +359,29 @@ export class OverlayManager {
 			const overlay = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
 			if (overlay) {
 				countZoomDiagnostic('penSurfaceCaptureHits');
+				const targetIsOverlay = target === overlay || target?.closest?.(`canvas.${OVERLAY_CLASS}`) === overlay;
+				if (targetIsOverlay) {
+					countZoomDiagnostic('penOverlayTargetHits');
+				} else {
+					countZoomDiagnostic('penOverlayTargetMisses');
+					if (isZoomDiagnosticsEnabled()) {
+						const rect = overlay.getBoundingClientRect();
+						const inside =
+							event.clientX >= rect.left &&
+							event.clientX <= rect.right &&
+							event.clientY >= rect.top &&
+							event.clientY <= rect.bottom;
+						recordZoomDiagnosticEvent(
+							[
+								'pen overlay target miss',
+								`page=${page.getAttribute('data-page-number') ?? '?'}`,
+								`insideOverlay=${inside ? 1 : 0}`,
+								`overlayRect=${Math.round(rect.width)}x${Math.round(rect.height)}`,
+								`target=${target?.className || target?.tagName || 'unknown'}`,
+							].join(' '),
+						);
+					}
+				}
 				return;
 			}
 			countZoomDiagnostic('penSurfaceMisses');
@@ -455,6 +479,7 @@ export class OverlayManager {
 			this.ownedOverlays.has(existing) &&
 			existing.getAttribute(OVERLAY_KEY_ATTR) === key
 		) {
+			this.pageOverlays.set(page, existing);
 			this.sizeOverlayToPage(existing, page);
 			this.disableTextLayerInteraction(page);
 			this.ensurePageObservers(page);
@@ -463,6 +488,26 @@ export class OverlayManager {
 		}
 		if (existing) this.releaseOverlay(existing);
 
+		const cached = this.pageOverlays.get(page);
+		if (
+			cached &&
+			this.ownedOverlays.has(cached) &&
+			cached.getAttribute(OVERLAY_KEY_ATTR) === key
+		) {
+			this.sizeOverlayToPage(cached, page);
+			page.appendChild(cached);
+			countZoomDiagnostic('overlayReattachments');
+			if (isZoomDiagnosticsEnabled()) {
+				recordZoomDiagnosticEvent(
+					`overlay reattached page=${pageNumber} pageNode=${zoomDiagnosticId(page, 'page')} overlay=${zoomDiagnosticId(cached, 'overlay')}`,
+				);
+			}
+			this.disableTextLayerInteraction(page);
+			this.ensurePageObservers(page);
+			this.redrawPage(cached);
+			return;
+		}
+
 		const doc = page.ownerDocument;
 		const overlay = doc.createElement('canvas');
 		overlay.className = OVERLAY_CLASS;
@@ -470,6 +515,7 @@ export class OverlayManager {
 		this.sizeOverlayToPage(overlay, page);
 		page.appendChild(overlay);
 		this.ownedOverlays.add(overlay);
+		this.pageOverlays.set(page, overlay);
 		countZoomDiagnostic('overlayCreates');
 		countZoomDiagnostic('lazyPageActivations');
 		if (isZoomDiagnosticsEnabled()) {
@@ -489,7 +535,10 @@ export class OverlayManager {
 		this.cancelPendingResize(page);
 		this.disconnectPageObservers(page);
 
-		const overlay = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
+		const overlay =
+			page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`) ??
+			this.pageOverlays.get(page) ??
+			null;
 		if (overlay) {
 			countZoomDiagnostic('lazyPageDeactivations');
 			if (isZoomDiagnosticsEnabled()) {
@@ -499,6 +548,7 @@ export class OverlayManager {
 			}
 			this.releaseOverlay(overlay);
 		}
+		this.pageOverlays.delete(page);
 		this.enableTextLayerInteraction(page);
 		page.classList.remove(PAGE_ANCHOR_CLASS);
 	}
@@ -520,6 +570,10 @@ export class OverlayManager {
 			countZoomDiagnostic('pageMutationRecords', records.length);
 			const current = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
 			if (!current) {
+				const cached = this.pageOverlays.get(page);
+				if (cached && this.ownedOverlays.has(cached) && !cached.isConnected) {
+					countZoomDiagnostic('overlayExternalRemovals');
+				}
 				const filePath = this.pageFilePaths.get(page);
 				if (filePath && page.isConnected) this.activatePage(page, filePath);
 				return;
@@ -621,11 +675,18 @@ export class OverlayManager {
 	private sizeOverlayCssToPage(overlay: HTMLCanvasElement, page: HTMLElement): boolean {
 		const rect = page.getBoundingClientRect();
 		if (rect.width === 0 || rect.height === 0) return false;
-		const width = `${rect.width}px`;
-		const height = `${rect.height}px`;
-		if (overlay.style.width === width && overlay.style.height === height) return false;
-		overlay.setCssStyles({ width, height });
-		return true;
+
+		// Keep the hit-test box bound to the page through pure CSS. This tracks
+		// live pinch geometry synchronously instead of waiting for ResizeObserver.
+		if (overlay.style.width !== '100%' || overlay.style.height !== '100%') {
+			overlay.setCssStyles({ width: '100%', height: '100%' });
+		}
+
+		const requestedDpr = devicePixelRatioFor(page.ownerDocument.defaultView ?? window);
+		const effectiveDpr = safeBackingStoreDpr(rect.width, rect.height, requestedDpr);
+		const targetWidth = Math.max(1, Math.round(rect.width * effectiveDpr));
+		const targetHeight = Math.max(1, Math.round(rect.height * effectiveDpr));
+		return overlay.width !== targetWidth || overlay.height !== targetHeight;
 	}
 
 	private sizeOverlayToPage(overlay: HTMLCanvasElement, page: HTMLElement): void {
@@ -635,8 +696,8 @@ export class OverlayManager {
 		const effectiveDpr = safeBackingStoreDpr(rect.width, rect.height, requestedDpr);
 		applyBackingStoreSize(overlay, rect.width, rect.height, effectiveDpr);
 		overlay.setCssStyles({
-			width: `${rect.width}px`,
-			height: `${rect.height}px`,
+			width: '100%',
+			height: '100%',
 		});
 	}
 

@@ -37,6 +37,30 @@ describe('safeBackingStoreDpr', () => {
 		expect(safeBackingStoreDpr(10_000, 12_000, 2)).toBeLessThan(1);
 	});
 
+	it('uses the laid-out rect when overlay CSS is percentage sized', () => {
+		const canvas = makeCanvas();
+		canvas.width = 1600;
+		canvas.height = 2000;
+		canvas.style.width = '100%';
+		canvas.style.height = '100%';
+		canvas.getBoundingClientRect = () =>
+			({
+				x: 0,
+				y: 0,
+				left: 0,
+				top: 0,
+				right: 800,
+				bottom: 1000,
+				width: 800,
+				height: 1000,
+				toJSON: () => ({}),
+			}) as DOMRect;
+		const surface = readCanvasSurface(canvas);
+		expect(surface.width).toBe(800);
+		expect(surface.height).toBe(1000);
+		expect(surface.dpr).toBe(2);
+	});
+
 	it('keeps normalized drawing coordinates coherent after DPR is capped', () => {
 		const canvas = makeCanvas();
 		const cssWidth = 2400;

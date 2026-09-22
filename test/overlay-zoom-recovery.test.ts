@@ -177,6 +177,22 @@ describe('OverlayManager zoom recovery', () => {
 		expect(scan).not.toHaveBeenCalled();
 	});
 
+	it('reattaches the same wired canvas when PDF.js removes page children during zoom', async () => {
+		const { page, manager, wire } = makeHarness();
+		manager.attachToActivePdf();
+		activate(page);
+		const first = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+		expect(first).not.toBeNull();
+		expect(wire).toHaveBeenCalledTimes(1);
+
+		first?.remove();
+		await flushMutations();
+
+		const restored = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+		expect(restored).toBe(first);
+		expect(wire).toHaveBeenCalledTimes(1);
+	});
+
 	it('does not inspect removed subtrees from the PDF container observer', async () => {
 		const { container, manager } = makeHarness();
 		manager.attachToActivePdf();
@@ -204,10 +220,10 @@ describe('OverlayManager zoom recovery', () => {
 		setRect(page, 1600, 2000);
 		ResizeObserverMock.instances[0]?.fire();
 
-		// CSS follows the live pinch immediately, but the expensive bitmap
-		// allocation remains untouched until the gesture has gone quiet.
-		expect(overlay?.style.width).toBe('1600px');
-		expect(overlay?.style.height).toBe('2000px');
+		// CSS hit geometry follows the page automatically at 100%; the expensive
+		// bitmap allocation remains untouched until the gesture has gone quiet.
+		expect(overlay?.style.width).toBe('100%');
+		expect(overlay?.style.height).toBe('100%');
 		expect(overlay?.width).toBe(1600);
 		expect(overlay?.height).toBe(2000);
 
@@ -237,8 +253,8 @@ describe('OverlayManager zoom recovery', () => {
 		expect(page.querySelectorAll('canvas.jot-overlay')).toHaveLength(1);
 		expect(overlay?.width).toBe(1600);
 		vi.advanceTimersByTime(120);
-		expect(overlay?.style.width).toBe('1400px');
-		expect(overlay?.style.height).toBe('1750px');
+		expect(overlay?.style.width).toBe('100%');
+		expect(overlay?.style.height).toBe('100%');
 		expect(overlay?.width).not.toBe(1600);
 	});
 
@@ -274,8 +290,8 @@ describe('OverlayManager zoom recovery', () => {
 
 		const firstOverlay = first.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
 		const secondOverlay = second.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
-		expect(firstOverlay?.style.width).toBe('1000px');
-		expect(secondOverlay?.style.width).toBe('1000px');
+		expect(firstOverlay?.style.width).toBe('100%');
+		expect(secondOverlay?.style.width).toBe('100%');
 	});
 
 	it('registers a large PDF without allocating Jot canvases up front', () => {
