@@ -96,10 +96,11 @@ function makeHarness(pageCount = 1) {
 			iterateAllLeaves: (fn: (value: unknown) => void) => fn(leaf),
 		},
 	};
-	const wire = vi.fn();
+	const pointerRouter = { handleCapturedPointerEvent: vi.fn() };
+	const wire = vi.fn(() => pointerRouter);
 	const strokes = new StrokeStore();
 	const manager = new OverlayManager(app as any, strokes, wire);
-	return { container, page, pages, manager, wire, strokes };
+	return { container, page, pages, manager, wire, pointerRouter, strokes };
 }
 
 function activate(page: HTMLElement): void {
@@ -137,6 +138,28 @@ afterEach(() => {
 });
 
 describe('OverlayManager zoom recovery', () => {
+	it('routes Pencil input from container capture even if a PDF page stops propagation before the canvas', () => {
+		const { container, page, manager, pointerRouter } = makeHarness();
+		manager.attachToActivePdf();
+		activate(page);
+		const overlay = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+		if (!overlay) throw new Error('Expected Jot overlay');
+
+		page.addEventListener('pointerdown', (event) => event.stopPropagation(), true);
+		overlay.dispatchEvent(
+			new PointerEvent('pointerdown', {
+				bubbles: true,
+				pointerType: 'pen',
+				pointerId: 77,
+				clientX: 20,
+				clientY: 20,
+			}),
+		);
+
+		expect(container.contains(overlay)).toBe(true);
+		expect(pointerRouter.handleCapturedPointerEvent).toHaveBeenCalledTimes(1);
+	});
+
 	it('reattaches the existing overlay when PDF.js removes it during a page rebuild', async () => {
 		const { page, manager, wire } = makeHarness();
 		manager.attachToActivePdf();
