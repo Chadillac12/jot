@@ -37,11 +37,10 @@ describe('safeBackingStoreDpr', () => {
 		expect(safeBackingStoreDpr(10_000, 12_000, 2)).toBeLessThan(1);
 	});
 
-	it('uses the laid-out rect when overlay CSS is percentage sized', () => {
+	it('uses the laid-out rect when overlay sizing comes from layout CSS', () => {
 		const canvas = makeCanvas();
 		canvas.width = 1600;
 		canvas.height = 2000;
-		canvas.setAttribute('style', 'width: 100%; height: 100%;');
 		canvas.getBoundingClientRect = () =>
 			({
 				x: 0,
