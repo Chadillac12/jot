@@ -214,6 +214,7 @@ describe('OverlayManager zoom recovery', () => {
 
 		first.remove();
 		await flushMutations();
+		deactivate(page);
 		expect(page.querySelector('canvas.jot-overlay')).toBeNull();
 
 		page.dispatchEvent(
@@ -363,6 +364,7 @@ describe('OverlayManager zoom recovery', () => {
 		expect(report).toContain('pages=81');
 		expect(report).toContain('overlays=3');
 		expect(report).toContain('activePages=3');
+		expect(report).toContain('lazyWantedPages=3');
 		expect(report).toContain('inactivePages=78');
 		expect(report).toContain('estimatedRgbaMiB=');
 	});
@@ -394,6 +396,26 @@ describe('OverlayManager zoom recovery', () => {
 		expect(textLayer.classList.contains('jot-passthrough')).toBe(false);
 		expect(annotationLayer.classList.contains('jot-passthrough')).toBe(false);
 		expect(ResizeObserverMock.instances[0]?.disconnect).toHaveBeenCalledTimes(1);
+	});
+
+	it('does not let PDF repair resurrect a page after the lazy observer retires it', async () => {
+		const { page, manager } = makeHarness();
+		manager.attachToActivePdf();
+		activate(page);
+		const overlay = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+		if (!overlay) throw new Error('Expected active overlay');
+
+		overlay.remove();
+		await flushMutations();
+		deactivate(page);
+
+		vi.advanceTimersByTime(60);
+		expect(page.querySelector('canvas.jot-overlay')).toBeNull();
+
+		vi.advanceTimersByTime(690);
+		expect(page.querySelector('canvas.jot-overlay')).toBeNull();
+		expect(overlay.width).toBe(0);
+		expect(overlay.height).toBe(0);
 	});
 
 	it('keeps the same overlay when a zoom briefly moves the page outside the lazy window', () => {

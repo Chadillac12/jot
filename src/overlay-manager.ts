@@ -57,6 +57,7 @@ export class OverlayManager {
 	private resizeBatches = new Map<Document, PendingResizeBatch>();
 	private overlayRepairBatches = new Map<Document, PendingOverlayRepairBatch>();
 	private lazyRoots = new Map<WorkspaceLeaf, HTMLElement | null>();
+	private lazyWantedPages = new WeakSet<HTMLElement>();
 	private deactivationTimers = new Map<HTMLElement, number>();
 	private pinnedPages = new Map<HTMLElement, number>();
 	private penCaptureHandlers = new Map<WorkspaceLeaf, (event: PointerEvent) => void>();
@@ -203,6 +204,7 @@ export class OverlayManager {
 		const activePages = pages.filter((page) =>
 			page.querySelector(`canvas.${OVERLAY_CLASS}`),
 		);
+		const lazyWantedCount = pages.filter((page) => this.lazyWantedPages.has(page)).length;
 		const inactivePages = pages.filter(
 			(page) => !page.querySelector(`canvas.${OVERLAY_CLASS}`),
 		);
@@ -223,6 +225,7 @@ export class OverlayManager {
 			`pages=${pages.length}`,
 			`overlays=${overlays.length}`,
 			`activePages=${activePages.length}`,
+			`lazyWantedPages=${lazyWantedCount}`,
 			`inactivePages=${inactivePages.length}`,
 			`textLayers=${textLayerCount}`,
 			`annotationLayers=${annotationLayerCount}`,
@@ -249,6 +252,7 @@ export class OverlayManager {
 					`node=${zoomDiagnosticId(page, 'page')}`,
 					`connected=${page.isConnected ? 1 : 0}`,
 					`active=${pageOverlays.length > 0 ? 1 : 0}`,
+					`wanted=${this.lazyWantedPages.has(page) ? 1 : 0}`,
 					`observed=${page.getAttribute(PAGE_OBSERVED_ATTR) === '1' ? 1 : 0}`,
 					`overlayCount=${pageOverlays.length}`,
 					`textPass=${textLayer?.classList.contains(PASSTHROUGH_CLASS) ? 1 : 0}`,
@@ -312,8 +316,11 @@ export class OverlayManager {
 					const filePath = this.pageFilePaths.get(page);
 					if (!filePath) return;
 					if (entry.isIntersecting || entry.intersectionRatio > 0) {
+						this.lazyWantedPages.add(page);
 						this.activatePage(page, filePath);
 					} else {
+						this.lazyWantedPages.delete(page);
+						this.cancelOverlayRepair(page);
 						this.schedulePageDeactivation(page);
 					}
 				});
@@ -426,8 +433,8 @@ export class OverlayManager {
 			let overlay = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
 			if (!overlay) {
 				const filePath = this.pageFilePaths.get(page);
-				const cached = this.pageOverlays.get(page);
-				if (filePath && cached && this.ownedOverlays.has(cached) && page.isConnected) {
+				if (filePath && page.isConnected) {
+					this.lazyWantedPages.add(page);
 					this.cancelOverlayRepair(page);
 					this.activatePage(page, filePath);
 					overlay = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
@@ -519,6 +526,7 @@ export class OverlayManager {
 				const element = node as HTMLElement;
 				if (!element.matches('.page')) return;
 				intersectionObserver?.unobserve(element);
+				this.lazyWantedPages.delete(element);
 				this.deactivatePage(element);
 				this.pageFilePaths.delete(element);
 			});
@@ -535,6 +543,7 @@ export class OverlayManager {
 		}
 
 		// Compatibility fallback for environments without IntersectionObserver.
+		this.lazyWantedPages.add(page);
 		this.activatePage(page, filePath);
 	}
 
@@ -606,6 +615,7 @@ export class OverlayManager {
 	}
 
 	private deactivatePage(page: HTMLElement): void {
+		this.lazyWantedPages.delete(page);
 		this.cancelPageDeactivation(page);
 		this.cancelOverlayRepair(page);
 		this.pinnedPages.delete(page);
@@ -706,7 +716,15 @@ export class OverlayManager {
 			});
 	}
 
+	private shouldRepairOverlay(page: HTMLElement): boolean {
+		return this.lazyWantedPages.has(page) || (this.pinnedPages.get(page) ?? 0) > 0;
+	}
+
 	private scheduleOverlayRepair(page: HTMLElement): boolean {
+		if (!this.shouldRepairOverlay(page)) {
+			countZoomDiagnostic('overlayRepairSkippedInactive');
+			return false;
+		}
 		const doc = page.ownerDocument;
 		const win = doc.defaultView ?? window;
 		const existing = this.overlayRepairBatches.get(doc);
@@ -757,6 +775,10 @@ export class OverlayManager {
 		}
 		for (const page of pages) {
 			if (!page.isConnected) continue;
+			if (!this.shouldRepairOverlay(page)) {
+				countZoomDiagnostic('overlayRepairSkippedInactive');
+				continue;
+			}
 			if (page.querySelector(`canvas.${OVERLAY_CLASS}`)) continue;
 			const filePath = this.pageFilePaths.get(page);
 			const cached = this.pageOverlays.get(page);
