@@ -40,6 +40,8 @@ const PENCIL_DOUBLE_TAP_GAP_MS = 320;
 const PENCIL_DOUBLE_TAP_DISTANCE_PX = 36;
 const PENCIL_SECOND_HOLD_MS = 280;
 
+const CAPTURE_ROUTED_POINTER_EVENTS = new WeakSet<PointerEvent>();
+
 interface RecentPencilTap {
 	releasedAtMs: number;
 	clientX: number;
@@ -104,10 +106,39 @@ export class PointerEventHandler {
 
 	attach(): void {
 		this.blockStylusGesturePreemption();
-		this.canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
-		this.canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
-		this.canvas.addEventListener('pointerup', (e) => this.onFinish(e));
-		this.canvas.addEventListener('pointercancel', (e) => this.onFinish(e));
+		this.canvas.addEventListener('pointerdown', (e) => this.onDirectPointerEvent(e));
+		this.canvas.addEventListener('pointermove', (e) => this.onDirectPointerEvent(e));
+		this.canvas.addEventListener('pointerup', (e) => this.onDirectPointerEvent(e));
+		this.canvas.addEventListener('pointercancel', (e) => this.onDirectPointerEvent(e));
+	}
+
+	/**
+	 * Route Apple Pencil events from the PDF container capture phase. Obsidian's
+	 * PDF viewer can stop propagation during a zoom/page rebuild before the
+	 * event reaches the canvas target. The container still sees those events.
+	 */
+	handleCapturedPointerEvent(e: PointerEvent): void {
+		if (e.pointerType !== 'pen') return;
+		CAPTURE_ROUTED_POINTER_EVENTS.add(e);
+		if (e.type === 'pointerdown') countZoomDiagnostic('penCaptureRoutedDowns');
+		else if (e.type === 'pointermove') countZoomDiagnostic('penCaptureRoutedMoves');
+		else countZoomDiagnostic('penCaptureRoutedFinishes');
+		this.routePointerEvent(e);
+	}
+
+	private onDirectPointerEvent(e: PointerEvent): void {
+		if (CAPTURE_ROUTED_POINTER_EVENTS.has(e)) {
+			CAPTURE_ROUTED_POINTER_EVENTS.delete(e);
+			if (e.pointerType === 'pen') countZoomDiagnostic('penDirectDuplicatesSuppressed');
+			return;
+		}
+		this.routePointerEvent(e);
+	}
+
+	private routePointerEvent(e: PointerEvent): void {
+		if (e.type === 'pointerdown') this.onPointerDown(e);
+		else if (e.type === 'pointermove') this.onPointerMove(e);
+		else this.onFinish(e);
 	}
 
 	private onPointerDown(e: PointerEvent): void {
