@@ -36,6 +36,10 @@ interface PageObservers {
 	resize: ResizeObserver;
 }
 
+export interface CapturedPointerRouter {
+	handleCapturedPointerEvent(event: PointerEvent): void;
+}
+
 export class OverlayManager {
 	private containerObservers = new Map<WorkspaceLeaf, MutationObserver>();
 	private containerFilePaths = new Map<WorkspaceLeaf, string>();
@@ -48,11 +52,13 @@ export class OverlayManager {
 	private deactivationTimers = new Map<HTMLElement, number>();
 	private pinnedPages = new Map<HTMLElement, number>();
 	private penCaptureHandlers = new Map<WorkspaceLeaf, (event: PointerEvent) => void>();
+	private pointerRouters = new WeakMap<HTMLCanvasElement, CapturedPointerRouter>();
+	private activePenRoutes = new Map<number, CapturedPointerRouter>();
 
 	constructor(
 		private app: App,
 		private strokes: StrokeStore,
-		private wireOverlay: (canvas: HTMLCanvasElement) => void,
+		private wireOverlay: (canvas: HTMLCanvasElement) => CapturedPointerRouter | void,
 	) {}
 
 	attachToActivePdf(): void {
@@ -349,6 +355,17 @@ export class OverlayManager {
 		if (this.penCaptureHandlers.has(leaf)) return;
 		const handler = (event: PointerEvent) => {
 			if (event.pointerType !== 'pen') return;
+
+			if (event.type !== 'pointerdown') {
+				const route = this.activePenRoutes.get(event.pointerId);
+				if (!route) return;
+				route.handleCapturedPointerEvent(event);
+				if (event.type === 'pointerup' || event.type === 'pointercancel') {
+					this.activePenRoutes.delete(event.pointerId);
+				}
+				return;
+			}
+
 			countZoomDiagnostic('pdfPenPointerDowns');
 			const target = event.target as Element | null;
 			const page = target?.closest?.('.page') as HTMLElement | null;
@@ -359,31 +376,22 @@ export class OverlayManager {
 			const overlay = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
 			if (overlay) {
 				countZoomDiagnostic('penSurfaceCaptureHits');
-				const targetIsOverlay = target === overlay || target?.closest?.(`canvas.${OVERLAY_CLASS}`) === overlay;
-				if (targetIsOverlay) {
-					countZoomDiagnostic('penOverlayTargetHits');
+				const targetIsOverlay =
+					target === overlay || target?.closest?.(`canvas.${OVERLAY_CLASS}`) === overlay;
+				if (targetIsOverlay) countZoomDiagnostic('penOverlayTargetHits');
+				else countZoomDiagnostic('penOverlayTargetMisses');
+
+				const route = this.pointerRouters.get(overlay);
+				if (route) {
+					this.activePenRoutes.set(event.pointerId, route);
+					route.handleCapturedPointerEvent(event);
+					countZoomDiagnostic('penCaptureRoutesEstablished');
 				} else {
-					countZoomDiagnostic('penOverlayTargetMisses');
-					if (isZoomDiagnosticsEnabled()) {
-						const rect = overlay.getBoundingClientRect();
-						const inside =
-							event.clientX >= rect.left &&
-							event.clientX <= rect.right &&
-							event.clientY >= rect.top &&
-							event.clientY <= rect.bottom;
-						recordZoomDiagnosticEvent(
-							[
-								'pen overlay target miss',
-								`page=${page.getAttribute('data-page-number') ?? '?'}`,
-								`insideOverlay=${inside ? 1 : 0}`,
-								`overlayRect=${Math.round(rect.width)}x${Math.round(rect.height)}`,
-								`target=${target?.className || target?.tagName || 'unknown'}`,
-							].join(' '),
-						);
-					}
+					countZoomDiagnostic('penCaptureRouterMisses');
 				}
 				return;
 			}
+
 			countZoomDiagnostic('penSurfaceMisses');
 			if (isZoomDiagnosticsEnabled()) {
 				recordZoomDiagnosticEvent(
@@ -396,15 +404,21 @@ export class OverlayManager {
 				);
 			}
 		};
-		container.addEventListener('pointerdown', handler, true);
+
+		for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'] as const) {
+			container.addEventListener(type, handler, true);
+		}
 		this.penCaptureHandlers.set(leaf, handler);
 	}
 
 	private removePenCaptureDiagnostics(leaf: WorkspaceLeaf): void {
 		const handler = this.penCaptureHandlers.get(leaf);
 		if (!handler) return;
-		leaf.view.containerEl.removeEventListener('pointerdown', handler, true);
+		for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'] as const) {
+			leaf.view.containerEl.removeEventListener(type, handler, true);
+		}
 		this.penCaptureHandlers.delete(leaf);
+		this.activePenRoutes.clear();
 	}
 
 	private registerPages(container: HTMLElement, filePath: string, leaf: WorkspaceLeaf): void {
@@ -524,7 +538,8 @@ export class OverlayManager {
 			);
 		}
 		this.disableTextLayerInteraction(page);
-		this.wireOverlay(overlay);
+		const pointerRouter = this.wireOverlay(overlay);
+		if (pointerRouter) this.pointerRouters.set(overlay, pointerRouter);
 		this.ensurePageObservers(page);
 		this.redrawPage(overlay);
 	}
@@ -557,6 +572,7 @@ export class OverlayManager {
 		// Drop the backing store before removing the node so WebKit can reclaim
 		// the large RGBA allocation immediately instead of waiting for GC.
 		this.ownedOverlays.delete(overlay);
+		this.pointerRouters.delete(overlay);
 		overlay.width = 0;
 		overlay.height = 0;
 		overlay.remove();
