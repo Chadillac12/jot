@@ -214,13 +214,13 @@ export default class JotPlugin extends Plugin {
 		this.sidecar.scheduleSave(pdfPath);
 	}
 
-	private wirePointerEvents(canvas: HTMLCanvasElement) {
+	private wirePointerEvents(canvas: HTMLCanvasElement): PointerEventHandler | void {
 		const ctx = canvas.getContext('2d');
 		if (!ctx) {
 			console.error(`${PLUGIN_LOG} no 2d context`);
 			return;
 		}
-		new PointerEventHandler(canvas, ctx, {
+		const handler = new PointerEventHandler(canvas, ctx, {
 			palette: this.palette,
 			strokes: this.strokes,
 			overlays: this.overlays,
@@ -230,7 +230,9 @@ export default class JotPlugin extends Plugin {
 			handedness: () => this.settings.handedness,
 			paletteActivation: () => this.settings.paletteActivation,
 			pencilLongPressMs: () => this.settings.pencilLongPressMs,
-		}).attach();
+		});
+		handler.attach();
+		return handler;
 	}
 
 	async loadSettings() {
