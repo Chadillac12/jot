@@ -41,8 +41,7 @@ describe('safeBackingStoreDpr', () => {
 		const canvas = makeCanvas();
 		canvas.width = 1600;
 		canvas.height = 2000;
-		canvas.style.width = '100%';
-		canvas.style.height = '100%';
+		canvas.setAttribute('style', 'width: 100%; height: 100%;');
 		canvas.getBoundingClientRect = () =>
 			({
 				x: 0,
