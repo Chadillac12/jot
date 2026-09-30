@@ -6,7 +6,7 @@ import {
 } from './jot-file';
 import type { StrokeStore } from './stroke-store';
 
-const SAVE_DEBOUNCE_MS = 250;
+const SAVE_DEBOUNCE_MS = 750;
 const SELF_SAVE_SUPPRESS_MS = 1500;
 const PLUGIN_LOG = '[jot]';
 
