@@ -1,5 +1,6 @@
 import { readCanvasSurface } from './canvas-surface';
 import { createHoldIndicator } from './hold-indicator';
+import { normalizedPointFromSample, pointerSamples } from './ink-sampling';
 import { pdfPathFromKey } from './jot-file';
 import { LongPressDetector } from './long-press';
 import type { Handedness, Palette, ToolState } from './palette';
@@ -82,7 +83,8 @@ export class PointerEventHandler {
 		this.activePointerId = e.pointerId;
 		this.state.beginAt(e, this.deps.toolState().tool, () => this.snapshotCurrent());
 		if (this.state.isDrawing()) {
-			this.state.appendDrawingPoint(this.toNormalized(e));
+			const rect = this.canvas.getBoundingClientRect();
+			this.state.appendDrawingPoint(normalizedPointFromSample(e, rect));
 		}
 		this.showHoldIndicator(e.clientX, e.clientY);
 		this.longPress.start(e.clientX, e.clientY);
@@ -94,9 +96,10 @@ export class PointerEventHandler {
 			this.twoFingerHold.pointerMove(e.pointerId, e.clientX, e.clientY);
 			return;
 		}
+		if (this.activePointerId !== e.pointerId) return;
 		this.longPress.move(e.clientX, e.clientY);
 		if (this.state.isErasing()) {
-			if (this.eraseAt(e)) this.state.markErased();
+			if (this.eraseAtSamples(e)) this.state.markErased();
 			e.preventDefault();
 			return;
 		}
@@ -146,19 +149,27 @@ export class PointerEventHandler {
 
 	private continueDrawingStroke(e: PointerEvent): void {
 		if (!this.state.isDrawing()) return;
-		const previous = this.state.lastDrawingPoint();
-		if (!previous) return;
-		const next = this.toNormalized(e);
-		this.state.appendDrawingPoint(next);
 		const surface = readCanvasSurface(this.canvas);
+		const rect = this.canvas.getBoundingClientRect();
 		const tool = this.deps.toolState();
-		if (tool.tool === 'highlighter') {
+		let drew = false;
+
+		for (const sample of pointerSamples(e)) {
+			const previous = this.state.lastDrawingPoint();
+			if (!previous) break;
+			const next = this.state.appendDrawingPoint(normalizedPointFromSample(sample, rect));
+			if (!next) continue;
+			drew = true;
+			if (tool.tool !== 'highlighter') {
+				drawSegment(this.ctx, previous, next, tool.color, tool.width, surface);
+			}
+		}
+
+		if (drew && tool.tool === 'highlighter') {
 			this.deps.overlays.redrawPage(this.canvas);
 			drawHighlighterPolyline(this.ctx, this.state.drawingPoints(), tool.color, tool.width, surface);
-		} else {
-			drawSegment(this.ctx, previous, next, tool.color, tool.width, surface);
 		}
-		e.preventDefault();
+		if (drew) e.preventDefault();
 	}
 
 	private finalizeEraserGesture(): void {
@@ -187,18 +198,20 @@ export class PointerEventHandler {
 		this.state.reset();
 	}
 
-	private eraseAt(e: PointerEvent): boolean {
+	private eraseAtSamples(e: PointerEvent): boolean {
 		const key = this.canvas.getAttribute(OVERLAY_KEY_ATTR);
 		if (!key) return false;
 		const strokes = this.deps.strokes.forKey(key);
 		if (strokes.length === 0) return false;
 		const rect = this.canvas.getBoundingClientRect();
-		const x = (e.clientX - rect.left) / rect.width;
-		const y = (e.clientY - rect.top) / rect.height;
+		const points = pointerSamples(e).map((sample) => normalizedPointFromSample(sample, rect));
 		const kept: Stroke[] = [];
 		let removed = 0;
 		for (const stroke of strokes) {
-			if (strokeIntersects(stroke, x, y, ERASE_RADIUS)) {
+			const intersects = points.some((point) =>
+				strokeIntersects(stroke, point.x, point.y, ERASE_RADIUS),
+			);
+			if (intersects) {
 				removed += 1;
 			} else {
 				kept.push(stroke);
@@ -249,14 +262,6 @@ export class PointerEventHandler {
 		this.activePointerId = null;
 	}
 
-	private toNormalized(e: PointerEvent): NormalizedPoint {
-		const rect = this.canvas.getBoundingClientRect();
-		return {
-			x: (e.clientX - rect.left) / rect.width,
-			y: (e.clientY - rect.top) / rect.height,
-			pressure: e.pressure,
-		};
-	}
 
 	private blockStylusGesturePreemption(): void {
 		const blockStylus = (e: TouchEvent) => {
