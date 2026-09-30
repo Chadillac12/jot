@@ -6,6 +6,7 @@ import {
 } from './canvas-surface';
 import { pageKey } from './jot-file';
 import { drawStroke } from './stroke-render';
+import type { Stroke } from './stroke-math';
 import type { StrokeStore } from './stroke-store';
 
 const OVERLAY_CLASS = 'jot-overlay';
@@ -77,6 +78,14 @@ export class OverlayManager {
 		for (const stroke of this.strokes.forKey(key)) {
 			drawStroke(ctx, stroke, surface);
 		}
+	}
+
+	appendPersistedStroke(canvas: HTMLCanvasElement, stroke: Stroke): void {
+		const target = this.persistentCanvasFor(canvas);
+		if (!target) return;
+		const ctx = target.getContext('2d');
+		if (!ctx) return;
+		drawStroke(ctx, stroke, readCanvasSurface(target));
 	}
 
 	clearLivePage(canvas: HTMLCanvasElement): void {
