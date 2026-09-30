@@ -1,8 +1,10 @@
 import { Notice, Plugin, TFile } from 'obsidian';
 import { DEFAULT_TOOL_STATE, Palette, ToolState } from './palette';
+import { normalizePalettePreferences } from './palette-activation';
 import { DEFAULT_SETTINGS, JotSettings, JotSettingTab } from './settings';
 import { ConfirmClearModal } from './clear';
 import { collectClearOperations, countStrokes, toUndoEntries } from './clear-ops';
+import { FloatingPaletteButton } from './floating-palette-button';
 import { PointerEventHandler } from './pointer-event-handler';
 import { isSidecarPath, pdfPathFromSidecar } from './jot-file';
 import { MergeService } from './merge-service';
@@ -24,6 +26,7 @@ export default class JotPlugin extends Plugin {
 	private overlays!: OverlayManager;
 	private toolState: ToolState = { ...DEFAULT_TOOL_STATE };
 	private palette!: Palette;
+	private floatingPaletteButton!: FloatingPaletteButton;
 	settings: JotSettings = { ...DEFAULT_SETTINGS };
 	private history = new UndoHistory();
 	private undoController!: UndoController;
@@ -72,6 +75,15 @@ export default class JotPlugin extends Plugin {
 				return true;
 			},
 		});
+		this.addCommand({
+			id: 'open-palette',
+			name: 'Open palette',
+			checkCallback: (checking) => {
+				if (!this.overlays.getActivePdfLeaf()) return false;
+				if (!checking) this.openPaletteForActivePdf();
+				return true;
+			},
+		});
 		this.palette = new Palette(
 			this.toolState,
 			(state) => {
@@ -94,12 +106,24 @@ export default class JotPlugin extends Plugin {
 				highlighter: this.settings.highlighterState,
 			},
 		);
+		this.floatingPaletteButton = new FloatingPaletteButton((doc, x, y) => {
+			this.palette.show(doc.body, x, y, this.settings.handedness);
+		});
+		this.registerObsidianProtocolHandler('jot-palette', () => {
+			this.openPaletteForActivePdf();
+		});
 
 		this.registerEvent(
 			this.app.workspace.on('file-open', async (file: TFile | null) => {
-				if (file?.extension !== 'pdf') return;
+				if (file?.extension !== 'pdf') {
+					this.refreshFloatingPaletteButton();
+					return;
+				}
 				await this.ensureLoaded(file.path);
-				window.setTimeout(() => this.overlays.attachToActivePdf(), 300);
+				window.setTimeout(() => {
+					this.overlays.attachToActivePdf();
+					this.refreshFloatingPaletteButton();
+				}, 300);
 			}),
 		);
 
@@ -107,6 +131,7 @@ export default class JotPlugin extends Plugin {
 			this.app.workspace.on('layout-change', () => {
 				this.overlays.pruneClosedObservers();
 				this.overlays.attachToActivePdf();
+				this.refreshFloatingPaletteButton();
 			}),
 		);
 
@@ -119,11 +144,17 @@ export default class JotPlugin extends Plugin {
 			}),
 		);
 
+		this.registerDomEvent(window, 'resize', () => this.refreshFloatingPaletteButton());
+
 		this.app.workspace.onLayoutReady(async () => {
 			const filePath = this.overlays.getActivePdfFilePath();
-			if (!filePath) return;
+			if (!filePath) {
+				this.refreshFloatingPaletteButton();
+				return;
+			}
 			await this.ensureLoaded(filePath);
 			this.overlays.attachToActivePdf();
+			this.refreshFloatingPaletteButton();
 		});
 	}
 
@@ -131,6 +162,7 @@ export default class JotPlugin extends Plugin {
 		this.overlays?.disconnectAll();
 		this.sidecar?.cancelAllPending();
 		this.palette?.hide();
+		this.floatingPaletteButton?.hide();
 	}
 
 	private async ensureLoaded(pdfPath: string) {
@@ -160,12 +192,17 @@ export default class JotPlugin extends Plugin {
 			undo: this.undoController,
 			toolState: () => this.toolState,
 			handedness: () => this.settings.handedness,
+			paletteActivation: () => this.settings.paletteActivation,
 		}).attach();
 	}
 
 	async loadSettings() {
 		const stored = (await this.loadData()) as Partial<JotSettings> | null;
-		this.settings = { ...DEFAULT_SETTINGS, ...(stored ?? {}) };
+		this.settings = {
+			...DEFAULT_SETTINGS,
+			...(stored ?? {}),
+			...normalizePalettePreferences(stored),
+		};
 		this.toolState = { ...this.settings.toolState };
 	}
 
@@ -179,6 +216,29 @@ export default class JotPlugin extends Plugin {
 			pressureSensitivity: this.settings.pressureSensitivity,
 		});
 		this.overlays?.redrawOverlaysForActivePdf();
+	}
+
+	refreshFloatingPaletteButton(): void {
+		const leaf = this.overlays?.getActivePdfLeaf();
+		this.floatingPaletteButton?.update(
+			leaf?.view.containerEl ?? null,
+			this.settings.floatingPaletteButtonPosition,
+		);
+	}
+
+	openPaletteForActivePdf(): void {
+		const leaf = this.overlays?.getActivePdfLeaf();
+		if (!leaf) return;
+		const container = leaf.view.containerEl;
+		const doc = container.ownerDocument;
+		const win = doc.defaultView;
+		if (!win) return;
+		const rect = container.getBoundingClientRect();
+		if (rect.width <= 0 || rect.height <= 0) return;
+		const margin = 64;
+		const x = Math.min(win.innerWidth - margin, Math.max(margin, rect.left + rect.width / 2));
+		const y = Math.min(win.innerHeight - margin, Math.max(margin, rect.top + rect.height / 2));
+		this.palette.show(doc.body, x, y, this.settings.handedness);
 	}
 
 	private pushUndo(entry: UndoEntry) {
