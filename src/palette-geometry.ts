@@ -5,11 +5,23 @@ export interface Offset {
 	oy: number;
 }
 
+export interface OffsetBounds {
+	minX: number;
+	maxX: number;
+	minY: number;
+	maxY: number;
+}
+
+export interface SubArcSpec {
+	slot: number;
+	count: number;
+}
+
 export const MAIN_ARC_RADIUS = 110;
 export const SUB_ARC_RADIUS = 166;
 export const ANCHOR_OFFSET_PX = 60;
 export const RADIAL_MARGIN_PX = 16;
-export const MAIN_ITEM_COUNT = 5;
+export const MAIN_ITEM_COUNT = 6;
 export const BG_ANGULAR_PAD_DEG = 4;
 export const SVG_HALF = 280;
 
@@ -69,11 +81,64 @@ export function subSlotOffset(
 	};
 }
 
+export function paletteOffsetBounds(
+	handedness: Handedness,
+	flipDown: boolean,
+	subArcs: SubArcSpec[],
+	paddingPx = 30,
+): OffsetBounds {
+	const offsets: Offset[] = [arcOrigin(handedness, flipDown)];
+	for (let slot = 0; slot < MAIN_ITEM_COUNT; slot++) {
+		offsets.push(mainSlotOffset(slot, handedness, flipDown));
+	}
+	for (const spec of subArcs) {
+		if (spec.count <= 0) continue;
+		const center = slotAngle(spec.slot, handedness, flipDown);
+		for (let index = 0; index < spec.count; index++) {
+			offsets.push(subSlotOffset(index, spec.count, center, handedness, flipDown));
+		}
+	}
+
+	return {
+		minX: Math.min(...offsets.map((p) => p.ox)) - paddingPx,
+		maxX: Math.max(...offsets.map((p) => p.ox)) + paddingPx,
+		minY: Math.min(...offsets.map((p) => p.oy)) - paddingPx,
+		maxY: Math.max(...offsets.map((p) => p.oy)) + paddingPx,
+	};
+}
+
+export function clampPaletteAnchor(
+	clientX: number,
+	clientY: number,
+	viewportWidth: number,
+	viewportHeight: number,
+	bounds: OffsetBounds,
+	marginPx = RADIAL_MARGIN_PX,
+): { x: number; y: number } {
+	return {
+		x: clampAxis(clientX, viewportWidth, bounds.minX, bounds.maxX, marginPx),
+		y: clampAxis(clientY, viewportHeight, bounds.minY, bounds.maxY, marginPx),
+	};
+}
+
 export function arcCenterlinePath(radius: number, startAngle: number, endAngle: number): string {
 	const start = pointOnArc(radius, startAngle);
 	const end = pointOnArc(radius, endAngle);
 	const largeArc = Math.abs(endAngle - startAngle) > Math.PI ? 1 : 0;
 	return `M ${start.x.toFixed(2)} ${start.y.toFixed(2)} A ${radius} ${radius} 0 ${largeArc} 1 ${end.x.toFixed(2)} ${end.y.toFixed(2)}`;
+}
+
+function clampAxis(
+	value: number,
+	viewportSize: number,
+	minOffset: number,
+	maxOffset: number,
+	marginPx: number,
+): number {
+	const minAnchor = marginPx - minOffset;
+	const maxAnchor = viewportSize - marginPx - maxOffset;
+	if (minAnchor > maxAnchor) return viewportSize / 2;
+	return Math.min(maxAnchor, Math.max(minAnchor, value));
 }
 
 function pointOnArc(radius: number, angle: number): { x: number; y: number } {
