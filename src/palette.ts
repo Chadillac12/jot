@@ -15,13 +15,16 @@ import {
 	arcCenterAngle,
 	arcCenterlinePath,
 	arcOrigin,
+	clampPaletteAnchor,
 	mainSlotOffset,
+	paletteOffsetBounds,
 	slotAngle,
 	subSlotOffset,
 } from './palette-geometry';
 
 export type Tool = 'pen' | 'highlighter' | 'eraser';
 export type Handedness = 'right' | 'left';
+type DrawingTool = Exclude<Tool, 'eraser'>;
 
 export interface ToolState {
 	tool: Tool;
@@ -70,6 +73,7 @@ const REDO_SLOT_INDEX = 1;
 const TOOL_SLOT_INDEX = 2;
 const WIDTH_SLOT_INDEX = 3;
 const COLOR_SLOT_INDEX = 4;
+const ERASER_SLOT_INDEX = 5;
 
 type OnChange = (state: ToolState) => void;
 type SubArc = 'color' | 'tool' | 'width' | null;
@@ -88,10 +92,9 @@ const SUB_SLOT_OF: Record<Exclude<SubArc, null>, number> = {
 	width: WIDTH_SLOT_INDEX,
 };
 
-const TOOLS: { id: Tool; icon: string; label: string }[] = [
+const TOOLS: { id: DrawingTool; icon: string; label: string }[] = [
 	{ id: 'pen', icon: 'pencil', label: 'Pen' },
 	{ id: 'highlighter', icon: 'highlighter', label: 'Highlighter' },
-	{ id: 'eraser', icon: 'eraser', label: 'Eraser' },
 ];
 
 const TOOL_ICON: Record<Tool, string> = {
@@ -114,6 +117,7 @@ export class Palette {
 	private handedness: Handedness = 'right';
 	private penMemory: ToolMemory = { ...DEFAULT_PEN_MEMORY };
 	private highlighterMemory: ToolMemory = { ...DEFAULT_HIGHLIGHTER_MEMORY };
+	private lastDrawingTool: DrawingTool = 'pen';
 
 	constructor(
 		initial: ToolState,
@@ -132,8 +136,10 @@ export class Palette {
 		if (memory?.pen) this.penMemory = { ...memory.pen };
 		if (memory?.highlighter) this.highlighterMemory = { ...memory.highlighter };
 		if (initial.tool === 'pen') {
+			this.lastDrawingTool = 'pen';
 			this.penMemory = { color: initial.color, width: initial.width };
 		} else if (initial.tool === 'highlighter') {
+			this.lastDrawingTool = 'highlighter';
 			this.highlighterMemory = { color: initial.color, width: initial.width };
 		}
 	}
@@ -156,14 +162,28 @@ export class Palette {
 	show(parent: HTMLElement, clientX: number, clientY: number, handedness: Handedness) {
 		this.hide();
 		const doc = parent.ownerDocument;
+		const win = doc.defaultView ?? window;
 		this.handedness = handedness;
 		this.flipDown = this.shouldFlipDown(clientY, doc);
 		this.subArc = null;
 
+		const bounds = paletteOffsetBounds(this.handedness, this.flipDown, [
+			{ slot: TOOL_SLOT_INDEX, count: TOOLS.length },
+			{ slot: WIDTH_SLOT_INDEX, count: PALETTE_WIDTHS.length },
+			{ slot: COLOR_SLOT_INDEX, count: this.currentColors().length },
+		]);
+		const anchor = clampPaletteAnchor(
+			clientX,
+			clientY,
+			win.innerWidth,
+			win.innerHeight,
+			bounds,
+		);
+
 		const el = doc.createElement('div');
 		el.className = PALETTE_CLASS;
-		el.style.left = `${clientX}px`;
-		el.style.top = `${clientY}px`;
+		el.style.left = `${anchor.x}px`;
+		el.style.top = `${anchor.y}px`;
 		this.renderItems(el, doc);
 		parent.appendChild(el);
 
@@ -231,6 +251,7 @@ export class Palette {
 		this.renderToolSlot(host, doc, this.mainSlot(TOOL_SLOT_INDEX));
 		this.renderWidthSlot(host, doc, this.mainSlot(WIDTH_SLOT_INDEX));
 		this.renderColorSlot(host, doc, this.mainSlot(COLOR_SLOT_INDEX));
+		this.renderEraserSlot(host, doc, this.mainSlot(ERASER_SLOT_INDEX));
 		this.renderActiveSubArc(host, doc);
 		this.renderCloseSlot(host, doc);
 	}
@@ -294,11 +315,24 @@ export class Palette {
 	}
 
 	private renderToolSlot(host: HTMLElement, doc: Document, off: Offset) {
+		const drawingTool = this.state.tool === 'eraser' ? this.lastDrawingTool : this.state.tool;
 		const btn = this.makeItem(doc, 'jot-palette-tool jot-palette-slot', off);
-		setIcon(btn, TOOL_ICON[this.state.tool]);
-		btn.setAttribute('aria-label', `Tool (current: ${this.state.tool})`);
+		setIcon(btn, TOOL_ICON[drawingTool]);
+		btn.setAttribute('aria-label', `Drawing tool (current: ${drawingTool})`);
 		if (this.subArc === 'tool') btn.classList.add('is-open');
 		btn.addEventListener('click', () => this.toggleSub('tool'));
+		host.appendChild(btn);
+	}
+
+	private renderEraserSlot(host: HTMLElement, doc: Document, off: Offset) {
+		const btn = this.makeItem(doc, 'jot-palette-tool jot-palette-eraser', off);
+		setIcon(btn, 'eraser');
+		btn.setAttribute(
+			'aria-label',
+			this.state.tool === 'eraser' ? `Eraser active; return to ${this.lastDrawingTool}` : 'Eraser',
+		);
+		if (this.state.tool === 'eraser') btn.classList.add('is-active');
+		btn.addEventListener('click', () => this.toggleEraser(btn));
 		host.appendChild(btn);
 	}
 
@@ -396,12 +430,29 @@ export class Palette {
 		});
 	}
 
-	private applyTool(tool: Tool, btn: HTMLElement) {
+	private applyTool(tool: DrawingTool, btn: HTMLElement) {
+		this.lastDrawingTool = tool;
 		this.state.tool = tool;
 		const memory = this.memoryFor(tool);
 		if (memory) {
 			this.state.color = memory.color;
 			this.state.width = memory.width;
+		}
+		this.onChange(this.state);
+		this.confirmAndDismiss(btn);
+	}
+
+	private toggleEraser(btn: HTMLElement) {
+		if (this.state.tool === 'eraser') {
+			this.state.tool = this.lastDrawingTool;
+			const memory = this.memoryFor(this.lastDrawingTool);
+			if (memory) {
+				this.state.color = memory.color;
+				this.state.width = memory.width;
+			}
+		} else {
+			this.lastDrawingTool = this.state.tool;
+			this.state.tool = 'eraser';
 		}
 		this.onChange(this.state);
 		this.confirmAndDismiss(btn);
@@ -444,7 +495,6 @@ export class Palette {
 	private bindDrag(el: HTMLElement) {
 		new DragHandler(el, { ignoreMouseInsideSelector: '.jot-palette-item' }).attach();
 	}
-
 }
 
 function degToRad(deg: number): number {
