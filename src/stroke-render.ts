@@ -72,9 +72,11 @@ export function penOutline(
 	canvas: CanvasSize,
 ): number[][] {
 	if (points.length === 0) return [];
-	const input = points.map(
-		(point) => [point.x * canvas.width, point.y * canvas.height, point.pressure] as const,
-	);
+	const input: number[][] = points.map((point) => [
+		point.x * canvas.width,
+		point.y * canvas.height,
+		point.pressure,
+	]);
 	return getStroke(input, {
 		size: baseWidth * canvas.height * PEN_SIZE_FACTOR,
 		thinning: PEN_THINNING,
