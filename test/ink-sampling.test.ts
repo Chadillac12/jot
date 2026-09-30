@@ -3,10 +3,11 @@ import {
 	PressureSmoother,
 	normalizedPointFromSample,
 	pointerSamples,
+	predictedPointerSamples,
 } from '../src/ink-sampling';
 
 describe('pointerSamples', () => {
-	it('returns coalesced samples when the browser exposes them', () => {
+	it('returns coalesced samples plus the current event when needed', () => {
 		const samples = [
 			{ clientX: 10, clientY: 20, pressure: 0.2 },
 			{ clientX: 11, clientY: 21, pressure: 0.3 },
@@ -17,7 +18,16 @@ describe('pointerSamples', () => {
 			pressure: 0.4,
 			getCoalescedEvents: () => samples,
 		};
-		expect(pointerSamples(event)).toBe(samples);
+		expect(pointerSamples(event)).toEqual([...samples, event]);
+	});
+
+	it('does not duplicate the current event when it is already the final sample', () => {
+		const event = { clientX: 12, clientY: 22, pressure: 0.4 };
+		const samples = [
+			{ clientX: 11, clientY: 21, pressure: 0.3 },
+			{ clientX: 12, clientY: 22, pressure: 0.4 },
+		];
+		expect(pointerSamples({ ...event, getCoalescedEvents: () => samples })).toEqual(samples);
 	});
 
 	it('falls back to the original event when no coalesced samples exist', () => {
@@ -40,6 +50,35 @@ describe('pointerSamples', () => {
 			},
 		};
 		expect(pointerSamples(event)).toEqual([event]);
+	});
+});
+
+describe('predictedPointerSamples', () => {
+	it('returns prediction samples when available', () => {
+		const predicted = [{ clientX: 13, clientY: 23, pressure: 0.5 }];
+		const event = {
+			clientX: 12,
+			clientY: 22,
+			pressure: 0.4,
+			getPredictedEvents: () => predicted,
+		};
+		expect(predictedPointerSamples(event)).toBe(predicted);
+	});
+
+	it('returns an empty list when prediction is unavailable or throws', () => {
+		expect(
+			predictedPointerSamples({ clientX: 0, clientY: 0, pressure: 0.5 }),
+		).toEqual([]);
+		expect(
+			predictedPointerSamples({
+				clientX: 0,
+				clientY: 0,
+				pressure: 0.5,
+				getPredictedEvents: () => {
+					throw new Error('unsupported');
+				},
+			}),
+		).toEqual([]);
 	});
 });
 
