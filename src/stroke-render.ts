@@ -1,9 +1,6 @@
-import {
-	NormalizedPoint,
-	Stroke,
-	forEachSmoothSegment,
-	widthFactorForPressure,
-} from './stroke-math';
+import { getStroke } from 'perfect-freehand';
+import { widthFactorForPressure } from './stroke-math';
+import type { NormalizedPoint, Stroke } from './stroke-math';
 
 export interface CanvasSize {
 	width: number;
@@ -13,6 +10,17 @@ export interface CanvasSize {
 
 export const HIGHLIGHTER_ALPHA = 0.35;
 export const HIGHLIGHTER_WIDTH_FACTOR = 4;
+
+/**
+ * These defaults intentionally favor low latency over heavy stabilization.
+ * Coalesced Pencil samples provide most of the smoothness; perfect-freehand
+ * then rounds the geometry without making the stroke feel detached from the
+ * stylus tip.
+ */
+export const PEN_THINNING = 0.55;
+export const PEN_SMOOTHING = 0.65;
+export const PEN_STREAMLINE = 0.3;
+export const PEN_SIZE_FACTOR = 1.15;
 
 function denormalize(point: NormalizedPoint, canvas: CanvasSize) {
 	return { x: point.x * canvas.width, y: point.y * canvas.height };
@@ -33,6 +41,10 @@ function pressureScaledWidth(
 	return baseWidth * widthFactorForPressure(averagePressure) * canvas.height;
 }
 
+/**
+ * Retained as a small primitive for tests and non-freehand geometry. Normal pen
+ * strokes use drawPenStroke so the live and persisted paths share one renderer.
+ */
 export function drawSegment(
 	ctx: CanvasRenderingContext2D,
 	a: NormalizedPoint,
@@ -52,6 +64,55 @@ export function drawSegment(
 	ctx.moveTo(start.x, start.y);
 	ctx.lineTo(end.x, end.y);
 	ctx.stroke();
+}
+
+export function penOutline(
+	points: NormalizedPoint[],
+	baseWidth: number,
+	canvas: CanvasSize,
+): number[][] {
+	if (points.length === 0) return [];
+	const input = points.map(
+		(point) => [point.x * canvas.width, point.y * canvas.height, point.pressure] as const,
+	);
+	return getStroke(input, {
+		size: baseWidth * canvas.height * PEN_SIZE_FACTOR,
+		thinning: PEN_THINNING,
+		smoothing: PEN_SMOOTHING,
+		streamline: PEN_STREAMLINE,
+		simulatePressure: false,
+		last: true,
+	});
+}
+
+export function drawPenStroke(
+	ctx: CanvasRenderingContext2D,
+	points: NormalizedPoint[],
+	color: string,
+	baseWidth: number,
+	canvas: CanvasSize,
+) {
+	const outline = penOutline(points, baseWidth, canvas);
+	if (outline.length === 0) return;
+
+	ctx.save();
+	applyDprTransform(ctx, canvas);
+	ctx.fillStyle = color;
+	ctx.beginPath();
+	ctx.moveTo(outline[0]![0]!, outline[0]![1]!);
+	for (let i = 1; i < outline.length; i++) {
+		const previous = outline[i - 1]!;
+		const current = outline[i]!;
+		ctx.quadraticCurveTo(
+			previous[0]!,
+			previous[1]!,
+			(previous[0]! + current[0]!) / 2,
+			(previous[1]! + current[1]!) / 2,
+		);
+	}
+	ctx.closePath();
+	ctx.fill();
+	ctx.restore();
 }
 
 export function drawHighlighterPolyline(
@@ -85,7 +146,5 @@ export function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, canvas
 		drawHighlighterPolyline(ctx, stroke.points, stroke.color, stroke.width, canvas);
 		return;
 	}
-	forEachSmoothSegment(stroke.points, (a, b) => {
-		drawSegment(ctx, a, b, stroke.color, stroke.width, canvas);
-	});
+	drawPenStroke(ctx, stroke.points, stroke.color, stroke.width, canvas);
 }
