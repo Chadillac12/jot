@@ -55,8 +55,8 @@ export class UndoHistory {
 		const stack = this.undoStacks.get(pdfPath);
 		const entry = stack?.[stack.length - 1];
 		if (!entry || entry.key !== key) return null;
-		stack!.pop();
-		if (stack!.length === 0) this.undoStacks.delete(pdfPath);
+		stack.pop();
+		if (stack.length === 0) this.undoStacks.delete(pdfPath);
 		return entry;
 	}
 
