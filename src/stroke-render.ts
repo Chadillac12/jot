@@ -17,10 +17,34 @@ export const HIGHLIGHTER_WIDTH_FACTOR = 4;
  * then rounds the geometry without making the stroke feel detached from the
  * stylus tip.
  */
-export const PEN_THINNING = 0.55;
-export const PEN_SMOOTHING = 0.65;
-export const PEN_STREAMLINE = 0.3;
+export const DEFAULT_INK_SMOOTHING = 0.5;
+export const DEFAULT_PRESSURE_SENSITIVITY = 0.5;
 export const PEN_SIZE_FACTOR = 1.15;
+
+let inkSmoothing = DEFAULT_INK_SMOOTHING;
+let pressureSensitivity = DEFAULT_PRESSURE_SENSITIVITY;
+
+const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
+
+export function setInkRenderTuning(options: {
+	smoothing: number;
+	pressureSensitivity: number;
+}): void {
+	inkSmoothing = clamp01(options.smoothing);
+	pressureSensitivity = clamp01(options.pressureSensitivity);
+}
+
+function penSmoothing(): number {
+	return 0.45 + inkSmoothing * 0.4;
+}
+
+function penStreamline(): number {
+	return 0.1 + inkSmoothing * 0.4;
+}
+
+function penThinning(): number {
+	return 0.15 + pressureSensitivity * 0.8;
+}
 
 function denormalize(point: NormalizedPoint, canvas: CanvasSize) {
 	return { x: point.x * canvas.width, y: point.y * canvas.height };
@@ -79,9 +103,9 @@ export function penOutline(
 	]);
 	return getStroke(input, {
 		size: baseWidth * canvas.height * PEN_SIZE_FACTOR,
-		thinning: PEN_THINNING,
-		smoothing: PEN_SMOOTHING,
-		streamline: PEN_STREAMLINE,
+		thinning: penThinning(),
+		smoothing: penSmoothing(),
+		streamline: penStreamline(),
 		simulatePressure: false,
 		last: true,
 	});
