@@ -30,6 +30,7 @@
 		"vitest": "^4.1.8"
 	},
 	"dependencies": {
-		"pdf-lib": "^1.17.1"
+		"pdf-lib": "^1.17.1",
+		"perfect-freehand": "^1.2.3"
 	}
 }
