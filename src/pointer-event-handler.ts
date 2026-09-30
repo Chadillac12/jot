@@ -7,12 +7,8 @@ import type { Handedness, Palette, ToolState } from './palette';
 import { OVERLAY_KEY_ATTR, OverlayManager } from './overlay-manager';
 import { PenStrokeState } from './pen-stroke-state';
 import type { SidecarStore } from './sidecar-store';
-import {
-	ERASE_RADIUS,
-	NormalizedPoint,
-	Stroke,
-	strokeIntersects,
-} from './stroke-math';
+import { ERASE_RADIUS, strokeIntersects } from './stroke-math';
+import type { Stroke } from './stroke-math';
 import { drawHighlighterPolyline, drawSegment } from './stroke-render';
 import type { StrokeStore } from './stroke-store';
 import { TwoFingerHoldDetector } from './two-finger-hold';
