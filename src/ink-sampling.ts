@@ -8,6 +8,7 @@ export interface PointerSample {
 
 export interface CoalescedPointerSource extends PointerSample {
 	getCoalescedEvents?: () => PointerSample[];
+	getPredictedEvents?: () => PointerSample[];
 }
 
 export interface ClientRectLike {
@@ -19,11 +20,16 @@ export interface ClientRectLike {
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 
+function sameSample(a: PointerSample, b: PointerSample): boolean {
+	return a.clientX === b.clientX && a.clientY === b.clientY && a.pressure === b.pressure;
+}
+
 /**
- * Return the highest-fidelity samples exposed by the browser for one pointer
- * event. Browsers may coalesce high-rate stylus samples into a single
+ * Return the highest-fidelity real samples exposed by the browser for one
+ * pointer event. Browsers may coalesce high-rate stylus samples into a single
  * pointermove; using the recovered samples keeps fast handwriting from becoming
- * a sparse polygonal path. The original event is a safe fallback everywhere.
+ * a sparse polygonal path. The current event is appended when the coalesced
+ * list does not already end at the same sample.
  */
 export function pointerSamples(event: CoalescedPointerSource): PointerSample[] {
 	const getCoalescedEvents = event.getCoalescedEvents;
@@ -31,9 +37,26 @@ export function pointerSamples(event: CoalescedPointerSource): PointerSample[] {
 
 	try {
 		const samples = getCoalescedEvents.call(event);
-		return samples.length > 0 ? samples : [event];
+		if (samples.length === 0) return [event];
+		const last = samples[samples.length - 1]!;
+		return sameSample(last, event) ? samples : [...samples, event];
 	} catch {
 		return [event];
+	}
+}
+
+/**
+ * Predicted samples are used for the transient preview only. They are never
+ * persisted, so a bad prediction can be replaced by the next real Pencil event
+ * without changing the saved stroke.
+ */
+export function predictedPointerSamples(event: CoalescedPointerSource): PointerSample[] {
+	const getPredictedEvents = event.getPredictedEvents;
+	if (typeof getPredictedEvents !== 'function') return [];
+	try {
+		return getPredictedEvents.call(event);
+	} catch {
+		return [];
 	}
 }
 
