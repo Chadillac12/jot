@@ -136,7 +136,7 @@ describe('SidecarStore.scheduleSave', () => {
 		store.scheduleSave('a.pdf');
 		store.scheduleSave('a.pdf');
 		store.scheduleSave('a.pdf');
-		await vi.advanceTimersByTimeAsync(250);
+		await vi.advanceTimersByTimeAsync(750);
 		expect(fs.adapter.write).toHaveBeenCalledTimes(1);
 	});
 
