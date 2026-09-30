@@ -111,6 +111,20 @@ export function penOutline(
 	});
 }
 
+export function svgPathFromOutline(outline: number[][]): string {
+	if (outline.length === 0) return '';
+	const r2 = (value: number): string => (Math.round(value * 100) / 100).toString();
+	let path = `M${r2(outline[0]![0]!)} ${r2(outline[0]![1]!)}`;
+	for (let i = 1; i < outline.length; i++) {
+		const previous = outline[i - 1]!;
+		const current = outline[i]!;
+		path +=
+			` Q${r2(previous[0]!)} ${r2(previous[1]!)}` +
+			` ${r2((previous[0]! + current[0]!) / 2)} ${r2((previous[1]! + current[1]!) / 2)}`;
+	}
+	return path + ' Z';
+}
+
 export function drawPenStroke(
 	ctx: CanvasRenderingContext2D,
 	points: NormalizedPoint[],
