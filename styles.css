@@ -1,8 +1,17 @@
-.jot-overlay {
+.jot-overlay,
+.jot-live-overlay {
 	position: absolute;
 	inset: 0;
-	pointer-events: auto;
+}
+
+.jot-overlay {
+	pointer-events: none;
 	z-index: 1000;
+}
+
+.jot-live-overlay {
+	pointer-events: auto;
+	z-index: 1001;
 }
 
 .jot-page-anchor {
