@@ -70,7 +70,7 @@ export class JotSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName('Palette activation')
 			.setDesc(
-				'Double-tap + hold: make one quick Pencil-tip tap, then press nearby again and hold briefly. Normal Pencil holds always keep writing.',
+				'Double-tap + hold: make one quick pencil-tip tap, then press nearby again and hold briefly. Normal pencil holds always keep writing.',
 			)
 			.addDropdown((d) =>
 				d
@@ -102,9 +102,9 @@ export class JotSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName('Apple Pencil Pro squeeze')
+			.setName('Apple pencil pro squeeze')
 			.setDesc(
-				'Optional: assign Pencil Pro squeeze to an iPad Shortcut that opens obsidian://jot-palette.',
+				'Optional: assign pencil pro squeeze to an iPad shortcut that opens Obsidian://jot-palette.',
 			);
 
 		new Setting(containerEl)
