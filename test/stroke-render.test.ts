@@ -16,11 +16,15 @@ function makeCtx() {
 		beginPath: vi.fn(),
 		moveTo: vi.fn(),
 		lineTo: vi.fn(),
+		quadraticCurveTo: vi.fn(),
+		closePath: vi.fn(),
 		stroke: vi.fn(),
+		fill: vi.fn(),
 		save: vi.fn(),
 		restore: vi.fn(),
 		lineWidth: 0,
 		strokeStyle: '',
+		fillStyle: '',
 		lineCap: 'butt' as CanvasLineCap,
 		lineJoin: 'miter' as CanvasLineJoin,
 		globalAlpha: 1,
@@ -126,7 +130,7 @@ describe('drawHighlighterPolyline', () => {
 });
 
 describe('drawStroke', () => {
-	it('routes pen strokes through the segmented path with the dpr transform', () => {
+	it('routes pen strokes through the smooth filled-outline path with the dpr transform', () => {
 		const ctx = makeCtx();
 		const stroke: Stroke = {
 			points: [point(0, 0), point(0.5, 0.5), point(1, 1)],
@@ -140,7 +144,8 @@ describe('drawStroke', () => {
 			dpr: 2,
 		});
 		expect(ctx.setTransform).toHaveBeenCalledWith(2, 0, 0, 2, 0, 0);
-		expect(ctx.stroke).toHaveBeenCalled();
+		expect(ctx.fill).toHaveBeenCalled();
+		expect(ctx.quadraticCurveTo).toHaveBeenCalled();
 	});
 	it('routes highlighter strokes through the polyline path with the dpr transform', () => {
 		const ctx = makeCtx();
