@@ -8,11 +8,17 @@ import {
 	ToolMemory,
 	ToolState,
 } from './palette';
+import {
+	DEFAULT_PALETTE_PREFERENCES,
+	type FloatingPaletteButtonPosition,
+	type PaletteActivation,
+	type PalettePreferences,
+} from './palette-activation';
 import type JotPlugin from './main';
 
 export type { Handedness };
 
-export interface JotSettings {
+export interface JotSettings extends PalettePreferences {
 	handedness: Handedness;
 	toolState: ToolState;
 	penState: ToolMemory;
@@ -30,6 +36,7 @@ export const DEFAULT_SETTINGS: JotSettings = {
 	colors: [...PALETTE_COLORS],
 	inkSmoothing: 0.5,
 	pressureSensitivity: 0.5,
+	...DEFAULT_PALETTE_PREFERENCES,
 };
 
 export class JotSettingTab extends PluginSettingTab {
@@ -58,6 +65,46 @@ export class JotSettingTab extends PluginSettingTab {
 						this.plugin.settings.handedness = value as Handedness;
 						await this.plugin.saveSettings();
 					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Palette activation')
+			.setDesc(
+				'Double-tap + hold: make one quick Pencil-tip tap, then press nearby again and hold briefly. Normal Pencil holds always keep writing.',
+			)
+			.addDropdown((d) =>
+				d
+					.addOption('pencil-double-tap-hold', 'Pencil double-tap + hold (recommended)')
+					.addOption('two-finger', 'Two-finger hold')
+					.addOption('both', 'Pencil double-tap + hold + two-finger hold')
+					.setValue(this.plugin.settings.paletteActivation)
+					.onChange(async (value) => {
+						this.plugin.settings.paletteActivation = value as PaletteActivation;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Floating palette button')
+			.setDesc('Show a small edge button on the active PDF as a gesture-free fallback.')
+			.addDropdown((d) =>
+				d
+					.addOption('off', 'Off')
+					.addOption('left', 'Left edge')
+					.addOption('right', 'Right edge')
+					.setValue(this.plugin.settings.floatingPaletteButtonPosition)
+					.onChange(async (value) => {
+						this.plugin.settings.floatingPaletteButtonPosition =
+							value as FloatingPaletteButtonPosition;
+						await this.plugin.saveSettings();
+						this.plugin.refreshFloatingPaletteButton();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Apple Pencil Pro squeeze')
+			.setDesc(
+				'Optional: assign Pencil Pro squeeze to an iPad Shortcut that opens obsidian://jot-palette.',
 			);
 
 		new Setting(containerEl)
