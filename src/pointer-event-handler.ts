@@ -1,6 +1,10 @@
 import { readCanvasSurface } from './canvas-surface';
 import { createHoldIndicator } from './hold-indicator';
-import { normalizedPointFromSample, pointerSamples } from './ink-sampling';
+import {
+	normalizedPointFromSample,
+	pointerSamples,
+	predictedPointerSamples,
+} from './ink-sampling';
 import { pdfPathFromKey } from './jot-file';
 import { LongPressDetector } from './long-press';
 import type { Handedness, Palette, ToolState } from './palette';
@@ -8,8 +12,8 @@ import { OVERLAY_KEY_ATTR, OverlayManager } from './overlay-manager';
 import { PenStrokeState } from './pen-stroke-state';
 import type { SidecarStore } from './sidecar-store';
 import { ERASE_RADIUS, strokeIntersects } from './stroke-math';
-import type { Stroke } from './stroke-math';
-import { drawHighlighterPolyline, drawSegment } from './stroke-render';
+import type { NormalizedPoint, Stroke } from './stroke-math';
+import { drawStroke } from './stroke-render';
 import type { StrokeStore } from './stroke-store';
 import { TwoFingerHoldDetector } from './two-finger-hold';
 import type { UndoController } from './undo-controller';
@@ -36,6 +40,8 @@ export class PointerEventHandler {
 	private twoFingerIndicator: HTMLElement | null = null;
 	private longPress: LongPressDetector;
 	private twoFingerHold: TwoFingerHoldDetector;
+	private liveFrame: number | null = null;
+	private predictedPoints: NormalizedPoint[] = [];
 
 	constructor(
 		private canvas: HTMLCanvasElement,
@@ -75,6 +81,8 @@ export class PointerEventHandler {
 		if (e.pointerType !== 'pen' && e.pointerType !== 'mouse') return;
 		if (this.deps.palette.isOpen()) return;
 
+		this.cancelLiveFrame();
+		this.deps.overlays.clearLivePage(this.canvas);
 		this.canvas.setPointerCapture(e.pointerId);
 		this.activePointerId = e.pointerId;
 		this.state.beginAt(e, this.deps.toolState().tool, () => this.snapshotCurrent());
@@ -107,6 +115,7 @@ export class PointerEventHandler {
 			this.twoFingerHold.pointerUp(e.pointerId);
 			return;
 		}
+		if (this.activePointerId !== e.pointerId) return;
 		this.longPress.cancel();
 		if (this.state.isErasing()) {
 			this.finalizeEraserGesture();
@@ -114,8 +123,14 @@ export class PointerEventHandler {
 			return;
 		}
 		if (this.state.isDrawing()) {
+			this.appendRealSamples(e);
+			this.predictedPoints = [];
+			this.cancelLiveFrame();
 			this.finalizeDrawingStroke();
-			window.requestAnimationFrame(() => this.deps.overlays.redrawPage(this.canvas));
+			// Draw the committed stroke underneath before clearing the transient
+			// layer so Pencil-up cannot flash the page blank for one frame.
+			this.deps.overlays.redrawPage(this.canvas);
+			this.deps.overlays.clearLivePage(this.canvas);
 		}
 		this.releasePointerCapture();
 	}
@@ -123,8 +138,10 @@ export class PointerEventHandler {
 	private onLongPressFire(): void {
 		this.removeHoldIndicator();
 		const { clientX, clientY } = this.state.pressedAt;
+		this.predictedPoints = [];
+		this.cancelLiveFrame();
 		this.state.reset();
-		this.deps.overlays.redrawPage(this.canvas);
+		this.deps.overlays.clearLivePage(this.canvas);
 		this.releasePointerCapture();
 		this.openPaletteAt(clientX, clientY);
 	}
@@ -145,27 +162,65 @@ export class PointerEventHandler {
 
 	private continueDrawingStroke(e: PointerEvent): void {
 		if (!this.state.isDrawing()) return;
-		const surface = readCanvasSurface(this.canvas);
+		const appended = this.appendRealSamples(e);
 		const rect = this.canvas.getBoundingClientRect();
-		const tool = this.deps.toolState();
-		let drew = false;
+		const last = this.state.lastDrawingPoint();
+		this.predictedPoints = last
+			? predictedPointerSamples(e).map((sample) => ({
+				...normalizedPointFromSample(sample, rect),
+				pressure: last.pressure,
+			}))
+			: [];
+		if (appended || this.predictedPoints.length > 0) {
+			this.scheduleLiveRender();
+			e.preventDefault();
+		}
+	}
 
+	private appendRealSamples(e: PointerEvent): boolean {
+		if (!this.state.isDrawing()) return false;
+		const rect = this.canvas.getBoundingClientRect();
+		let appended = false;
 		for (const sample of pointerSamples(e)) {
-			const previous = this.state.lastDrawingPoint();
-			if (!previous) break;
-			const next = this.state.appendDrawingPoint(normalizedPointFromSample(sample, rect));
-			if (!next) continue;
-			drew = true;
-			if (tool.tool !== 'highlighter') {
-				drawSegment(this.ctx, previous, next, tool.color, tool.width, surface);
+			if (this.state.appendDrawingPoint(normalizedPointFromSample(sample, rect))) {
+				appended = true;
 			}
 		}
+		return appended;
+	}
 
-		if (drew && tool.tool === 'highlighter') {
-			this.deps.overlays.redrawPage(this.canvas);
-			drawHighlighterPolyline(this.ctx, this.state.drawingPoints(), tool.color, tool.width, surface);
+	private scheduleLiveRender(): void {
+		if (this.liveFrame !== null) return;
+		this.liveFrame = window.requestAnimationFrame(() => {
+			this.liveFrame = null;
+			this.renderLiveStroke();
+		});
+	}
+
+	private renderLiveStroke(): void {
+		if (!this.state.isDrawing()) {
+			this.deps.overlays.clearLivePage(this.canvas);
+			return;
 		}
-		if (drew) e.preventDefault();
+		const stored = this.state.drawingPoints();
+		if (stored.length === 0) return;
+		const points =
+			this.predictedPoints.length > 0 ? [...stored, ...this.predictedPoints] : stored;
+		const tool = this.deps.toolState();
+		const surface = readCanvasSurface(this.canvas);
+		this.deps.overlays.clearLivePage(this.canvas);
+		drawStroke(
+			this.ctx,
+			{ points, color: tool.color, width: tool.width, tool: tool.tool },
+			surface,
+		);
+	}
+
+	private cancelLiveFrame(): void {
+		if (this.liveFrame !== null) {
+			window.cancelAnimationFrame(this.liveFrame);
+			this.liveFrame = null;
+		}
 	}
 
 	private finalizeEraserGesture(): void {
