@@ -4,6 +4,8 @@ on:
     push:
         tags:
             - '*'
+        branches:
+            - 'release/**'
 
 jobs:
     build:
@@ -25,11 +27,31 @@ jobs:
               run: |
                   npm ci
                   npm run build
+                  npm test
+                  npm run lint
 
             - name: Check for optional styles
               id: styles
               run: |
                   [ -f styles.css ] && echo "exists=true" >> "$GITHUB_OUTPUT" || echo "exists=false" >> "$GITHUB_OUTPUT"
+
+            - name: Resolve release version
+              id: release
+              shell: bash
+              run: |
+                  manifest_version="$(node -p "require('./manifest.json').version")"
+                  if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+                    release_version="${GITHUB_REF#refs/tags/}"
+                  else
+                    release_version="${GITHUB_REF#refs/heads/release/}"
+                  fi
+
+                  if [[ "$release_version" != "$manifest_version" ]]; then
+                    echo "Release ref version '$release_version' does not match manifest version '$manifest_version'." >&2
+                    exit 1
+                  fi
+
+                  echo "version=$release_version" >> "$GITHUB_OUTPUT"
 
             - name: Attest build provenance
               uses: actions/attest@v4
@@ -41,12 +63,20 @@ jobs:
             - name: Create release
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              shell: bash
               run: |
-                  tag="${GITHUB_REF#refs/tags/}"
+                  tag="${{ steps.release.outputs.version }}"
                   assets=(main.js manifest.json ${{ steps.styles.outputs.exists == 'true' && 'styles.css' || '' }})
 
                   if gh release view "$tag" >/dev/null 2>&1; then
                     gh release upload "$tag" "${assets[@]}" --clobber
+                  elif [[ "$GITHUB_REF" == refs/heads/release/* ]]; then
+                    gh release create "$tag" \
+                      --target "$GITHUB_SHA" \
+                      --title "$tag" \
+                      --prerelease \
+                      --notes "Jot Ink Engine v2 BRAT test build." \
+                      "${assets[@]}"
                   else
                     gh release create "$tag" --title="$tag" --draft "${assets[@]}"
                   fi
