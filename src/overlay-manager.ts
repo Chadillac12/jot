@@ -3,6 +3,7 @@ import {
 	applyBackingStoreSize,
 	devicePixelRatioFor,
 	readCanvasSurface,
+	safeBackingStoreDpr,
 } from './canvas-surface';
 import { pageKey } from './jot-file';
 import { drawStroke } from './stroke-render';
@@ -195,7 +196,7 @@ export class OverlayManager {
 			const hasPersistent = page.querySelector(`canvas.${OVERLAY_CLASS}`);
 			const hasLive = page.querySelector(`canvas.${LIVE_OVERLAY_CLASS}`);
 			if (!hasPersistent || !hasLive) this.ensureOverlayOnPage(page, filePath);
-		}).observe(page, { childList: true });
+		}).observe(page, { childList: true, subtree: true });
 
 		new ResizeObserver(() => {
 			const currentPersistent = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
@@ -224,8 +225,9 @@ export class OverlayManager {
 	private sizeOverlayToPage(overlay: HTMLCanvasElement, page: HTMLElement): void {
 		const rect = page.getBoundingClientRect();
 		if (rect.width === 0 || rect.height === 0) return;
-		const dpr = devicePixelRatioFor(window);
-		applyBackingStoreSize(overlay, rect.width, rect.height, dpr);
+		const requestedDpr = devicePixelRatioFor(window);
+		const effectiveDpr = safeBackingStoreDpr(rect.width, rect.height, requestedDpr);
+		applyBackingStoreSize(overlay, rect.width, rect.height, effectiveDpr);
 		overlay.setCssStyles({
 			width: `${rect.width}px`,
 			height: `${rect.height}px`,
