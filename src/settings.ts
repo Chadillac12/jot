@@ -104,7 +104,7 @@ export class JotSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName('Apple pencil pro squeeze')
 			.setDesc(
-				'Optional: assign pencil pro squeeze to an iPad shortcut that opens Obsidian://jot-palette.',
+				'Optional: assign pencil pro squeeze to an ipad shortcut that opens Obsidian://jot-palette.',
 			);
 
 		new Setting(containerEl)
