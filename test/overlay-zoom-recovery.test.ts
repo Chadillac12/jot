@@ -1,5 +1,12 @@
 /* @vitest-environment happy-dom */
-/* eslint-disable obsidianmd/prefer-active-doc, obsidianmd/no-global-this, @typescript-eslint/no-explicit-any */
+/* eslint-disable
+	obsidianmd/prefer-active-doc,
+	obsidianmd/no-global-this,
+	@typescript-eslint/no-explicit-any,
+	@typescript-eslint/no-unsafe-argument,
+	@typescript-eslint/no-unsafe-member-access,
+	@typescript-eslint/no-unnecessary-type-assertion
+*/
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OverlayManager, OVERLAY_KEY_ATTR } from '../src/overlay-manager';
 import { StrokeStore } from '../src/stroke-store';
