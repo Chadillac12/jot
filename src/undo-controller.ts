@@ -43,6 +43,18 @@ export class UndoController {
 		if (entry) this.applyEntry(path, entry);
 	}
 
+	/**
+	 * Revert a gesture stroke without creating a redo entry. The page key must
+	 * match the newest undo entry, which prevents an old user action from being
+	 * removed if the gesture state ever becomes stale.
+	 */
+	discardLatestTransient(pdfPath: string, key: string): boolean {
+		const entry = this.history.discardLatestMatching(pdfPath, key);
+		if (!entry) return false;
+		this.applyEntry(pdfPath, entry);
+		return true;
+	}
+
 	private applyEntry(pdfPath: string, entry: UndoEntry): void {
 		this.strokes.setForKey(entry.key, [...entry.prevStrokes]);
 		const canvas = this.overlays.overlayForKey(entry.key);
