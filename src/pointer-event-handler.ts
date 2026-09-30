@@ -8,6 +8,11 @@ import {
 import { pdfPathFromKey } from './jot-file';
 import { LongPressDetector } from './long-press';
 import type { Handedness, Palette, ToolState } from './palette';
+import {
+	type PaletteActivation,
+	usesPencilDoubleTapHold,
+	usesTwoFingerHold,
+} from './palette-activation';
 import { OVERLAY_KEY_ATTR, OverlayManager } from './overlay-manager';
 import { PenStrokeState } from './pen-stroke-state';
 import type { SidecarStore } from './sidecar-store';
@@ -23,6 +28,28 @@ const LONG_PRESS_MOVE_PX = 15;
 const TWO_FINGER_HOLD_MS = 300;
 const TWO_FINGER_MOVE_PX = 25;
 
+const PENCIL_TAP_MAX_MS = 220;
+const PENCIL_TAP_MOVE_PX = 14;
+const PENCIL_DOUBLE_TAP_GAP_MS = 320;
+const PENCIL_DOUBLE_TAP_DISTANCE_PX = 36;
+const PENCIL_SECOND_HOLD_MS = 280;
+
+interface RecentPencilTap {
+	releasedAtMs: number;
+	clientX: number;
+	clientY: number;
+	pdfPath: string | null;
+	key: string | null;
+	hasUndoEntry: boolean;
+}
+
+interface CommittedStroke {
+	stroke: Stroke;
+	key: string;
+	pdfPath: string | null;
+	hasUndoEntry: boolean;
+}
+
 export interface PointerEventHandlerDeps {
 	palette: Palette;
 	strokes: StrokeStore;
@@ -31,6 +58,7 @@ export interface PointerEventHandlerDeps {
 	undo: UndoController;
 	toolState: () => ToolState;
 	handedness: () => Handedness;
+	paletteActivation: () => PaletteActivation;
 }
 
 export class PointerEventHandler {
@@ -42,6 +70,16 @@ export class PointerEventHandler {
 	private twoFingerHold: TwoFingerHoldDetector;
 	private liveFrame: number | null = null;
 	private predictedPoints: NormalizedPoint[] = [];
+
+	private penDownAtMs = 0;
+	private penDownX = 0;
+	private penDownY = 0;
+	private penMovedBeyondTapThreshold = false;
+	private recentPencilTap: RecentPencilTap | null = null;
+	private secondTapPointerId: number | null = null;
+	private secondTapX = 0;
+	private secondTapY = 0;
+	private secondTapTimer: number | null = null;
 
 	constructor(
 		private canvas: HTMLCanvasElement,
@@ -75,7 +113,11 @@ export class PointerEventHandler {
 
 	private onPointerDown(e: PointerEvent): void {
 		if (e.pointerType === 'touch') {
-			this.twoFingerHold.pointerDown(e.pointerId, e.clientX, e.clientY);
+			if (usesTwoFingerHold(this.deps.paletteActivation())) {
+				this.twoFingerHold.pointerDown(e.pointerId, e.clientX, e.clientY);
+			} else {
+				this.twoFingerHold.cancel();
+			}
 			return;
 		}
 		if (e.pointerType !== 'pen' && e.pointerType !== 'mouse') return;
@@ -85,6 +127,15 @@ export class PointerEventHandler {
 		this.deps.overlays.clearLivePage(this.canvas);
 		this.canvas.setPointerCapture(e.pointerId);
 		this.activePointerId = e.pointerId;
+
+		if (e.pointerType === 'pen') {
+			this.penDownAtMs = Date.now();
+			this.penDownX = e.clientX;
+			this.penDownY = e.clientY;
+			this.penMovedBeyondTapThreshold = false;
+			if (this.isSecondTapCandidate(e)) this.armPencilDoubleTapHold(e);
+		}
+
 		this.state.beginAt(e, this.deps.toolState().tool, () => this.snapshotCurrent());
 		if (this.state.isDrawing()) {
 			const rect = this.canvas.getBoundingClientRect();
@@ -93,7 +144,7 @@ export class PointerEventHandler {
 		// Pencil is writing-only. A stylus pause must never turn into a palette
 		// gesture or cancel a short stroke. Keep long-press available for mouse.
 		if (e.pointerType === 'mouse') {
-			this.showHoldIndicator(e.clientX, e.clientY);
+			this.showHoldIndicator(e.clientX, e.clientY, LONG_PRESS_MS);
 			this.longPress.start(e.clientX, e.clientY);
 		}
 		e.preventDefault();
@@ -101,10 +152,29 @@ export class PointerEventHandler {
 
 	private onPointerMove(e: PointerEvent): void {
 		if (e.pointerType === 'touch') {
-			this.twoFingerHold.pointerMove(e.pointerId, e.clientX, e.clientY);
+			if (usesTwoFingerHold(this.deps.paletteActivation())) {
+				this.twoFingerHold.pointerMove(e.pointerId, e.clientX, e.clientY);
+			} else {
+				this.twoFingerHold.cancel();
+			}
 			return;
 		}
 		if (this.activePointerId !== e.pointerId) return;
+
+		if (e.pointerType === 'pen') {
+			const moved = Math.hypot(e.clientX - this.penDownX, e.clientY - this.penDownY);
+			if (moved > PENCIL_TAP_MOVE_PX) this.penMovedBeyondTapThreshold = true;
+
+			if (this.isPencilSecondTapArmed() && e.pointerId === this.secondTapPointerId) {
+				const secondMove = Math.hypot(e.clientX - this.secondTapX, e.clientY - this.secondTapY);
+				if (secondMove <= PENCIL_TAP_MOVE_PX) {
+					e.preventDefault();
+					return;
+				}
+				this.cancelPencilDoubleTapHold();
+			}
+		}
+
 		if (e.pointerType === 'mouse') this.longPress.move(e.clientX, e.clientY);
 		if (this.state.isErasing()) {
 			if (this.eraseAtSamples(e)) this.state.markErased();
@@ -120,9 +190,21 @@ export class PointerEventHandler {
 			return;
 		}
 		if (this.activePointerId !== e.pointerId) return;
+
+		if (
+			e.pointerType === 'pen' &&
+			this.isPencilSecondTapArmed() &&
+			e.pointerId === this.secondTapPointerId
+		) {
+			this.cancelPencilDoubleTapHold();
+		}
+
 		if (e.pointerType === 'mouse') this.longPress.cancel();
+		const isQuickPencilTap = this.isQuickPencilTap(e);
+
 		if (this.state.isErasing()) {
-			this.finalizeEraserGesture();
+			const pushedUndo = this.finalizeEraserGesture();
+			if (isQuickPencilTap) this.rememberPencilTap(e, pushedUndo);
 			this.releasePointerCapture();
 			return;
 		}
@@ -134,7 +216,17 @@ export class PointerEventHandler {
 			// Commit only the new stroke underneath the live layer. Re-rendering
 			// every previous freehand outline on each Pencil-up makes latency grow
 			// with page complexity.
-			if (committed) this.deps.overlays.appendPersistedStroke(this.canvas, committed);
+			if (committed) {
+				this.deps.overlays.appendPersistedStroke(this.canvas, committed.stroke);
+				if (isQuickPencilTap) {
+					this.rememberPencilTap(
+						e,
+						committed.hasUndoEntry,
+						committed.key,
+						committed.pdfPath,
+					);
+				}
+			}
 			this.deps.overlays.clearLivePage(this.canvas);
 		}
 		this.releasePointerCapture();
@@ -152,7 +244,11 @@ export class PointerEventHandler {
 	}
 
 	private onTwoFingerArm(cx: number, cy: number): void {
-		if (this.deps.palette.isOpen() || this.state.isBusy()) {
+		if (
+			!usesTwoFingerHold(this.deps.paletteActivation()) ||
+			this.deps.palette.isOpen() ||
+			this.state.isBusy()
+		) {
 			this.twoFingerHold.cancel();
 			return;
 		}
@@ -161,8 +257,102 @@ export class PointerEventHandler {
 	}
 
 	private onTwoFingerFire(cx: number, cy: number): void {
-		if (this.deps.palette.isOpen()) return;
+		this.removeTwoFingerIndicator();
+		if (!usesTwoFingerHold(this.deps.paletteActivation()) || this.deps.palette.isOpen()) return;
 		this.openPaletteAt(cx, cy);
+	}
+
+	private isSecondTapCandidate(e: PointerEvent): boolean {
+		if (!usesPencilDoubleTapHold(this.deps.paletteActivation())) return false;
+		const previous = this.recentPencilTap;
+		if (!previous) return false;
+		const age = Date.now() - previous.releasedAtMs;
+		const distance = Math.hypot(e.clientX - previous.clientX, e.clientY - previous.clientY);
+		if (
+			age < 0 ||
+			age > PENCIL_DOUBLE_TAP_GAP_MS ||
+			distance > PENCIL_DOUBLE_TAP_DISTANCE_PX
+		) {
+			this.recentPencilTap = null;
+			return false;
+		}
+		return true;
+	}
+
+	private armPencilDoubleTapHold(e: PointerEvent): void {
+		this.secondTapPointerId = e.pointerId;
+		this.secondTapX = e.clientX;
+		this.secondTapY = e.clientY;
+		this.showHoldIndicator(e.clientX, e.clientY, PENCIL_SECOND_HOLD_MS);
+		this.secondTapTimer = window.setTimeout(
+			() => this.onPencilDoubleTapHoldFire(),
+			PENCIL_SECOND_HOLD_MS,
+		);
+	}
+
+	private onPencilDoubleTapHoldFire(): void {
+		if (!this.isPencilSecondTapArmed()) return;
+		const previous = this.recentPencilTap;
+		const x = this.secondTapX;
+		const y = this.secondTapY;
+
+		this.clearSecondTapTimer();
+		this.secondTapPointerId = null;
+		this.removeHoldIndicator();
+		this.recentPencilTap = null;
+		this.predictedPoints = [];
+		this.cancelLiveFrame();
+
+		if (previous?.hasUndoEntry && previous.pdfPath && previous.key) {
+			this.deps.undo.discardLatestTransient(previous.pdfPath, previous.key);
+		}
+
+		this.state.reset();
+		this.deps.overlays.clearLivePage(this.canvas);
+		this.releasePointerCapture();
+		this.openPaletteAt(x, y);
+	}
+
+	private cancelPencilDoubleTapHold(): void {
+		this.clearSecondTapTimer();
+		this.secondTapPointerId = null;
+		this.removeHoldIndicator();
+		this.recentPencilTap = null;
+	}
+
+	private clearSecondTapTimer(): void {
+		if (this.secondTapTimer !== null) window.clearTimeout(this.secondTapTimer);
+		this.secondTapTimer = null;
+	}
+
+	private isPencilSecondTapArmed(): boolean {
+		return this.secondTapPointerId !== null;
+	}
+
+	private isQuickPencilTap(e: PointerEvent): boolean {
+		return (
+			e.type === 'pointerup' &&
+			e.pointerType === 'pen' &&
+			usesPencilDoubleTapHold(this.deps.paletteActivation()) &&
+			!this.penMovedBeyondTapThreshold &&
+			Date.now() - this.penDownAtMs <= PENCIL_TAP_MAX_MS
+		);
+	}
+
+	private rememberPencilTap(
+		e: PointerEvent,
+		hasUndoEntry: boolean,
+		key = this.canvas.getAttribute(OVERLAY_KEY_ATTR),
+		pdfPath = key ? pdfPathFromKey(key) : null,
+	): void {
+		this.recentPencilTap = {
+			releasedAtMs: Date.now(),
+			clientX: e.clientX,
+			clientY: e.clientY,
+			pdfPath,
+			key,
+			hasUndoEntry,
+		};
 	}
 
 	private continueDrawingStroke(e: PointerEvent): void {
@@ -228,30 +418,33 @@ export class PointerEventHandler {
 		}
 	}
 
-	private finalizeEraserGesture(): void {
+	private finalizeEraserGesture(): boolean {
 		const snapshot = this.state.takeEraserSnapshot();
 		if (snapshot) this.deps.undo.push(snapshot);
 		this.state.reset();
+		return snapshot !== null;
 	}
 
-	private finalizeDrawingStroke(): Stroke | null {
+	private finalizeDrawingStroke(): CommittedStroke | null {
 		const points = this.state.drawingPoints();
 		const key = this.canvas.getAttribute(OVERLAY_KEY_ATTR);
-		let committed: Stroke | null = null;
+		let committed: CommittedStroke | null = null;
 		if (key && points.length > 0) {
 			const pdfPath = pdfPathFromKey(key);
 			const tool = this.deps.toolState();
+			const hasUndoEntry = pdfPath !== null;
 			if (pdfPath) {
 				this.deps.undo.push({ pdfPath, key, prevStrokes: [...this.deps.strokes.forKey(key)] });
 			}
-			committed = {
+			const stroke: Stroke = {
 				points,
 				color: tool.color,
 				width: tool.width,
 				tool: tool.tool,
 			};
-			this.deps.strokes.appendToKey(key, committed);
+			this.deps.strokes.appendToKey(key, stroke);
 			if (pdfPath) this.deps.sidecar.scheduleSave(pdfPath);
+			committed = { stroke, key, pdfPath, hasUndoEntry };
 		}
 		this.state.reset();
 		return committed;
@@ -296,8 +489,9 @@ export class PointerEventHandler {
 		this.deps.palette.show(activeDocument.body, x, y, this.deps.handedness());
 	}
 
-	private showHoldIndicator(x: number, y: number): void {
-		this.holdIndicator = createHoldIndicator(activeDocument, x, y, LONG_PRESS_MS);
+	private showHoldIndicator(x: number, y: number, durationMs: number): void {
+		this.removeHoldIndicator();
+		this.holdIndicator = createHoldIndicator(activeDocument, x, y, durationMs);
 		activeDocument.body.appendChild(this.holdIndicator);
 	}
 
