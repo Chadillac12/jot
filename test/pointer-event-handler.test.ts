@@ -1,4 +1,5 @@
 /* @vitest-environment happy-dom */
+/* eslint-disable @typescript-eslint/unbound-method, obsidianmd/no-global-this */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LongPressDetector } from '../src/long-press';
 import type { OverlayManager } from '../src/overlay-manager';
@@ -56,7 +57,7 @@ function makeHarness(activation: PaletteActivation = 'pencil-double-tap-hold'): 
 			x: 0,
 			y: 0,
 			toJSON: () => ({}),
-		}) as DOMRect;
+		});
 	Object.defineProperty(canvas, 'setPointerCapture', { value: vi.fn() });
 	Object.defineProperty(canvas, 'releasePointerCapture', { value: vi.fn() });
 	document.body.appendChild(canvas);
