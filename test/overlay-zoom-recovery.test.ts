@@ -1,5 +1,5 @@
 /* @vitest-environment happy-dom */
-/* eslint-disable obsidianmd/prefer-active-doc, @typescript-eslint/no-explicit-any */
+/* eslint-disable obsidianmd/prefer-active-doc, obsidianmd/no-global-this, @typescript-eslint/no-explicit-any */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OverlayManager, OVERLAY_KEY_ATTR } from '../src/overlay-manager';
 import { StrokeStore } from '../src/stroke-store';
@@ -31,7 +31,7 @@ function setRect(el: HTMLElement, width: number, height: number): void {
 			width,
 			height,
 			toJSON: () => ({}),
-		}) as DOMRect;
+		});
 }
 
 async function flushMutations(): Promise<void> {
