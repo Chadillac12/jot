@@ -4,12 +4,15 @@ import {
 	MAIN_ARC_RADIUS,
 	MAIN_ITEM_COUNT,
 	MAIN_ITEM_STEP_RAD,
+	RADIAL_MARGIN_PX,
 	SUB_ARC_RADIUS,
 	SUB_ITEM_STEP_RAD,
 	arcCenterAngle,
 	arcCenterlinePath,
 	arcOrigin,
+	clampPaletteAnchor,
 	mainSlotOffset,
+	paletteOffsetBounds,
 	slotAngle,
 	subSlotOffset,
 } from '../src/palette-geometry';
@@ -103,6 +106,34 @@ describe('subSlotOffset', () => {
 		const expected =
 			2 * Math.asin((MAIN_ARC_RADIUS / SUB_ARC_RADIUS) * Math.sin(MAIN_ITEM_STEP_RAD / 2));
 		expect(SUB_ITEM_STEP_RAD).toBeCloseTo(expected);
+	});
+});
+
+describe('palette viewport clamping', () => {
+	const subArcs = [
+		{ slot: 2, count: 2 },
+		{ slot: 3, count: 4 },
+		{ slot: 4, count: 7 },
+	];
+
+	it('keeps the full fan inside the left and top viewport edges', () => {
+		const bounds = paletteOffsetBounds('right', false, subArcs);
+		const pos = clampPaletteAnchor(0, 0, 1024, 768, bounds);
+		expect(pos.x + bounds.minX).toBeGreaterThanOrEqual(RADIAL_MARGIN_PX);
+		expect(pos.y + bounds.minY).toBeGreaterThanOrEqual(RADIAL_MARGIN_PX);
+	});
+
+	it('keeps the full fan inside the right and bottom viewport edges', () => {
+		const bounds = paletteOffsetBounds('left', true, subArcs);
+		const pos = clampPaletteAnchor(1024, 768, 1024, 768, bounds);
+		expect(pos.x + bounds.maxX).toBeLessThanOrEqual(1024 - RADIAL_MARGIN_PX);
+		expect(pos.y + bounds.maxY).toBeLessThanOrEqual(768 - RADIAL_MARGIN_PX);
+	});
+
+	it('does not move an anchor that already fits', () => {
+		const bounds = paletteOffsetBounds('right', false, subArcs);
+		const pos = clampPaletteAnchor(512, 384, 1024, 768, bounds);
+		expect(pos).toEqual({ x: 512, y: 384 });
 	});
 });
 
