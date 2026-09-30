@@ -1,12 +1,12 @@
 import { App, Modal } from 'obsidian';
 import { LineCapStyle, PDFPage, rgb } from 'pdf-lib';
+import type { Stroke } from './stroke-math';
 import {
-	PRESSURE_MAX_FACTOR,
-	PRESSURE_MIN_FACTOR,
-	Stroke,
-	forEachSmoothSegment,
-} from './stroke-math';
-import { HIGHLIGHTER_ALPHA, HIGHLIGHTER_WIDTH_FACTOR } from './stroke-render';
+	HIGHLIGHTER_ALPHA,
+	HIGHLIGHTER_WIDTH_FACTOR,
+	penOutline,
+	svgPathFromOutline,
+} from './stroke-render';
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
 	const h = hex.replace('#', '').padEnd(6, '0').slice(0, 6);
@@ -42,21 +42,21 @@ export function drawStrokesOnPdfPage(page: PDFPage, strokes: Stroke[]) {
 			}
 			continue;
 		}
-		forEachSmoothSegment(stroke.points, (a, b) => {
-			const avgPressure = (a.pressure + b.pressure) / 2;
-			const clamped = Math.max(0, Math.min(1, avgPressure));
-			const factor =
-				PRESSURE_MIN_FACTOR +
-				(PRESSURE_MAX_FACTOR - PRESSURE_MIN_FACTOR) * clamped;
-			page.drawLine({
-				start: { x: a.x * pageW, y: pageH - a.y * pageH },
-				end: { x: b.x * pageW, y: pageH - b.y * pageH },
-				thickness: baseWidth * factor,
+		const outline = penOutline(stroke.points, stroke.width, {
+			width: pageW,
+			height: pageH,
+		});
+		const path = svgPathFromOutline(outline);
+		if (path) {
+			// drawSvgPath uses SVG's downward-positive Y axis. Anchoring at the
+			// page top makes the exported outline line up with the screen surface.
+			page.drawSvgPath(path, {
+				x: 0,
+				y: pageH,
 				color,
 				opacity: 1,
-				lineCap: LineCapStyle.Round,
 			});
-		});
+		}
 	}
 }
 
