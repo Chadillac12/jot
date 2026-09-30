@@ -62,7 +62,7 @@ export class JotSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Stroke smoothing')
-			.setDesc('Balances steadier handwriting against Pencil responsiveness. 50% is the recommended starting point.')
+			.setDesc('Balances steadier handwriting against stylus responsiveness. 50% is the recommended starting point.')
 			.addSlider((slider) =>
 				slider
 					.setLimits(0, 1, 0.05)
@@ -77,7 +77,7 @@ export class JotSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Pressure sensitivity')
-			.setDesc('Controls how strongly Apple Pencil pressure changes pen thickness.')
+			.setDesc('Controls how strongly stylus pressure changes pen thickness.')
 			.addSlider((slider) =>
 				slider
 					.setLimits(0, 1, 0.05)
