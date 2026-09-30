@@ -9,6 +9,7 @@ import { MergeService } from './merge-service';
 import { OverlayManager } from './overlay-manager';
 import { SidecarStore } from './sidecar-store';
 import { StrokeStore } from './stroke-store';
+import { setInkRenderTuning } from './stroke-render';
 import { UndoController } from './undo-controller';
 import { UndoEntry, UndoHistory } from './undo';
 
@@ -29,6 +30,7 @@ export default class JotPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+		this.applyInkSettings();
 		this.sidecar = new SidecarStore(this.app.vault.adapter, this.strokes);
 		this.overlays = new OverlayManager(this.app, this.strokes, (canvas) =>
 			this.wirePointerEvents(canvas),
@@ -169,6 +171,14 @@ export default class JotPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	applyInkSettings(): void {
+		setInkRenderTuning({
+			smoothing: this.settings.inkSmoothing,
+			pressureSensitivity: this.settings.pressureSensitivity,
+		});
+		this.overlays?.redrawOverlaysForActivePdf();
 	}
 
 	private pushUndo(entry: UndoEntry) {
