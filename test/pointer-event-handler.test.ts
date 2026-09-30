@@ -20,6 +20,28 @@ interface Harness {
 	activation: { value: PaletteActivation };
 }
 
+function makeContext(): CanvasRenderingContext2D {
+	return {
+		save: vi.fn(),
+		restore: vi.fn(),
+		setTransform: vi.fn(),
+		beginPath: vi.fn(),
+		moveTo: vi.fn(),
+		lineTo: vi.fn(),
+		quadraticCurveTo: vi.fn(),
+		closePath: vi.fn(),
+		fill: vi.fn(),
+		stroke: vi.fn(),
+		clearRect: vi.fn(),
+		fillStyle: '',
+		strokeStyle: '',
+		lineWidth: 1,
+		lineCap: 'butt',
+		lineJoin: 'miter',
+		globalAlpha: 1,
+	} as unknown as CanvasRenderingContext2D;
+}
+
 function makeHarness(activation: PaletteActivation = 'pencil-double-tap-hold'): Harness {
 	const canvas = document.createElement('canvas');
 	canvas.setAttribute('data-jot-key', 'notes.pdf::1');
@@ -61,7 +83,7 @@ function makeHarness(activation: PaletteActivation = 'pencil-double-tap-hold'): 
 	} as unknown as UndoController;
 	const currentActivation = { value: activation };
 
-	new PointerEventHandler(canvas, {} as CanvasRenderingContext2D, {
+	new PointerEventHandler(canvas, makeContext(), {
 		palette,
 		strokes,
 		overlays,
