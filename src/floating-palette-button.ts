@@ -58,7 +58,7 @@ export class FloatingPaletteButton {
 		const button = doc.createElement('button');
 		button.type = 'button';
 		button.className = 'jot-floating-palette-button';
-		button.setAttribute('aria-label', 'Open Jot palette');
+		button.setAttribute('aria-label', 'Open jot palette');
 		setIcon(button, 'pencil');
 		button.addEventListener('click', (event) => {
 			event.preventDefault();
