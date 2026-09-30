@@ -90,8 +90,12 @@ export class PointerEventHandler {
 			const rect = this.canvas.getBoundingClientRect();
 			this.state.appendDrawingPoint(normalizedPointFromSample(e, rect));
 		}
-		this.showHoldIndicator(e.clientX, e.clientY);
-		this.longPress.start(e.clientX, e.clientY);
+		// Pencil is writing-only. A stylus pause must never turn into a palette
+		// gesture or cancel a short stroke. Keep long-press available for mouse.
+		if (e.pointerType === 'mouse') {
+			this.showHoldIndicator(e.clientX, e.clientY);
+			this.longPress.start(e.clientX, e.clientY);
+		}
 		e.preventDefault();
 	}
 
@@ -101,7 +105,7 @@ export class PointerEventHandler {
 			return;
 		}
 		if (this.activePointerId !== e.pointerId) return;
-		this.longPress.move(e.clientX, e.clientY);
+		if (e.pointerType === 'mouse') this.longPress.move(e.clientX, e.clientY);
 		if (this.state.isErasing()) {
 			if (this.eraseAtSamples(e)) this.state.markErased();
 			e.preventDefault();
@@ -116,7 +120,7 @@ export class PointerEventHandler {
 			return;
 		}
 		if (this.activePointerId !== e.pointerId) return;
-		this.longPress.cancel();
+		if (e.pointerType === 'mouse') this.longPress.cancel();
 		if (this.state.isErasing()) {
 			this.finalizeEraserGesture();
 			this.releasePointerCapture();
@@ -126,10 +130,11 @@ export class PointerEventHandler {
 			this.appendRealSamples(e);
 			this.predictedPoints = [];
 			this.cancelLiveFrame();
-			this.finalizeDrawingStroke();
-			// Draw the committed stroke underneath before clearing the transient
-			// layer so Pencil-up cannot flash the page blank for one frame.
-			this.deps.overlays.redrawPage(this.canvas);
+			const committed = this.finalizeDrawingStroke();
+			// Commit only the new stroke underneath the live layer. Re-rendering
+			// every previous freehand outline on each Pencil-up makes latency grow
+			// with page complexity.
+			if (committed) this.deps.overlays.appendPersistedStroke(this.canvas, committed);
 			this.deps.overlays.clearLivePage(this.canvas);
 		}
 		this.releasePointerCapture();
@@ -229,24 +234,27 @@ export class PointerEventHandler {
 		this.state.reset();
 	}
 
-	private finalizeDrawingStroke(): void {
+	private finalizeDrawingStroke(): Stroke | null {
 		const points = this.state.drawingPoints();
 		const key = this.canvas.getAttribute(OVERLAY_KEY_ATTR);
+		let committed: Stroke | null = null;
 		if (key && points.length > 0) {
 			const pdfPath = pdfPathFromKey(key);
 			const tool = this.deps.toolState();
 			if (pdfPath) {
 				this.deps.undo.push({ pdfPath, key, prevStrokes: [...this.deps.strokes.forKey(key)] });
 			}
-			this.deps.strokes.appendToKey(key, {
+			committed = {
 				points,
 				color: tool.color,
 				width: tool.width,
 				tool: tool.tool,
-			});
+			};
+			this.deps.strokes.appendToKey(key, committed);
 			if (pdfPath) this.deps.sidecar.scheduleSave(pdfPath);
 		}
 		this.state.reset();
+		return committed;
 	}
 
 	private eraseAtSamples(e: PointerEvent): boolean {
