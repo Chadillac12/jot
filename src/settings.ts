@@ -18,6 +18,8 @@ export interface JotSettings {
 	penState: ToolMemory;
 	highlighterState: ToolMemory;
 	colors: string[];
+	inkSmoothing: number;
+	pressureSensitivity: number;
 }
 
 export const DEFAULT_SETTINGS: JotSettings = {
@@ -26,6 +28,8 @@ export const DEFAULT_SETTINGS: JotSettings = {
 	penState: { ...DEFAULT_PEN_MEMORY },
 	highlighterState: { ...DEFAULT_HIGHLIGHTER_MEMORY },
 	colors: [...PALETTE_COLORS],
+	inkSmoothing: 0.5,
+	pressureSensitivity: 0.5,
 };
 
 export class JotSettingTab extends PluginSettingTab {
@@ -52,6 +56,36 @@ export class JotSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.handedness)
 					.onChange(async (value) => {
 						this.plugin.settings.handedness = value as Handedness;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Stroke smoothing')
+			.setDesc('Balances steadier handwriting against Pencil responsiveness. 50% is the recommended starting point.')
+			.addSlider((slider) =>
+				slider
+					.setLimits(0, 1, 0.05)
+					.setDynamicTooltip()
+					.setValue(this.plugin.settings.inkSmoothing)
+					.onChange(async (value) => {
+						this.plugin.settings.inkSmoothing = value;
+						this.plugin.applyInkSettings();
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Pressure sensitivity')
+			.setDesc('Controls how strongly Apple Pencil pressure changes pen thickness.')
+			.addSlider((slider) =>
+				slider
+					.setLimits(0, 1, 0.05)
+					.setDynamicTooltip()
+					.setValue(this.plugin.settings.pressureSensitivity)
+					.onChange(async (value) => {
+						this.plugin.settings.pressureSensitivity = value;
+						this.plugin.applyInkSettings();
 						await this.plugin.saveSettings();
 					}),
 			);
