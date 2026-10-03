@@ -11,7 +11,7 @@ import {
 	migrateStroke,
 	pageKey,
 	parseJotText,
-	pdfPathFromKey,
+	documentPathFromKey,
 	pdfPathFromSidecar,
 } from '../src/jot-file';
 
@@ -51,13 +51,13 @@ describe('pageKey and pdfPathFromKey', () => {
 		expect(pageKey('a.pdf', 3)).toBe('a.pdf::3');
 	});
 	it('recovers the pdf path from a key', () => {
-		expect(pdfPathFromKey('a.pdf::3')).toBe('a.pdf');
+		expect(documentPathFromKey('a.pdf::3')).toBe('a.pdf');
 	});
 	it('returns null for a key with no separator', () => {
-		expect(pdfPathFromKey('no-separator')).toBeNull();
+		expect(documentPathFromKey('no-separator')).toBeNull();
 	});
 	it('splits on the last separator so paths containing :: survive', () => {
-		expect(pdfPathFromKey('a::b.pdf::7')).toBe('a::b.pdf');
+		expect(documentPathFromKey('a::b.pdf::7')).toBe('a::b.pdf');
 	});
 });
 
