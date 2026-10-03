@@ -22,8 +22,12 @@ export function pdfPathFromSidecar(sidecarPath: string): string | null {
 	return sidecarPath.slice(0, -JOT_SUFFIX.length);
 }
 
+export function documentPageKey(documentPath: string, pageId: string | number): string {
+	return `${documentPath}${PAGE_KEY_SEPARATOR}${pageId}`;
+}
+
 export function pageKey(pdfPath: string, pageNumber: number): string {
-	return `${pdfPath}${PAGE_KEY_SEPARATOR}${pageNumber}`;
+	return documentPageKey(pdfPath, pageNumber);
 }
 
 export function documentPathFromKey(key: string): string | null {
