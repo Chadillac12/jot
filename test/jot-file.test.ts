@@ -75,6 +75,12 @@ describe('parseJotText', () => {
 		expect(parseJotText(JSON.stringify({ version: 2 }))).toBeNull();
 		expect(parseJotText(JSON.stringify({ version: 2, pages: 7 }))).toBeNull();
 	});
+	it('rejects ambiguous non-numeric page keys', () => {
+		expect(
+			parseJotText(JSON.stringify({ version: 2, pages: { '1junk': [] } })),
+		).toBeNull();
+	});
+
 	it('returns the parsed payload for a valid sidecar file', () => {
 		const result = parseJotText(JSON.stringify({ version: 2, pages: { '1': [] } }));
 		expect(result).toEqual({ version: 2, pages: { '1': [] } });
