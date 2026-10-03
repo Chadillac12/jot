@@ -63,8 +63,8 @@ export default class JotPlugin extends Plugin {
 		this.registerExtensions([JOT_NOTE_EXTENSION], JOT_NOTE_VIEW_TYPE);
 		this.addSettingTab(new JotSettingTab(this.app, this));
 		this.addCommand({
-			id: 'new-jot-note',
-			name: 'Create handwritten Jot note',
+			id: 'new-handwritten-note',
+			name: 'Create handwritten note',
 			callback: () => void this.createJotNoteFile(),
 		});
 		this.addCommand({
