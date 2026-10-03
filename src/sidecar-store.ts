@@ -13,38 +13,45 @@ const PLUGIN_LOG = '[jot]';
 export class SidecarStore {
 	private saveTimers = new Map<string, number>();
 	private recentSelfSaves = new Map<string, number>();
+	private protectedOriginals = new Map<string, string>();
 
 	constructor(
 		private adapter: DataAdapter,
 		private strokes: StrokeStore,
 	) {}
 
-	async load(pdfPath: string): Promise<void> {
+	async load(pdfPath: string): Promise<'loaded' | 'missing' | 'protected' | 'error'> {
 		const path = jotPathFor(pdfPath);
 		try {
 			if (!(await this.adapter.exists(path))) {
+				this.protectedOriginals.delete(pdfPath);
 				this.strokes.clearFor(pdfPath);
-				return;
+				return 'missing';
 			}
 			const text = await this.adapter.read(path);
 			const parsed = parseJotText(text);
 			if (!parsed) {
+				this.protectedOriginals.set(pdfPath, text);
 				console.warn(`${PLUGIN_LOG} ${path} is invalid; keeping current annotations in memory`);
-				return;
+				return 'protected';
 			}
 			if (!isSupportedVersion(parsed.version)) {
+				this.protectedOriginals.set(pdfPath, text);
 				console.warn(
 					`${PLUGIN_LOG} ${path} has unknown version ${parsed.version}; keeping current annotations in memory`,
 				);
-				return;
+				return 'protected';
 			}
 
 			// Validate completely before mutating the live store. A malformed or
 			// future sidecar must never clear annotations that are already visible.
+			this.protectedOriginals.delete(pdfPath);
 			this.strokes.clearFor(pdfPath);
 			this.strokes.populateFromPayload(pdfPath, parsed.pages);
+			return 'loaded';
 		} catch (err) {
 			console.error(`${PLUGIN_LOG} load failed for ${path}:`, err);
+			return 'error';
 		}
 	}
 
@@ -53,11 +60,24 @@ export class SidecarStore {
 		const payload = this.strokes.buildPayload(pdfPath);
 		try {
 			if (!payload) {
+				// Never delete a sidecar we explicitly refused to parse. Leaving the
+				// original in place is safer than treating "could not load" as empty.
+				if (this.protectedOriginals.has(pdfPath)) return;
 				if (await this.adapter.exists(path)) {
 					await this.adapter.remove(path);
 				}
 				return;
 			}
+
+			const protectedText = this.protectedOriginals.get(pdfPath);
+			if (protectedText !== undefined) {
+				const recoveryPath = `${path}.recovery-${Date.now()}.json`;
+				// If the recovery copy cannot be written, abort rather than destroy
+				// an unknown/corrupt original.
+				await this.adapter.write(recoveryPath, protectedText);
+				this.protectedOriginals.delete(pdfPath);
+			}
+
 			await this.adapter.write(path, JSON.stringify(payload, null, 2));
 			this.recentSelfSaves.set(path, Date.now());
 		} catch (err) {
@@ -148,6 +168,7 @@ export class SidecarStore {
 
 	async discard(pdfPath: string): Promise<void> {
 		const path = jotPathFor(pdfPath);
+		this.protectedOriginals.delete(pdfPath);
 		try {
 			if (await this.adapter.exists(path)) {
 				await this.adapter.remove(path);
