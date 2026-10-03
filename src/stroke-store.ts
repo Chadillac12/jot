@@ -57,6 +57,29 @@ export class StrokeStore {
 		}
 	}
 
+
+	rekeyDocumentPath(oldPath: string, newPath: string): void {
+		if (oldPath === newPath) return;
+		const oldPrefix = oldPath + '::';
+		const moves: Array<{ oldKey: string; newKey: string; strokes: Stroke[] }> = [];
+		for (const [key, strokes] of this.strokesByKey.entries()) {
+			if (!key.startsWith(oldPrefix)) continue;
+			moves.push({
+				oldKey: key,
+				newKey: newPath + '::' + key.slice(oldPrefix.length),
+				strokes: [...strokes],
+			});
+		}
+		for (const move of moves) this.strokesByKey.delete(move.oldKey);
+		for (const move of moves) {
+			const existing = this.strokesByKey.get(move.newKey);
+			this.strokesByKey.set(
+				move.newKey,
+				existing ? [...existing, ...move.strokes] : move.strokes,
+			);
+		}
+	}
+
 	keysForPage(pdfPath: string): string[] {
 		const prefix = pdfPath + '::';
 		return [...this.strokesByKey.keys()].filter((key) => key.startsWith(prefix));
