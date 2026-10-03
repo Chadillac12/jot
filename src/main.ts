@@ -161,6 +161,12 @@ export default class JotPlugin extends Plugin {
 				void this.reloadSidecar(pdfPath);
 			}),
 		);
+		this.registerEvent(
+			this.app.vault.on('rename', (file, oldPath) => {
+				if (!(file instanceof TFile) || file.extension !== 'pdf') return;
+				void this.handlePdfRename(oldPath, file.path);
+			}),
+		);
 
 		this.registerDomEvent(window, 'resize', () => this.refreshFloatingPaletteButton());
 
@@ -190,6 +196,14 @@ export default class JotPlugin extends Plugin {
 	private async reloadSidecar(pdfPath: string) {
 		await this.sidecar.load(pdfPath);
 		this.overlays.redrawOverlaysForPdf(pdfPath);
+	}
+
+	private async handlePdfRename(oldPath: string, newPath: string): Promise<void> {
+		this.strokes.rekeyDocumentPath(oldPath, newPath);
+		this.history.rekeyPath(oldPath, newPath);
+		await this.sidecar.renamePdfPath(oldPath, newPath);
+		this.overlays.attachToActivePdf();
+		this.overlays.redrawOverlaysForPdf(newPath);
 	}
 
 	private async resolveExternalSidecarConflict(pdfPath: string): Promise<void> {
