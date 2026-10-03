@@ -153,7 +153,12 @@ export default class JotPlugin extends Plugin {
 				if (!isSidecarPath(file.path)) return;
 				if (this.sidecar.isOwnRecentSave(file.path)) return;
 				const pdfPath = pdfPathFromSidecar(file.path);
-				if (pdfPath) void this.reloadSidecar(pdfPath);
+				if (!pdfPath) return;
+				if (this.sidecar.hasPendingSave(pdfPath)) {
+					void this.resolveExternalSidecarConflict(pdfPath);
+					return;
+				}
+				void this.reloadSidecar(pdfPath);
 			}),
 		);
 
@@ -185,6 +190,20 @@ export default class JotPlugin extends Plugin {
 	private async reloadSidecar(pdfPath: string) {
 		await this.sidecar.load(pdfPath);
 		this.overlays.redrawOverlaysForPdf(pdfPath);
+	}
+
+	private async resolveExternalSidecarConflict(pdfPath: string): Promise<void> {
+		const conflictPath = await this.sidecar.preserveExternalConflictAndFlushLocal(pdfPath);
+		if (!conflictPath) {
+			new Notice(
+				'Jot: an external annotation update arrived while local ink was unsaved. Local ink was kept in memory; avoid closing the PDF until the conflict is resolved.',
+			);
+			return;
+		}
+		new Notice(
+			`Jot: simultaneous annotation edits detected. The external copy was preserved at ${conflictPath}.`,
+			8000,
+		);
 	}
 
 	private scheduleSave(pdfPath: string): void {
