@@ -1,4 +1,5 @@
 import { Notice, Plugin, TFile } from 'obsidian';
+import type { InkSaveScheduler, InkSurfaceController } from './ink-surface';
 import { DEFAULT_TOOL_STATE, Palette, ToolState } from './palette';
 import { normalizePalettePreferences } from './palette-activation';
 import { DEFAULT_SETTINGS, JotSettings, JotSettingTab } from './settings';
@@ -7,6 +8,8 @@ import { collectClearOperations, countStrokes, toUndoEntries } from './clear-ops
 import { FloatingPaletteButton } from './floating-palette-button';
 import { PointerEventHandler } from './pointer-event-handler';
 import { isSidecarPath, pdfPathFromSidecar } from './jot-file';
+import { JOT_NOTE_EXTENSION, JOT_NOTE_VIEW_TYPE, createJotNote, serializeJotNote } from './jot-note-file';
+import { JotNoteView } from './jot-note-view';
 import { MergeService } from './merge-service';
 import { OverlayManager } from './overlay-manager';
 import { SidecarStore } from './sidecar-store';
@@ -39,7 +42,7 @@ export default class JotPlugin extends Plugin {
 			this.wirePointerEvents(canvas),
 		);
 		this.undoController = new UndoController(this.history, this.strokes, this.overlays, {
-			activePdfPath: () => this.overlays.getActivePdfFilePath(),
+			activeDocumentPath: () => this.overlays.getActivePdfFilePath(),
 			onAfterApply: (pdfPath) => this.scheduleSave(pdfPath),
 		});
 		this.merge = new MergeService(
@@ -53,7 +56,17 @@ export default class JotPlugin extends Plugin {
 				redrawOverlays: () => this.overlays.redrawOverlaysForActivePdf(),
 			},
 		);
+		this.registerView(
+			JOT_NOTE_VIEW_TYPE,
+			(leaf) => new JotNoteView(leaf, this),
+		);
+		this.registerExtensions([JOT_NOTE_EXTENSION], JOT_NOTE_VIEW_TYPE);
 		this.addSettingTab(new JotSettingTab(this.app, this));
+		this.addCommand({
+			id: 'new-jot-note',
+			name: 'Create handwritten Jot note',
+			callback: () => void this.createJotNoteFile(),
+		});
 		this.addCommand({
 			id: 'merge-notes-into-pdf',
 			name: 'Merge notes into PDF',
@@ -79,8 +92,8 @@ export default class JotPlugin extends Plugin {
 			id: 'open-palette',
 			name: 'Open palette',
 			checkCallback: (checking) => {
-				if (!this.overlays.getActivePdfLeaf()) return false;
-				if (!checking) this.openPaletteForActivePdf();
+				if (!this.activeInkContainer()) return false;
+				if (!checking) this.openPaletteForActiveSurface();
 				return true;
 			},
 		});
@@ -95,10 +108,10 @@ export default class JotPlugin extends Plugin {
 				void this.saveSettings();
 			},
 			{
-				onUndo: () => this.undoController.undo(),
-				onRedo: () => this.undoController.redo(),
-				canUndo: () => this.undoController.canUndo(),
-				canRedo: () => this.undoController.canRedo(),
+				onUndo: () => this.activeUndoController()?.undo(),
+				onRedo: () => this.activeUndoController()?.redo(),
+				canUndo: () => this.activeUndoController()?.canUndo() ?? false,
+				canRedo: () => this.activeUndoController()?.canRedo() ?? false,
 				getColors: () => this.settings.colors,
 			},
 			{
@@ -110,7 +123,7 @@ export default class JotPlugin extends Plugin {
 			this.palette.show(doc.body, x, y, this.settings.handedness);
 		});
 		this.registerObsidianProtocolHandler('jot-palette', () => {
-			this.openPaletteForActivePdf();
+			this.openPaletteForActiveSurface();
 		});
 
 		this.registerEvent(
@@ -179,6 +192,16 @@ export default class JotPlugin extends Plugin {
 	}
 
 	private wirePointerEvents(canvas: HTMLCanvasElement) {
+		this.wireInkCanvas(canvas, this.overlays, this.sidecar, this.undoController, this.strokes);
+	}
+
+	wireInkCanvas(
+		canvas: HTMLCanvasElement,
+		surface: InkSurfaceController,
+		saveScheduler: InkSaveScheduler,
+		undo: UndoController,
+		strokes = this.strokes,
+	): void {
 		const ctx = canvas.getContext('2d');
 		if (!ctx) {
 			console.error(`${PLUGIN_LOG} no 2d context`);
@@ -186,10 +209,10 @@ export default class JotPlugin extends Plugin {
 		}
 		new PointerEventHandler(canvas, ctx, {
 			palette: this.palette,
-			strokes: this.strokes,
-			overlays: this.overlays,
-			sidecar: this.sidecar,
-			undo: this.undoController,
+			strokes,
+			overlays: surface,
+			sidecar: saveScheduler,
+			undo,
 			toolState: () => this.toolState,
 			handedness: () => this.settings.handedness,
 			paletteActivation: () => this.settings.paletteActivation,
@@ -216,20 +239,19 @@ export default class JotPlugin extends Plugin {
 			pressureSensitivity: this.settings.pressureSensitivity,
 		});
 		this.overlays?.redrawOverlaysForActivePdf();
+		this.activeJotNoteView()?.redrawAll();
 	}
 
 	refreshFloatingPaletteButton(): void {
-		const leaf = this.overlays?.getActivePdfLeaf();
 		this.floatingPaletteButton?.update(
-			leaf?.view.containerEl ?? null,
+			this.activeInkContainer(),
 			this.settings.floatingPaletteButtonPosition,
 		);
 	}
 
-	openPaletteForActivePdf(): void {
-		const leaf = this.overlays?.getActivePdfLeaf();
-		if (!leaf) return;
-		const container = leaf.view.containerEl;
+	openPaletteForActiveSurface(): void {
+		const container = this.activeInkContainer();
+		if (!container) return;
 		const doc = container.ownerDocument;
 		const win = doc.defaultView;
 		if (!win) return;
@@ -239,6 +261,38 @@ export default class JotPlugin extends Plugin {
 		const x = Math.min(win.innerWidth - margin, Math.max(margin, rect.left + rect.width / 2));
 		const y = Math.min(win.innerHeight - margin, Math.max(margin, rect.top + rect.height / 2));
 		this.palette.show(doc.body, x, y, this.settings.handedness);
+	}
+
+	private activeJotNoteView(): JotNoteView | null {
+		const leaf = this.app.workspace.getMostRecentLeaf();
+		return leaf?.view instanceof JotNoteView ? leaf.view : null;
+	}
+
+	private activeUndoController(): UndoController | null {
+		const noteUndo = this.activeJotNoteView()?.getUndoController();
+		if (noteUndo) return noteUndo;
+		return this.overlays?.getActivePdfLeaf() ? this.undoController : null;
+	}
+
+	private activeInkContainer(): HTMLElement | null {
+		const noteView = this.activeJotNoteView();
+		if (noteView) return noteView.containerEl;
+		return this.overlays?.getActivePdfLeaf()?.view.containerEl ?? null;
+	}
+
+	private async createJotNoteFile(): Promise<void> {
+		const activeFile = this.app.workspace.getActiveFile();
+		const folder = activeFile?.parent?.path ?? '';
+		const baseName = 'Untitled Jot';
+		let index = 1;
+		let path = folder ? `${folder}/${baseName}.jot` : `${baseName}.jot`;
+		while (this.app.vault.getAbstractFileByPath(path)) {
+			index += 1;
+			const name = `${baseName} ${index}`;
+			path = folder ? `${folder}/${name}.jot` : `${name}.jot`;
+		}
+		const file = await this.app.vault.create(path, serializeJotNote(createJotNote()));
+		await this.app.workspace.getLeaf(false).openFile(file);
 	}
 
 	private pushUndo(entry: UndoEntry) {
