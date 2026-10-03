@@ -200,7 +200,13 @@ export default class JotPlugin extends Plugin {
 	}
 
 	private async reloadSidecar(pdfPath: string) {
-		await this.sidecar.load(pdfPath);
+		const status = await this.sidecar.load(pdfPath);
+		if (status === 'protected') {
+			new Notice(
+				'Jot: an external annotation sidecar could not be safely loaded. The file was left untouched and current annotations were kept in memory.',
+				8000,
+			);
+		}
 		this.overlays.redrawOverlaysForPdf(pdfPath);
 	}
 
