@@ -101,7 +101,7 @@ describe('JotNoteSurface', () => {
 
 		surface.render(note, 'Lecture.jot');
 
-		const live = [...host.querySelectorAll<HTMLCanvasElement>('canvas.jot-note-live-ink')];
+		const live = Array.from(host.querySelectorAll<HTMLCanvasElement>('canvas.jot-note-live-ink'));
 		expect(live).toHaveLength(2);
 		expect(wire).toHaveBeenCalledTimes(2);
 		expect(live.map((canvas) => canvas.getAttribute('data-jot-key'))).toEqual([
@@ -116,7 +116,7 @@ describe('JotNoteSurface', () => {
 
 		surface.render(createJotNote(), 'Lecture.jot');
 
-		for (const canvas of host.querySelectorAll<HTMLCanvasElement>('canvas')) {
+		for (const canvas of Array.from(host.querySelectorAll<HTMLCanvasElement>('canvas'))) {
 			expect(canvas.width * canvas.height).toBeLessThanOrEqual(16_777_216);
 		}
 	});
