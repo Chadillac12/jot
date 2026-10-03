@@ -28,7 +28,7 @@ export class JotNoteSurface implements InkSurfaceController {
 
 	render(note: JotNoteFile, documentPath: string): void {
 		this.disconnect();
-		this.host.empty();
+		this.host.replaceChildren();
 
 		note.pages.forEach((page, index) => {
 			this.renderPage(note, page, documentPath, index);
