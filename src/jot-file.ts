@@ -26,9 +26,14 @@ export function pageKey(pdfPath: string, pageNumber: number): string {
 	return `${pdfPath}${PAGE_KEY_SEPARATOR}${pageNumber}`;
 }
 
-export function pdfPathFromKey(key: string): string | null {
+export function documentPathFromKey(key: string): string | null {
 	const separatorIndex = key.lastIndexOf(PAGE_KEY_SEPARATOR);
 	return separatorIndex < 0 ? null : key.slice(0, separatorIndex);
+}
+
+/** @deprecated Use documentPathFromKey for surfaces that may not be PDFs. */
+export function pdfPathFromKey(key: string): string | null {
+	return documentPathFromKey(key);
 }
 
 export function parseJotText(text: string): JotFileFormat | null {
