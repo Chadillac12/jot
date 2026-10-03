@@ -105,6 +105,39 @@ export class SidecarStore {
 		}
 	}
 
+	async renamePdfPath(oldPdfPath: string, newPdfPath: string): Promise<void> {
+		if (oldPdfPath === newPdfPath) return;
+		const oldSidecar = jotPathFor(oldPdfPath);
+		const newSidecar = jotPathFor(newPdfPath);
+		const pending = this.saveTimers.get(oldPdfPath);
+		if (pending !== undefined) {
+			window.clearTimeout(pending);
+			this.saveTimers.delete(oldPdfPath);
+		}
+
+		try {
+			if (await this.adapter.exists(oldSidecar)) {
+				if (await this.adapter.exists(newSidecar)) {
+					const destinationText = await this.adapter.read(newSidecar);
+					const conflictPath = `${newSidecar}.conflict-${Date.now()}.json`;
+					await this.adapter.write(conflictPath, destinationText);
+					await this.adapter.remove(newSidecar);
+				}
+				await this.adapter.rename(oldSidecar, newSidecar);
+			}
+			this.recentSelfSaves.delete(oldSidecar);
+		} catch (err) {
+			console.error(
+				`${PLUGIN_LOG} could not move sidecar from ${oldSidecar} to ${newSidecar}:`,
+				err,
+			);
+		}
+
+		if (pending !== undefined || this.strokes.hasFor(newPdfPath)) {
+			this.scheduleSave(newPdfPath);
+		}
+	}
+
 	isOwnRecentSave(path: string): boolean {
 		const writtenAt = this.recentSelfSaves.get(path);
 		if (writtenAt === undefined) return false;
