@@ -3,7 +3,9 @@
 	obsidianmd/prefer-active-doc,
 	obsidianmd/no-global-this,
 	@typescript-eslint/no-explicit-any,
-	@typescript-eslint/no-unsafe-member-access
+	@typescript-eslint/no-unsafe-member-access,
+	@typescript-eslint/no-unnecessary-type-assertion,
+	@typescript-eslint/no-unsafe-argument
 */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { documentPageKey } from '../src/jot-file';
