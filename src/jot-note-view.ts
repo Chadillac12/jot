@@ -122,6 +122,7 @@ export class JotNoteView extends TextFileView {
 				this.surface,
 				{ scheduleSave: () => this.requestSave() },
 				this.undoController,
+				this.strokes,
 			);
 		});
 
