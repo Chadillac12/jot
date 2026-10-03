@@ -129,6 +129,11 @@ export class SidecarStore {
 		if (oldPdfPath === newPdfPath) return;
 		const oldSidecar = jotPathFor(oldPdfPath);
 		const newSidecar = jotPathFor(newPdfPath);
+		const protectedText = this.protectedOriginals.get(oldPdfPath);
+		if (protectedText !== undefined) {
+			this.protectedOriginals.delete(oldPdfPath);
+			this.protectedOriginals.set(newPdfPath, protectedText);
+		}
 		const pending = this.saveTimers.get(oldPdfPath);
 		if (pending !== undefined) {
 			window.clearTimeout(pending);
