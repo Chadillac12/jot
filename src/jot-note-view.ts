@@ -1,6 +1,8 @@
 import {
 	ButtonComponent,
 	DropdownComponent,
+	Notice,
+	TFile,
 	TextFileView,
 	type IconName,
 	type WorkspaceLeaf,
@@ -11,7 +13,7 @@ import {
 	createJotPage,
 	createJotNote,
 	nextPageId,
-	parseJotNoteText,
+	parseJotNoteTextResult,
 	serializeJotNote,
 	type JotNoteFile,
 	type JotPaperStyle,
@@ -29,6 +31,9 @@ export class JotNoteView extends TextFileView {
 	private surface: JotNoteSurface | null = null;
 	private undoController: UndoController | null = null;
 	private pagesEl: HTMLElement | null = null;
+	private documentPath: string | null = null;
+	private rawData = '';
+	private loadError: string | null = null;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -50,7 +55,8 @@ export class JotNoteView extends TextFileView {
 	}
 
 	getViewData(): string {
-		const path = this.file?.path;
+		if (this.loadError) return this.rawData;
+		const path = this.documentPath ?? this.file?.path;
 		if (path) {
 			this.note = {
 				...this.note,
@@ -60,12 +66,24 @@ export class JotNoteView extends TextFileView {
 				})),
 			};
 		}
-		return serializeJotNote(this.note);
+		this.rawData = serializeJotNote(this.note);
+		return this.rawData;
 	}
 
 	setViewData(data: string, clear: boolean): void {
 		if (clear) this.resetState();
-		this.note = parseJotNoteText(data);
+		this.rawData = data;
+		this.documentPath = this.file?.path ?? this.documentPath;
+
+		const parsed = parseJotNoteTextResult(data);
+		if (!parsed.ok) {
+			this.loadError = parsed.message;
+			this.renderLoadError(parsed.message);
+			return;
+		}
+
+		this.loadError = null;
+		this.note = parsed.note;
 		this.loadStrokesFromNote();
 		this.render();
 	}
@@ -78,12 +96,24 @@ export class JotNoteView extends TextFileView {
 		this.resetState();
 	}
 
+	override async onRename(file: TFile): Promise<void> {
+		const oldPath = this.documentPath;
+		const newPath = file.path;
+		if (!this.loadError && oldPath && oldPath !== newPath) {
+			this.strokes.rekeyDocumentPath(oldPath, newPath);
+			this.history.rekeyPath(oldPath, newPath);
+		}
+		this.documentPath = newPath;
+		await super.onRename(file);
+		if (!this.loadError) this.render();
+	}
+
 	getUndoController(): UndoController | null {
-		return this.undoController;
+		return this.loadError ? null : this.undoController;
 	}
 
 	redrawAll(): void {
-		this.surface?.redrawAll();
+		if (!this.loadError) this.surface?.redrawAll();
 	}
 
 	private resetState(): void {
@@ -92,10 +122,13 @@ export class JotNoteView extends TextFileView {
 		this.strokes = new StrokeStore();
 		this.history = new UndoHistory();
 		this.undoController = null;
+		this.documentPath = null;
+		this.rawData = '';
+		this.loadError = null;
 	}
 
 	private loadStrokesFromNote(): void {
-		const path = this.file?.path;
+		const path = this.documentPath ?? this.file?.path;
 		if (!path) return;
 		this.strokes = new StrokeStore();
 		for (const page of this.note.pages) {
@@ -104,8 +137,8 @@ export class JotNoteView extends TextFileView {
 	}
 
 	private render(): void {
-		const path = this.file?.path;
-		if (!path) return;
+		const path = this.documentPath ?? this.file?.path;
+		if (!path || this.loadError) return;
 
 		this.surface?.disconnect();
 		this.contentEl.empty();
@@ -131,12 +164,27 @@ export class JotNoteView extends TextFileView {
 			this.strokes,
 			this.surface,
 			{
-				activeDocumentPath: () => this.file?.path ?? null,
+				activeDocumentPath: () => this.documentPath ?? this.file?.path ?? null,
 				onAfterApply: () => this.requestSave(),
 			},
 		);
 
 		this.surface.render(this.note, path);
+	}
+
+	private renderLoadError(message: string): void {
+		this.surface?.disconnect();
+		this.surface = null;
+		this.pagesEl = null;
+		this.contentEl.empty();
+		this.contentEl.addClass('jot-note-view');
+
+		const panel = this.contentEl.createDiv({ cls: 'jot-note-load-error' });
+		panel.createEl('h3', { text: 'Jot note opened read-only' });
+		panel.createEl('p', { text: message });
+		panel.createEl('p', {
+			text: 'Jot will preserve the original file exactly and will not convert or overwrite it.',
+		});
 	}
 
 	private renderToolbar(toolbar: HTMLElement): void {
@@ -167,13 +215,17 @@ export class JotNoteView extends TextFileView {
 	}
 
 	private setPaperStyle(style: JotPaperStyle): void {
-		if (this.note.paper === style) return;
+		if (this.loadError || this.note.paper === style) return;
 		this.note = { ...this.note, paper: style };
 		this.render();
 		this.requestSave();
 	}
 
 	private addPage(): void {
+		if (this.loadError) {
+			new Notice('Jot: this notebook is read-only because its data could not be validated.');
+			return;
+		}
 		const page = createJotPage(nextPageId(this.note.pages));
 		this.note = { ...this.note, pages: [...this.note.pages, page] };
 		this.render();
