@@ -21,16 +21,27 @@ export class SidecarStore {
 
 	async load(pdfPath: string): Promise<void> {
 		const path = jotPathFor(pdfPath);
-		this.strokes.clearFor(pdfPath);
 		try {
-			if (!(await this.adapter.exists(path))) return;
-			const text = await this.adapter.read(path);
-			const parsed = parseJotText(text);
-			if (!parsed) return;
-			if (!isSupportedVersion(parsed.version)) {
-				console.warn(`${PLUGIN_LOG} ${path} has unknown version ${parsed.version}, skipping`);
+			if (!(await this.adapter.exists(path))) {
+				this.strokes.clearFor(pdfPath);
 				return;
 			}
+			const text = await this.adapter.read(path);
+			const parsed = parseJotText(text);
+			if (!parsed) {
+				console.warn(`${PLUGIN_LOG} ${path} is invalid; keeping current annotations in memory`);
+				return;
+			}
+			if (!isSupportedVersion(parsed.version)) {
+				console.warn(
+					`${PLUGIN_LOG} ${path} has unknown version ${parsed.version}; keeping current annotations in memory`,
+				);
+				return;
+			}
+
+			// Validate completely before mutating the live store. A malformed or
+			// future sidecar must never clear annotations that are already visible.
+			this.strokes.clearFor(pdfPath);
 			this.strokes.populateFromPayload(pdfPath, parsed.pages);
 		} catch (err) {
 			console.error(`${PLUGIN_LOG} load failed for ${path}:`, err);
@@ -62,6 +73,36 @@ export class SidecarStore {
 			void this.save(pdfPath);
 		}, SAVE_DEBOUNCE_MS);
 		this.saveTimers.set(pdfPath, id);
+	}
+
+	hasPendingSave(pdfPath: string): boolean {
+		return this.saveTimers.has(pdfPath);
+	}
+
+	/**
+	 * An external sidecar edit arrived while local Pencil input is still dirty.
+	 * Preserve the external bytes in a conflict file before allowing the local
+	 * state to win, so neither device's annotations are silently destroyed.
+	 */
+	async preserveExternalConflictAndFlushLocal(pdfPath: string): Promise<string | null> {
+		const timer = this.saveTimers.get(pdfPath);
+		if (timer === undefined) return null;
+
+		const sidecarPath = jotPathFor(pdfPath);
+		try {
+			if (!(await this.adapter.exists(sidecarPath))) return null;
+			const remoteText = await this.adapter.read(sidecarPath);
+			const conflictPath = `${sidecarPath}.conflict-${Date.now()}.json`;
+			await this.adapter.write(conflictPath, remoteText);
+
+			window.clearTimeout(timer);
+			this.saveTimers.delete(pdfPath);
+			await this.save(pdfPath);
+			return conflictPath;
+		} catch (err) {
+			console.error(`${PLUGIN_LOG} could not preserve external conflict for ${sidecarPath}:`, err);
+			return null;
+		}
 	}
 
 	isOwnRecentSave(path: string): boolean {
