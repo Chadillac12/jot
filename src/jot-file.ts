@@ -99,14 +99,28 @@ export function parseStoredStroke(value: unknown): Stroke | null {
 }
 
 export function migrateStroke(raw: Partial<Stroke>): Stroke {
-	return (
-		parseStoredStroke(raw) ?? {
-			points: [],
-			color: '#000000',
-			width: 0.0025,
-			tool: 'pen',
-		}
-	);
+	const points = Array.isArray(raw.points)
+		? raw.points
+				.filter(
+					(point) =>
+						isFiniteNumber(point?.x) &&
+						isFiniteNumber(point?.y) &&
+						isFiniteNumber(point?.pressure),
+				)
+				.map((point) => ({
+					x: clamp01(point.x),
+					y: clamp01(point.y),
+					pressure: clamp01(point.pressure),
+				}))
+		: [];
+	const color = typeof raw.color === 'string' && raw.color.length > 0 ? raw.color : '#000000';
+	const width =
+		isFiniteNumber(raw.width) && raw.width > 0 && raw.width <= 0.1 ? raw.width : 0.0025;
+	const tool =
+		raw.tool === 'highlighter' || raw.tool === 'eraser' || raw.tool === 'pen'
+			? raw.tool
+			: 'pen';
+	return { points, color, width, tool };
 }
 
 export function hasStrokesForPdf(pdfPath: string, strokesByKey: Map<string, Stroke[]>): boolean {
