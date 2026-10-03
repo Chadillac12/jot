@@ -1,5 +1,5 @@
 import type { Stroke } from './stroke-math';
-import { migrateStroke } from './jot-file';
+import { parseStoredStroke } from './jot-file';
 
 export const JOT_NOTE_EXTENSION = 'jot';
 export const JOT_NOTE_VIEW_TYPE = 'jot-note';
@@ -20,6 +20,15 @@ export interface JotNoteFile {
 	paper: JotPaperStyle;
 	pages: JotNotePage[];
 }
+
+export type JotNoteParseFailureReason =
+	| 'invalid-json'
+	| 'invalid-schema'
+	| 'unsupported-version';
+
+export type JotNoteParseResult =
+	| { ok: true; note: JotNoteFile }
+	| { ok: false; reason: JotNoteParseFailureReason; message: string };
 
 const DEFAULT_PAGE_WIDTH = 1536;
 const DEFAULT_PAGE_HEIGHT = 2048;
@@ -49,41 +58,90 @@ export function nextPageId(pages: JotNotePage[]): string {
 	return `page-${index}`;
 }
 
-export function parseJotNoteText(text: string): JotNoteFile {
-	if (text.trim().length === 0) return createJotNote();
+export function parseJotNoteText(text: string): JotNoteFile | null {
+	const result = parseJotNoteTextResult(text);
+	return result.ok ? result.note : null;
+}
+
+export function parseJotNoteTextResult(text: string): JotNoteParseResult {
+	if (text.trim().length === 0) return { ok: true, note: createJotNote() };
+
+	let raw: unknown;
 	try {
-		const raw: unknown = JSON.parse(text);
-		if (!isRecord(raw) || raw.type !== 'notebook' || !Array.isArray(raw.pages)) {
-			return createJotNote();
-		}
-		const pages = raw.pages
-			.map((page, index) => migratePage(page, index))
-			.filter((page): page is JotNotePage => page !== null);
+		raw = JSON.parse(text);
+	} catch {
 		return {
+			ok: false,
+			reason: 'invalid-json',
+			message: 'This Jot note is not valid JSON. The original file has been left untouched.',
+		};
+	}
+
+	if (!isRecord(raw) || raw.type !== 'notebook' || !Array.isArray(raw.pages)) {
+		return {
+			ok: false,
+			reason: 'invalid-schema',
+			message: 'This file is not a valid Jot notebook. The original file has been left untouched.',
+		};
+	}
+
+	if (raw.version !== JOT_NOTE_FORMAT_VERSION) {
+		return {
+			ok: false,
+			reason: 'unsupported-version',
+			message:
+				typeof raw.version === 'number'
+					? `This notebook uses unsupported Jot format version ${raw.version}. It was opened read-only to prevent data loss.`
+					: 'This notebook is missing a supported Jot format version. It was opened read-only to prevent data loss.',
+		};
+	}
+
+	const pages: JotNotePage[] = [];
+	const ids = new Set<string>();
+	for (let index = 0; index < raw.pages.length; index++) {
+		const page = parsePage(raw.pages[index], index);
+		if (!page || ids.has(page.id)) {
+			return {
+				ok: false,
+				reason: 'invalid-schema',
+				message:
+					'This Jot notebook contains invalid or duplicate page data. The original file has been left untouched.',
+			};
+		}
+		ids.add(page.id);
+		pages.push(page);
+	}
+
+	return {
+		ok: true,
+		note: {
 			version: JOT_NOTE_FORMAT_VERSION,
 			type: 'notebook',
 			paper: isPaperStyle(raw.paper) ? raw.paper : 'ruled',
 			pages: pages.length > 0 ? pages : [createJotPage('page-1')],
-		};
-	} catch {
-		return createJotNote();
-	}
+		},
+	};
 }
 
 export function serializeJotNote(note: JotNoteFile): string {
 	return JSON.stringify(note, null, 2);
 }
 
-function migratePage(value: unknown, index: number): JotNotePage | null {
+function parsePage(value: unknown, index: number): JotNotePage | null {
 	if (!isRecord(value)) return null;
 	const id = typeof value.id === 'string' && value.id.length > 0 ? value.id : `page-${index + 1}`;
-	const width = finitePositive(value.width) ? value.width : DEFAULT_PAGE_WIDTH;
-	const height = finitePositive(value.height) ? value.height : DEFAULT_PAGE_HEIGHT;
-	const strokes = Array.isArray(value.strokes)
-		? value.strokes
-				.filter(isRecord)
-				.map((stroke) => migrateStroke(stroke))
-		: [];
+	const width = value.width === undefined ? DEFAULT_PAGE_WIDTH : value.width;
+	const height = value.height === undefined ? DEFAULT_PAGE_HEIGHT : value.height;
+	if (!finitePositive(width) || !finitePositive(height)) return null;
+	if (!Array.isArray(value.strokes)) return null;
+
+	const strokes: Stroke[] = [];
+	for (const rawStroke of value.strokes) {
+		const stroke = parseStoredStroke(rawStroke);
+		if (!stroke) return null;
+		strokes.push(stroke);
+	}
+
 	return { id, width, height, strokes };
 }
 
