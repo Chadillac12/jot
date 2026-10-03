@@ -111,9 +111,9 @@ export class JotNoteSurface implements InkSurfaceController {
 		const paperSpacing = 64;
 		sheet.setCssStyles({
 			aspectRatio: `${page.width} / ${page.height}`,
-			'--jot-paper-x': `${(paperSpacing / page.width) * 100}%`,
-			'--jot-paper-y': `${(paperSpacing / page.height) * 100}%`,
 		});
+		sheet.style.setProperty('--jot-paper-x', `${(paperSpacing / page.width) * 100}%`);
+		sheet.style.setProperty('--jot-paper-y', `${(paperSpacing / page.height) * 100}%`);
 		wrapper.appendChild(sheet);
 
 		const key = documentPageKey(documentPath, page.id);
