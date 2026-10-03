@@ -21,6 +21,10 @@ const makeFs = (initial: Record<string, string> = {}): FileSystem => {
 		remove: vi.fn(async (path: string) => {
 			delete files[path];
 		}),
+		rename: vi.fn(async (oldPath: string, newPath: string) => {
+			files[newPath] = files[oldPath] ?? '';
+			delete files[oldPath];
+		}),
 	} as unknown as DataAdapter;
 	return { files, adapter };
 };
@@ -213,6 +217,64 @@ describe('SidecarStore.scheduleSave', () => {
 		expect(conflictPath ? fs.files[conflictPath] : undefined).toBe(remotePayload);
 		expect(fs.files['a.pdf.jot.json']).toContain('#00f');
 		expect(store.hasPendingSave('a.pdf')).toBe(false);
+	});
+});
+
+describe('SidecarStore.renamePdfPath', () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it('moves the sidecar to follow a renamed PDF', async () => {
+		const fs = makeFs({ 'Old/Notes.pdf.jot.json': validPayload });
+		const strokes = new StrokeStore();
+		strokes.setForKey('New/Notes.pdf::1', [
+			{ points: [{ x: 0, y: 0, pressure: 0.5 }], color: '#000', width: 0.005, tool: 'pen' },
+		]);
+		const store = new SidecarStore(fs.adapter, strokes);
+
+		await store.renamePdfPath('Old/Notes.pdf', 'New/Notes.pdf');
+
+		expect(fs.files['Old/Notes.pdf.jot.json']).toBeUndefined();
+		expect(fs.files['New/Notes.pdf.jot.json']).toBe(validPayload);
+	});
+
+	it('preserves an unexpected destination sidecar before replacing it', async () => {
+		const existingDestination = JSON.stringify({ version: JOT_FORMAT_VERSION, pages: { '2': [] } });
+		const fs = makeFs({
+			'Old/Notes.pdf.jot.json': validPayload,
+			'New/Notes.pdf.jot.json': existingDestination,
+		});
+		const store = new SidecarStore(fs.adapter, new StrokeStore());
+
+		await store.renamePdfPath('Old/Notes.pdf', 'New/Notes.pdf');
+
+		const conflict = Object.keys(fs.files).find((path) =>
+			path.startsWith('New/Notes.pdf.jot.json.conflict-'),
+		);
+		expect(conflict).toBeDefined();
+		expect(conflict ? fs.files[conflict] : undefined).toBe(existingDestination);
+		expect(fs.files['New/Notes.pdf.jot.json']).toBe(validPayload);
+	});
+
+	it('re-schedules a pending local save under the new PDF path', async () => {
+		const fs = makeFs({ 'Old/Notes.pdf.jot.json': validPayload });
+		const strokes = new StrokeStore();
+		strokes.setForKey('New/Notes.pdf::1', [
+			{ points: [{ x: 0.1, y: 0.1, pressure: 0.5 }], color: '#00f', width: 0.005, tool: 'pen' },
+		]);
+		const store = new SidecarStore(fs.adapter, strokes);
+		store.scheduleSave('Old/Notes.pdf');
+
+		await store.renamePdfPath('Old/Notes.pdf', 'New/Notes.pdf');
+
+		expect(store.hasPendingSave('Old/Notes.pdf')).toBe(false);
+		expect(store.hasPendingSave('New/Notes.pdf')).toBe(true);
+		await vi.advanceTimersByTimeAsync(750);
+		expect(fs.files['New/Notes.pdf.jot.json']).toContain('#00f');
 	});
 });
 
