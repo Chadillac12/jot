@@ -108,8 +108,11 @@ export class JotNoteSurface implements InkSurfaceController {
 
 		const sheet = doc.createElement('div');
 		sheet.className = `${SHEET_CLASS} jot-note-paper-${note.paper}`;
+		const paperSpacing = 64;
 		sheet.setCssStyles({
 			aspectRatio: `${page.width} / ${page.height}`,
+			'--jot-paper-x': `${(paperSpacing / page.width) * 100}%`,
+			'--jot-paper-y': `${(paperSpacing / page.height) * 100}%`,
 		});
 		wrapper.appendChild(sheet);
 
