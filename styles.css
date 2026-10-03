@@ -324,3 +324,100 @@
 	height: 17px;
 	stroke: currentColor;
 }
+
+/* Standalone .jot notebook view. */
+.jot-note-view {
+	height: 100%;
+	overflow: auto;
+	background: var(--background-secondary);
+}
+
+.jot-note-toolbar {
+	position: sticky;
+	top: 0;
+	z-index: 50;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	padding: 10px 12px;
+	background: var(--background-primary);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.jot-note-toolbar-group {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.jot-note-pages {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 24px;
+	padding: 24px 16px 72px;
+}
+
+.jot-note-page {
+	width: min(900px, 100%);
+}
+
+.jot-note-page-label {
+	margin: 0 0 6px 4px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	user-select: none;
+}
+
+.jot-note-sheet {
+	position: relative;
+	width: 100%;
+	overflow: hidden;
+	background-color: #ffffff;
+	border: 1px solid rgba(0, 0, 0, 0.16);
+	border-radius: 4px;
+	box-shadow: 0 3px 18px rgba(0, 0, 0, 0.16);
+}
+
+.jot-note-paper-ruled {
+	background-image: repeating-linear-gradient(
+		to bottom,
+		transparent 0,
+		transparent 27px,
+		rgba(63, 99, 148, 0.18) 27px,
+		rgba(63, 99, 148, 0.18) 28px
+	);
+}
+
+.jot-note-paper-grid {
+	background-image:
+		linear-gradient(rgba(63, 99, 148, 0.14) 1px, transparent 1px),
+		linear-gradient(90deg, rgba(63, 99, 148, 0.14) 1px, transparent 1px);
+	background-size: 28px 28px;
+}
+
+.jot-note-paper-dot {
+	background-image: radial-gradient(circle, rgba(63, 78, 102, 0.32) 1.2px, transparent 1.3px);
+	background-size: 28px 28px;
+}
+
+.jot-note-ink,
+.jot-note-live-ink {
+	position: absolute;
+	inset: 0;
+}
+
+.jot-note-ink {
+	pointer-events: none;
+	z-index: 1;
+}
+
+.jot-note-live-ink {
+	pointer-events: auto;
+	z-index: 2;
+	/* Finger gestures remain available for scrolling/zooming while Pencil
+	   events are captured by Jot's stylus-specific input path. */
+	touch-action: pan-y pinch-zoom;
+}
+
