@@ -1,17 +1,17 @@
-import type { OverlayManager } from './overlay-manager';
+import type { InkSurfaceController } from './ink-surface';
 import type { StrokeStore } from './stroke-store';
 import type { UndoEntry, UndoHistory } from './undo';
 
 export interface UndoControllerCallbacks {
-	activePdfPath: () => string | null;
-	onAfterApply: (pdfPath: string) => void;
+	activeDocumentPath: () => string | null;
+	onAfterApply: (documentPath: string) => void;
 }
 
 export class UndoController {
 	constructor(
 		private history: UndoHistory,
 		private strokes: StrokeStore,
-		private overlays: OverlayManager,
+		private overlays: InkSurfaceController,
 		private callbacks: UndoControllerCallbacks,
 	) {}
 
@@ -20,24 +20,24 @@ export class UndoController {
 	}
 
 	canUndo(): boolean {
-		const path = this.callbacks.activePdfPath();
+		const path = this.callbacks.activeDocumentPath();
 		return path !== null && this.history.canUndo(path);
 	}
 
 	canRedo(): boolean {
-		const path = this.callbacks.activePdfPath();
+		const path = this.callbacks.activeDocumentPath();
 		return path !== null && this.history.canRedo(path);
 	}
 
 	undo(): void {
-		const path = this.callbacks.activePdfPath();
+		const path = this.callbacks.activeDocumentPath();
 		if (!path) return;
 		const entry = this.history.popUndo(path, (key) => this.strokes.forKey(key));
 		if (entry) this.applyEntry(path, entry);
 	}
 
 	redo(): void {
-		const path = this.callbacks.activePdfPath();
+		const path = this.callbacks.activeDocumentPath();
 		if (!path) return;
 		const entry = this.history.popRedo(path, (key) => this.strokes.forKey(key));
 		if (entry) this.applyEntry(path, entry);
@@ -48,17 +48,17 @@ export class UndoController {
 	 * match the newest undo entry, which prevents an old user action from being
 	 * removed if the gesture state ever becomes stale.
 	 */
-	discardLatestTransient(pdfPath: string, key: string): boolean {
+	discardLatestTransient(documentPath: string, key: string): boolean {
 		const entry = this.history.discardLatestMatching(pdfPath, key);
 		if (!entry) return false;
-		this.applyEntry(pdfPath, entry);
+		this.applyEntry(documentPath, entry);
 		return true;
 	}
 
-	private applyEntry(pdfPath: string, entry: UndoEntry): void {
+	private applyEntry(documentPath: string, entry: UndoEntry): void {
 		this.strokes.setForKey(entry.key, [...entry.prevStrokes]);
 		const canvas = this.overlays.overlayForKey(entry.key);
 		if (canvas) this.overlays.redrawPage(canvas);
-		this.callbacks.onAfterApply(pdfPath);
+		this.callbacks.onAfterApply(documentPath);
 	}
 }
