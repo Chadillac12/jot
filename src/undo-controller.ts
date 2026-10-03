@@ -49,7 +49,7 @@ export class UndoController {
 	 * removed if the gesture state ever becomes stale.
 	 */
 	discardLatestTransient(documentPath: string, key: string): boolean {
-		const entry = this.history.discardLatestMatching(pdfPath, key);
+		const entry = this.history.discardLatestMatching(documentPath, key);
 		if (!entry) return false;
 		this.applyEntry(documentPath, entry);
 		return true;
