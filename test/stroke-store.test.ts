@@ -119,3 +119,20 @@ describe('StrokeStore.keysForPage', () => {
 		expect(store.keysForPage('a.pdf')).toEqual(['a.pdf::1']);
 	});
 });
+
+
+describe('StrokeStore.rekeyDocumentPath', () => {
+	it('moves every page key to the new document path without losing ink', () => {
+		const store = new StrokeStore();
+		store.setForKey('Old/Lecture.jot::page-1', [pen('#1')]);
+		store.setForKey('Old/Lecture.jot::page-2', [pen('#2')]);
+		store.setForKey('other.pdf::1', [pen('#other')]);
+
+		store.rekeyDocumentPath('Old/Lecture.jot', 'School/Lecture.jot');
+
+		expect(store.forKey('Old/Lecture.jot::page-1')).toEqual([]);
+		expect(store.forKey('School/Lecture.jot::page-1')[0]?.color).toBe('#1');
+		expect(store.forKey('School/Lecture.jot::page-2')[0]?.color).toBe('#2');
+		expect(store.forKey('other.pdf::1')[0]?.color).toBe('#other');
+	});
+});
