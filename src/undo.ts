@@ -60,6 +60,33 @@ export class UndoHistory {
 		return entry;
 	}
 
+
+	rekeyPath(oldPath: string, newPath: string): void {
+		if (oldPath === newPath) return;
+		this.rekeyStackMap(this.undoStacks, oldPath, newPath);
+		this.rekeyStackMap(this.redoStacks, oldPath, newPath);
+	}
+
+	private rekeyStackMap(
+		stacks: Map<string, UndoEntry[]>,
+		oldPath: string,
+		newPath: string,
+	): void {
+		const existing = stacks.get(oldPath);
+		if (!existing) return;
+		const oldPrefix = oldPath + '::';
+		const rewritten = existing.map((entry) => ({
+			...entry,
+			pdfPath: newPath,
+			key: entry.key.startsWith(oldPrefix)
+				? newPath + '::' + entry.key.slice(oldPrefix.length)
+				: entry.key,
+		}));
+		stacks.delete(oldPath);
+		const destination = stacks.get(newPath) ?? [];
+		stacks.set(newPath, [...destination, ...rewritten].slice(-MAX_UNDO_DEPTH));
+	}
+
 	dropPath(pdfPath: string): void {
 		this.undoStacks.delete(pdfPath);
 		this.redoStacks.delete(pdfPath);
