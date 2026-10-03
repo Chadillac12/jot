@@ -80,8 +80,8 @@ export function parseStoredStroke(value: unknown): Stroke | null {
 		const { x, y, pressure } = rawPoint;
 		if (!isFiniteNumber(x) || !isFiniteNumber(y) || !isFiniteNumber(pressure)) return null;
 		points.push({
-			x: clamp01(x),
-			y: clamp01(y),
+			x,
+			y,
 			pressure: clamp01(pressure),
 		});
 	}
@@ -108,8 +108,8 @@ export function migrateStroke(raw: Partial<Stroke>): Stroke {
 						isFiniteNumber(point?.pressure),
 				)
 				.map((point) => ({
-					x: clamp01(point.x),
-					y: clamp01(point.y),
+					x: point.x,
+					y: point.y,
 					pressure: clamp01(point.pressure),
 				}))
 		: [];
