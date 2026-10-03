@@ -130,6 +130,7 @@ export function serializeJotNote(note: JotNoteFile): string {
 function parsePage(value: unknown, index: number): JotNotePage | null {
 	if (!isRecord(value)) return null;
 	const id = typeof value.id === 'string' && value.id.length > 0 ? value.id : `page-${index + 1}`;
+	if (id.length > 128 || id.includes('::')) return null;
 	const width = value.width === undefined ? DEFAULT_PAGE_WIDTH : value.width;
 	const height = value.height === undefined ? DEFAULT_PAGE_HEIGHT : value.height;
 	if (!finitePositive(width) || !finitePositive(height)) return null;
