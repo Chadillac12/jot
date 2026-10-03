@@ -58,24 +58,55 @@ describe('SidecarStore.load', () => {
 		expect(strokes.forPage('a.pdf', 1)).toHaveLength(1);
 	});
 
-	it('silently skips malformed JSON', async () => {
+	it('keeps existing in-memory strokes when external JSON is malformed', async () => {
 		const fs = makeFs({ 'a.pdf.jot.json': 'not json at all' });
 		const strokes = new StrokeStore();
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.2, y: 0.2, pressure: 0.5 }], color: '#123', width: 0.005, tool: 'pen' },
+		]);
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const store = new SidecarStore(fs.adapter, strokes);
 		await store.load('a.pdf');
-		expect(strokes.hasFor('a.pdf')).toBe(false);
+		expect(strokes.forPage('a.pdf', 1)).toHaveLength(1);
+		expect(strokes.forPage('a.pdf', 1)[0]?.color).toBe('#123');
+		warn.mockRestore();
 	});
 
-	it('warns and skips when the file version is unsupported', async () => {
+	it('keeps existing in-memory strokes when the file version is unsupported', async () => {
 		const fs = makeFs({
 			'a.pdf.jot.json': JSON.stringify({ version: 99, pages: { '1': [] } }),
 		});
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const strokes = new StrokeStore();
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.2, y: 0.2, pressure: 0.5 }], color: '#123', width: 0.005, tool: 'pen' },
+		]);
 		const store = new SidecarStore(fs.adapter, strokes);
 		await store.load('a.pdf');
 		expect(warn).toHaveBeenCalled();
-		expect(strokes.hasFor('a.pdf')).toBe(false);
+		expect(strokes.forPage('a.pdf', 1)[0]?.color).toBe('#123');
+		warn.mockRestore();
+	});
+
+	it('rejects malformed persisted stroke coordinates without clearing good memory', async () => {
+		const fs = makeFs({
+			'a.pdf.jot.json': JSON.stringify({
+				version: JOT_FORMAT_VERSION,
+				pages: {
+					'1': [
+						{ points: [{ x: 'bad', y: 0, pressure: 0.5 }], color: '#000', width: 0.005, tool: 'pen' },
+					],
+				},
+			}),
+		});
+		const strokes = new StrokeStore();
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.2, y: 0.2, pressure: 0.5 }], color: '#123', width: 0.005, tool: 'pen' },
+		]);
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const store = new SidecarStore(fs.adapter, strokes);
+		await store.load('a.pdf');
+		expect(strokes.forPage('a.pdf', 1)[0]?.color).toBe('#123');
 		warn.mockRestore();
 	});
 });
@@ -150,6 +181,38 @@ describe('SidecarStore.scheduleSave', () => {
 		store.scheduleSave('a.pdf');
 		await vi.advanceTimersByTimeAsync(100);
 		expect(fs.adapter.write).not.toHaveBeenCalled();
+	});
+
+	it('tracks when local annotations still have a pending save', () => {
+		const store = new SidecarStore(makeFs().adapter, new StrokeStore());
+		expect(store.hasPendingSave('a.pdf')).toBe(false);
+		store.scheduleSave('a.pdf');
+		expect(store.hasPendingSave('a.pdf')).toBe(true);
+	});
+
+	it('preserves an external sidecar before flushing conflicting local ink', async () => {
+		const remotePayload = JSON.stringify({
+			version: JOT_FORMAT_VERSION,
+			pages: {
+				'1': [
+					{ points: [{ x: 0.9, y: 0.9, pressure: 0.5 }], color: '#f00', width: 0.005, tool: 'pen' },
+				],
+			},
+		});
+		const fs = makeFs({ 'a.pdf.jot.json': remotePayload });
+		const strokes = new StrokeStore();
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.1, y: 0.1, pressure: 0.5 }], color: '#00f', width: 0.005, tool: 'pen' },
+		]);
+		const store = new SidecarStore(fs.adapter, strokes);
+		store.scheduleSave('a.pdf');
+
+		const conflictPath = await store.preserveExternalConflictAndFlushLocal('a.pdf');
+
+		expect(conflictPath).not.toBeNull();
+		expect(conflictPath ? fs.files[conflictPath] : undefined).toBe(remotePayload);
+		expect(fs.files['a.pdf.jot.json']).toContain('#00f');
+		expect(store.hasPendingSave('a.pdf')).toBe(false);
 	});
 });
 
