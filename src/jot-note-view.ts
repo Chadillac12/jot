@@ -84,6 +84,10 @@ export class JotNoteView extends TextFileView {
 
 		this.loadError = null;
 		this.note = parsed.note;
+		// Disk reloads define a new history boundary. Keeping undo entries from
+		// before an external/sync update could resurrect stale strokes.
+		this.history = new UndoHistory();
+		this.undoController = null;
 		this.loadStrokesFromNote();
 		this.render();
 	}
