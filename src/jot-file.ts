@@ -48,7 +48,7 @@ export function parseJotText(text: string): JotFileFormat | null {
 
 		const pages: Record<string, Stroke[]> = {};
 		for (const [pageId, rawStrokes] of Object.entries(parsed.pages)) {
-			if (!Array.isArray(rawStrokes)) return null;
+			if (!/^\d+$/.test(pageId) || !Array.isArray(rawStrokes)) return null;
 			const strokes: Stroke[] = [];
 			for (const rawStroke of rawStrokes) {
 				const stroke = parseStoredStroke(rawStroke);
