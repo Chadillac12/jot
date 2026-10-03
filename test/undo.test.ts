@@ -132,3 +132,21 @@ function popAll(history: UndoHistory, pdfPath: string): UndoEntry[] {
 	}
 	return out;
 }
+
+
+describe('UndoHistory.rekeyPath', () => {
+	it('moves undo and redo history to the renamed document path', () => {
+		const history = new UndoHistory();
+		history.push(entry('Old/Lecture.jot', 'Old/Lecture.jot::page-1', [stroke('#before')]));
+		history.popUndo('Old/Lecture.jot', () => [stroke('#current')]);
+
+		history.rekeyPath('Old/Lecture.jot', 'School/Lecture.jot');
+
+		expect(history.canUndo('Old/Lecture.jot')).toBe(false);
+		expect(history.canRedo('Old/Lecture.jot')).toBe(false);
+		expect(history.canRedo('School/Lecture.jot')).toBe(true);
+		const redo = history.popRedo('School/Lecture.jot', () => []);
+		expect(redo?.key).toBe('School/Lecture.jot::page-1');
+		expect(redo?.pdfPath).toBe('School/Lecture.jot');
+	});
+});
