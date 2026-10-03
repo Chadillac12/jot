@@ -115,6 +115,66 @@ describe('SidecarStore.load', () => {
 	});
 });
 
+describe('SidecarStore protected originals', () => {
+	it('does not delete an unreadable original when there are no local strokes', async () => {
+		const original = '{not-json';
+		const fs = makeFs({ 'a.pdf.jot.json': original });
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const store = new SidecarStore(fs.adapter, new StrokeStore());
+
+		expect(await store.load('a.pdf')).toBe('protected');
+		await store.save('a.pdf');
+
+		expect(fs.files['a.pdf.jot.json']).toBe(original);
+		warn.mockRestore();
+	});
+
+	it('backs up an unreadable original before writing new local annotations', async () => {
+		const original = '{not-json';
+		const fs = makeFs({ 'a.pdf.jot.json': original });
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const strokes = new StrokeStore();
+		const store = new SidecarStore(fs.adapter, strokes);
+
+		expect(await store.load('a.pdf')).toBe('protected');
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.1, y: 0.1, pressure: 0.5 }], color: '#0f0', width: 0.005, tool: 'pen' },
+		]);
+		await store.save('a.pdf');
+
+		const recovery = Object.keys(fs.files).find((path) =>
+			path.startsWith('a.pdf.jot.json.recovery-'),
+		);
+		expect(recovery).toBeDefined();
+		expect(recovery ? fs.files[recovery] : undefined).toBe(original);
+		expect(fs.files['a.pdf.jot.json']).toContain('#0f0');
+		warn.mockRestore();
+	});
+
+	it('carries protected-original state to a renamed PDF path', async () => {
+		const original = '{not-json';
+		const fs = makeFs({ 'Old/a.pdf.jot.json': original });
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const strokes = new StrokeStore();
+		const store = new SidecarStore(fs.adapter, strokes);
+
+		expect(await store.load('Old/a.pdf')).toBe('protected');
+		strokes.rekeyDocumentPath('Old/a.pdf', 'New/a.pdf');
+		await store.renamePdfPath('Old/a.pdf', 'New/a.pdf');
+		strokes.setForKey('New/a.pdf::1', [
+			{ points: [{ x: 0.2, y: 0.2, pressure: 0.5 }], color: '#00f', width: 0.005, tool: 'pen' },
+		]);
+		await store.save('New/a.pdf');
+
+		const recovery = Object.keys(fs.files).find((path) =>
+			path.startsWith('New/a.pdf.jot.json.recovery-'),
+		);
+		expect(recovery).toBeDefined();
+		expect(recovery ? fs.files[recovery] : undefined).toBe(original);
+		warn.mockRestore();
+	});
+});
+
 describe('SidecarStore.save', () => {
 	it('writes a JSON payload at the .jot.json path when strokes are present', async () => {
 		const fs = makeFs();
