@@ -5,7 +5,7 @@ import {
 	pointerSamples,
 	predictedPointerSamples,
 } from './ink-sampling';
-import { pdfPathFromKey } from './jot-file';
+import { documentPathFromKey } from './jot-file';
 import { LongPressDetector } from './long-press';
 import type { Handedness, Palette, ToolState } from './palette';
 import {
@@ -13,9 +13,8 @@ import {
 	usesPencilDoubleTapHold,
 	usesTwoFingerHold,
 } from './palette-activation';
-import { OVERLAY_KEY_ATTR, OverlayManager } from './overlay-manager';
+import { INK_KEY_ATTR, type InkSaveScheduler, type InkSurfaceController } from './ink-surface';
 import { PenStrokeState } from './pen-stroke-state';
-import type { SidecarStore } from './sidecar-store';
 import { ERASE_RADIUS, strokeIntersects } from './stroke-math';
 import type { NormalizedPoint, Stroke } from './stroke-math';
 import { drawStroke } from './stroke-render';
@@ -53,8 +52,8 @@ interface CommittedStroke {
 export interface PointerEventHandlerDeps {
 	palette: Palette;
 	strokes: StrokeStore;
-	overlays: OverlayManager;
-	sidecar: SidecarStore;
+	overlays: InkSurfaceController;
+	sidecar: InkSaveScheduler;
 	undo: UndoController;
 	toolState: () => ToolState;
 	handedness: () => Handedness;
@@ -342,8 +341,8 @@ export class PointerEventHandler {
 	private rememberPencilTap(
 		e: PointerEvent,
 		hasUndoEntry: boolean,
-		key = this.canvas.getAttribute(OVERLAY_KEY_ATTR),
-		pdfPath = key ? pdfPathFromKey(key) : null,
+		key = this.canvas.getAttribute(INK_KEY_ATTR),
+		pdfPath = key ? documentPathFromKey(key) : null,
 	): void {
 		this.recentPencilTap = {
 			releasedAtMs: Date.now(),
@@ -427,10 +426,10 @@ export class PointerEventHandler {
 
 	private finalizeDrawingStroke(): CommittedStroke | null {
 		const points = this.state.drawingPoints();
-		const key = this.canvas.getAttribute(OVERLAY_KEY_ATTR);
+		const key = this.canvas.getAttribute(INK_KEY_ATTR);
 		let committed: CommittedStroke | null = null;
 		if (key && points.length > 0) {
-			const pdfPath = pdfPathFromKey(key);
+			const pdfPath = documentPathFromKey(key);
 			const tool = this.deps.toolState();
 			const hasUndoEntry = pdfPath !== null;
 			if (pdfPath) {
@@ -451,7 +450,7 @@ export class PointerEventHandler {
 	}
 
 	private eraseAtSamples(e: PointerEvent): boolean {
-		const key = this.canvas.getAttribute(OVERLAY_KEY_ATTR);
+		const key = this.canvas.getAttribute(INK_KEY_ATTR);
 		if (!key) return false;
 		const strokes = this.deps.strokes.forKey(key);
 		if (strokes.length === 0) return false;
@@ -472,15 +471,15 @@ export class PointerEventHandler {
 		if (removed === 0) return false;
 		this.deps.strokes.setForKey(key, kept);
 		this.deps.overlays.redrawPage(this.canvas);
-		const pdfPath = pdfPathFromKey(key);
+		const pdfPath = documentPathFromKey(key);
 		if (pdfPath) this.deps.sidecar.scheduleSave(pdfPath);
 		return true;
 	}
 
 	private snapshotCurrent() {
-		const key = this.canvas.getAttribute(OVERLAY_KEY_ATTR);
+		const key = this.canvas.getAttribute(INK_KEY_ATTR);
 		if (!key) return null;
-		const pdfPath = pdfPathFromKey(key);
+		const pdfPath = documentPathFromKey(key);
 		if (!pdfPath) return null;
 		return { pdfPath, key, prevStrokes: [...this.deps.strokes.forKey(key)] };
 	}
