@@ -5,6 +5,7 @@ import {
 	readCanvasSurface,
 	safeBackingStoreDpr,
 } from './canvas-surface';
+import { INK_KEY_ATTR } from './ink-surface';
 import { pageKey } from './jot-file';
 import { drawStroke } from './stroke-render';
 import type { Stroke } from './stroke-math';
@@ -16,7 +17,7 @@ const PAGE_ANCHOR_CLASS = 'jot-page-anchor';
 const PASSTHROUGH_CLASS = 'jot-passthrough';
 const PAGE_OBSERVED_ATTR = 'data-jot-observed';
 
-export const OVERLAY_KEY_ATTR = 'data-jot-key';
+export const OVERLAY_KEY_ATTR = INK_KEY_ATTR;
 
 export class OverlayManager {
 	private containerObservers = new Map<WorkspaceLeaf, MutationObserver>();
