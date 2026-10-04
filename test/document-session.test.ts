@@ -25,6 +25,17 @@ describe('DocumentSession state machine', () => {
 		expect(session.state).toBe('dirty');
 	});
 
+	it('permits only one in-flight save per document', () => {
+		const session = new DocumentSession('a.pdf');
+		session.beginLoad();
+		session.completeLoad();
+		session.markDirty();
+		const first = session.beginSave();
+		expect(first).not.toBeNull();
+		expect(session.beginSave()).toBeNull();
+		session.completeSave(first!);
+	});
+
 	it('keeps a failed revision dirty and retryable', () => {
 		const session = new DocumentSession('a.pdf');
 		session.beginLoad();
