@@ -39,6 +39,42 @@ describe('NotebookSessionManager', () => {
 		expect(session.note.paper).toBe('ruled');
 	});
 
+	it('records the exact persisted snapshot while a newer revision remains dirty', () => {
+		const manager = new NotebookSessionManager(new DocumentSessionManager());
+		const session = manager.get('Lecture.jot');
+		expect(session.loadFromText(serializeJotNote(createJotNote()))).toBe('loaded');
+
+		session.markDirty();
+		const token = session.beginSave();
+		expect(token).not.toBeNull();
+		const persistedText = session.serialize();
+
+		session.setPaperStyle('grid');
+		session.completeSave(token!, persistedText);
+
+		expect(session.rawData).toBe(persistedText);
+		expect(session.note.paper).toBe('grid');
+		expect(session.document.isDirty).toBe(true);
+		expect(session.document.state).toBe('dirty');
+	});
+
+	it('can resolve an external conflict by preserving local ownership and resuming save', () => {
+		const manager = new NotebookSessionManager(new DocumentSessionManager());
+		const session = manager.get('Lecture.jot');
+		expect(session.loadFromText(serializeJotNote(createJotNote()))).toBe('loaded');
+		session.markDirty();
+
+		const remote = createJotNote();
+		remote.paper = 'dot';
+		expect(session.loadFromText(serializeJotNote(remote))).toBe('conflict');
+		expect(session.externalConflictData).not.toBeNull();
+
+		session.resolveConflictKeepLocal();
+		expect(session.externalConflictData).toBeNull();
+		expect(session.document.state).toBe('dirty');
+		expect(session.beginSave()).not.toBeNull();
+	});
+
 	it('renames one shared model and preserves all ink/history ownership', () => {
 		const documents = new DocumentSessionManager();
 		const manager = new NotebookSessionManager(documents);
