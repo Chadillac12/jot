@@ -50,7 +50,7 @@ export class MergeService {
 	private async run(pdfPath: string, choice: MergeChoice, copyTarget: string): Promise<void> {
 		try {
 			const outPath = await this.writeMerged(pdfPath, choice, copyTarget);
-			if (choice === 'overwrite') await this.discardAnnotations(pdfPath);
+			if (choice === 'overwrite') this.clearAnnotationState(pdfPath);
 			new Notice(`Jot: notes merged into ${outPath}`);
 		} catch (err) {
 			console.error(`${PLUGIN_LOG} merge failed:`, err);
@@ -78,14 +78,20 @@ export class MergeService {
 		new Uint8Array(buffer).set(out);
 		const outPath = choice === 'overwrite' ? pdfPath : copyTarget;
 		const expectedPages = pages.length;
-		await transactionalWriteBinary(this.adapter, outPath, buffer, async (candidate) => {
-			const verified = await PDFDocument.load(candidate);
-			if (verified.getPageCount() !== expectedPages) {
-				throw new Error(
-					`Merged PDF verification failed: expected ${expectedPages} pages, found ${verified.getPageCount()}`,
-				);
-			}
-		});
+		await transactionalWriteBinary(
+			this.adapter,
+			outPath,
+			buffer,
+			async (candidate) => {
+				const verified = await PDFDocument.load(candidate);
+				if (verified.getPageCount() !== expectedPages) {
+					throw new Error(
+						`Merged PDF verification failed: expected ${expectedPages} pages, found ${verified.getPageCount()}`,
+					);
+				}
+			},
+			choice === 'overwrite' ? async () => this.sidecar.discard(pdfPath) : undefined,
+		);
 		return outPath;
 	}
 
@@ -100,8 +106,7 @@ export class MergeService {
 		return candidate;
 	}
 
-	private async discardAnnotations(pdfPath: string): Promise<void> {
-		await this.sidecar.discard(pdfPath);
+	private clearAnnotationState(pdfPath: string): void {
 		this.strokes.clearFor(pdfPath);
 		this.history.dropPath(pdfPath);
 		this.callbacks.redrawOverlays();
