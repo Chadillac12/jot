@@ -49,6 +49,7 @@ export class NotebookSession {
 	}
 
 	loadFromText(text: string): NotebookLoadStatus {
+		if (this.document.state !== 'unloaded' && text === this.rawDataValue) return 'unchanged';
 		if (!this.document.canReload()) {
 			if (text === this.rawDataValue) return 'unchanged';
 			this.document.markConflict(
