@@ -2,7 +2,6 @@
 /* eslint-disable
 	@typescript-eslint/no-explicit-any,
 	@typescript-eslint/no-unsafe-member-access,
-	@typescript-eslint/no-unsafe-argument,
 	@typescript-eslint/unbound-method,
 	obsidianmd/no-global-this,
 	obsidianmd/prefer-active-doc
