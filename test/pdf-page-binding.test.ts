@@ -151,6 +151,35 @@ describe('PdfPageBinding', () => {
 		expect(wire).toHaveBeenCalledTimes(2);
 	});
 
+	it('processes repeated size changes even when animation frames complete synchronously', () => {
+		const el = page();
+		let width = 800;
+		let height = 1000;
+		el.getBoundingClientRect = () =>
+			({
+				left: 0,
+				top: 0,
+				right: width,
+				bottom: height,
+				width,
+				height,
+				x: 0,
+				y: 0,
+				toJSON: () => ({}),
+			});
+		const binding = new PdfPageBinding(el, 'notes.pdf', new StrokeStore(), () => () => {});
+
+		width = 900;
+		height = 1100;
+		ResizeObserverMock.instances[0]?.fire();
+		expect(binding.persistentCanvas?.style.width).toBe('900px');
+
+		width = 1000;
+		height = 1200;
+		ResizeObserverMock.instances[0]?.fire();
+		expect(binding.persistentCanvas?.style.width).toBe('1000px');
+	});
+
 	it('does not redraw on resize callbacks when backing dimensions are unchanged', () => {
 		const el = page();
 		const strokes = new StrokeStore();
