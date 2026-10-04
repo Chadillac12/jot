@@ -55,10 +55,7 @@ export class JotNoteView extends TextFileView {
 	}
 
 	getViewData(): string {
-		if (this.loadError) {
-			this.data = this.rawData;
-			return this.rawData;
-		}
+		if (this.loadError) return this.rawData;
 		const path = this.documentPath ?? this.file?.path;
 		if (path) {
 			this.note = {
@@ -70,7 +67,6 @@ export class JotNoteView extends TextFileView {
 			};
 		}
 		this.rawData = serializeJotNote(this.note);
-		this.data = this.rawData;
 		return this.rawData;
 	}
 
