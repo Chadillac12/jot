@@ -68,7 +68,7 @@ function makeHarness() {
 			iterateAllLeaves: (fn: (value: unknown) => void) => fn(leaf),
 		},
 	};
-	const wire = vi.fn();
+	const wire = vi.fn(() => () => {});
 	const manager = new OverlayManager(app as any, new StrokeStore(), wire);
 	return { page, manager, wire };
 }
@@ -86,6 +86,11 @@ beforeEach(() => {
 		setTransform: vi.fn(),
 		clearRect: vi.fn(),
 	} as any);
+	window.requestAnimationFrame = (callback: FrameRequestCallback) => {
+		callback(0);
+		return 1;
+	};
+	window.cancelAnimationFrame = vi.fn();
 });
 
 describe('OverlayManager zoom recovery', () => {
