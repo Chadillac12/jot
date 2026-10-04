@@ -104,7 +104,7 @@ export default class JotPlugin extends Plugin {
 		});
 		this.addCommand({
 			id: 'retry-unsaved-data',
-			name: 'Retry unsaved Jot data',
+			name: 'Retry unsaved data',
 			callback: () => void this.flushAllPersistence(true),
 		});
 		this.addCommand({
@@ -230,12 +230,12 @@ export default class JotPlugin extends Plugin {
 			}),
 		);
 
-		this.registerDomEvent(window, 'resize', () => this.refreshFloatingPaletteButton());
-		this.registerDomEvent(window, 'pagehide', () => {
+		this.registerDomEvent(activeWindow, 'resize', () => this.refreshFloatingPaletteButton());
+		this.registerDomEvent(activeWindow, 'pagehide', () => {
 			void this.flushAllPersistence(false);
 		});
-		this.registerDomEvent(document, 'visibilitychange', () => {
-			if (document.visibilityState === 'hidden') void this.flushAllPersistence(false);
+		this.registerDomEvent(activeDocument, 'visibilitychange', () => {
+			if (activeDocument.visibilityState === 'hidden') void this.flushAllPersistence(false);
 		});
 
 		this.app.workspace.onLayoutReady(async () => {
@@ -399,7 +399,7 @@ export default class JotPlugin extends Plugin {
 		const conflictPath = await this.sidecar.preserveExternalConflictAndFlushLocal(pdfPath);
 		if (!conflictPath) {
 			new Notice(
-				'Jot: an external annotation update conflicted with local unsaved ink. Local ink remains dirty; use “Retry unsaved Jot data”.',
+				'Jot: an external annotation update conflicted with local unsaved ink. Local ink remains dirty; run “Retry unsaved data”.',
 				8000,
 			);
 			return;
