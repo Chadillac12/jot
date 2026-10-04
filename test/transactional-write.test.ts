@@ -9,13 +9,25 @@ interface MockFs {
 	text: Record<string, string>;
 	binary: Record<string, ArrayBuffer>;
 	adapter: DataAdapter;
-	failRenameOnce: () => void;
+	renameMock: ReturnType<typeof vi.fn>;
 }
 
 function makeFs(): MockFs {
 	const text: Record<string, string> = {};
 	const binary: Record<string, ArrayBuffer> = {};
-	let failRename = false;
+	const renameMock = vi.fn(async (oldPath: string, newPath: string) => {
+		if (oldPath in text) {
+			text[newPath] = text[oldPath]!;
+			delete text[oldPath];
+			return;
+		}
+		if (oldPath in binary) {
+			binary[newPath] = binary[oldPath]!;
+			delete binary[oldPath];
+			return;
+		}
+		throw new Error(`missing ${oldPath}`);
+	});
 	const adapter = {
 		exists: vi.fn(async (path: string) => path in text || path in binary),
 		read: vi.fn(async (path: string) => {
@@ -33,36 +45,13 @@ function makeFs(): MockFs {
 		writeBinary: vi.fn(async (path: string, value: ArrayBuffer) => {
 			binary[path] = value.slice(0);
 		}),
-		rename: vi.fn(async (oldPath: string, newPath: string) => {
-			if (failRename) {
-				failRename = false;
-				throw new Error('injected rename failure');
-			}
-			if (oldPath in text) {
-				text[newPath] = text[oldPath]!;
-				delete text[oldPath];
-				return;
-			}
-			if (oldPath in binary) {
-				binary[newPath] = binary[oldPath]!;
-				delete binary[oldPath];
-				return;
-			}
-			throw new Error(`missing ${oldPath}`);
-		}),
+		rename: renameMock,
 		remove: vi.fn(async (path: string) => {
 			delete text[path];
 			delete binary[path];
 		}),
 	} as unknown as DataAdapter;
-	return {
-		text,
-		binary,
-		adapter,
-		failRenameOnce: () => {
-			failRename = true;
-		},
-	};
+	return { text, binary, adapter, renameMock };
 }
 
 describe('transactionalWriteText', () => {
@@ -103,7 +92,7 @@ describe('transactionalWriteText', () => {
 		fs.text['a.txt'] = 'old';
 		// First rename is original -> backup, second is temp -> authoritative.
 		let renameCount = 0;
-		vi.mocked(fs.adapter.rename).mockImplementation(async (oldPath, newPath) => {
+		fs.renameMock.mockImplementation(async (oldPath: string, newPath: string) => {
 			renameCount += 1;
 			if (renameCount === 2) throw new Error('commit failed');
 			if (!(oldPath in fs.text)) throw new Error(`missing ${oldPath}`);
@@ -132,6 +121,8 @@ describe('transactionalWriteBinary', () => {
 		await transactionalWriteBinary(fs.adapter, 'a.bin', newData, validate);
 
 		expect(validate).toHaveBeenCalledTimes(2);
-		expect([...new Uint8Array(fs.binary['a.bin']!)]).toEqual([9, 8, 7]);
+		const committed = fs.binary['a.bin'];
+		expect(committed).toBeDefined();
+		expect([...new Uint8Array(committed ?? new ArrayBuffer(0))]).toEqual([9, 8, 7]);
 	});
 });
