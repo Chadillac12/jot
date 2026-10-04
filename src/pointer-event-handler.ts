@@ -543,11 +543,14 @@ export class PointerEventHandler {
 		if (strokes.length === 0) return false;
 		const rect = this.canvas.getBoundingClientRect();
 		const points = pointerSamples(e).map((sample) => normalizedPointFromSample(sample, rect));
+		const radiusPx = ERASE_RADIUS * Math.min(rect.width, rect.height);
+		const radiusX = rect.width > 0 ? radiusPx / rect.width : ERASE_RADIUS;
+		const radiusY = rect.height > 0 ? radiusPx / rect.height : ERASE_RADIUS;
 		const kept: Stroke[] = [];
 		let removed = 0;
 		for (const stroke of strokes) {
 			const intersects = points.some((point) =>
-				strokeIntersects(stroke, point.x, point.y, ERASE_RADIUS),
+				strokeIntersects(stroke, point.x, point.y, radiusX, radiusY),
 			);
 			if (intersects) {
 				removed += 1;
