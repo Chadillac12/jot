@@ -1,5 +1,5 @@
 import type { DataAdapter } from 'obsidian';
-import type { DocumentSessionManager } from './document-session';
+import { DocumentSessionManager } from './document-session';
 import {
 	JOT_FORMAT_VERSION,
 	isSupportedVersion,
@@ -29,7 +29,7 @@ export class SidecarStore {
 	constructor(
 		private adapter: DataAdapter,
 		private strokes: StrokeStore,
-		private sessions: DocumentSessionManager,
+		private sessions: DocumentSessionManager = new DocumentSessionManager(),
 		private onSaveError?: (pdfPath: string, error: Error) => void,
 	) {}
 
