@@ -178,8 +178,8 @@ export class JotNoteSurface implements InkSurfaceController {
 	private sizeCanvas(canvas: HTMLCanvasElement, sheet: HTMLElement): boolean {
 		const rect = sheet.getBoundingClientRect();
 		if (rect.width <= 0 || rect.height <= 0) return false;
-		const win = sheet.ownerDocument.defaultView ?? window;
-		const requestedDpr = devicePixelRatioFor(win);
+		const win = sheet.ownerDocument.defaultView;
+		const requestedDpr = devicePixelRatioFor(win ?? { devicePixelRatio: 1 });
 		const effectiveDpr = safeBackingStoreDpr(rect.width, rect.height, requestedDpr);
 		// Canvas CSS sizing is handled entirely by the stylesheet (100% x 100%).
 		// Only mutate the backing store when its pixel dimensions truly change;
