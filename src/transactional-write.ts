@@ -27,6 +27,7 @@ export async function transactionalWriteText(
 	const backupPath = `${path}.jot-backup-${id}`;
 	const hadOriginal = await adapter.exists(path);
 	let originalMoved = false;
+	let committed = false;
 
 	try {
 		await adapter.write(tempPath, text);
@@ -38,6 +39,7 @@ export async function transactionalWriteText(
 			originalMoved = true;
 		}
 		await adapter.rename(tempPath, path);
+		committed = true;
 
 		const committedText = await adapter.read(path);
 		if (!validate(committedText)) throw new Error(`Committed write validation failed for ${path}`);
@@ -45,6 +47,7 @@ export async function transactionalWriteText(
 		if (originalMoved) await cleanup(adapter, backupPath);
 	} catch (error) {
 		await cleanup(adapter, tempPath);
+		if (committed && !originalMoved) await cleanup(adapter, path);
 		if (originalMoved) {
 			try {
 				if (await adapter.exists(path)) await adapter.remove(path);
@@ -71,6 +74,7 @@ export async function transactionalWriteBinary(
 	const backupPath = `${path}.jot-backup-${id}`;
 	const hadOriginal = await adapter.exists(path);
 	let originalMoved = false;
+	let committed = false;
 
 	try {
 		await adapter.writeBinary(tempPath, bytes);
@@ -81,11 +85,13 @@ export async function transactionalWriteBinary(
 			originalMoved = true;
 		}
 		await adapter.rename(tempPath, path);
+		committed = true;
 		await validate(await adapter.readBinary(path));
 
 		if (originalMoved) await cleanup(adapter, backupPath);
 	} catch (error) {
 		await cleanup(adapter, tempPath);
+		if (committed && !originalMoved) await cleanup(adapter, path);
 		if (originalMoved) {
 			try {
 				if (await adapter.exists(path)) await adapter.remove(path);
