@@ -125,6 +125,20 @@ describe('OverlayManager zoom recovery', () => {
 		expect(wire).toHaveBeenCalledTimes(2);
 	});
 
+	it('disposes every Jot-owned page resource on plugin teardown', () => {
+		const { page, manager } = makeHarness();
+		manager.attachToActivePdf();
+		expect(page.querySelector('canvas.jot-overlay')).not.toBeNull();
+		expect(page.querySelector('canvas.jot-live-overlay')).not.toBeNull();
+		expect(page.classList.contains('jot-page-anchor')).toBe(true);
+
+		manager.disconnectAll();
+
+		expect(page.querySelector('canvas.jot-overlay')).toBeNull();
+		expect(page.querySelector('canvas.jot-live-overlay')).toBeNull();
+		expect(page.classList.contains('jot-page-anchor')).toBe(false);
+	});
+
 	it('resizes both layers safely after PDF zoom changes', () => {
 		const { page, manager } = makeHarness();
 		manager.attachToActivePdf();
