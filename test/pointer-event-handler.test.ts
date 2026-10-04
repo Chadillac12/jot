@@ -98,6 +98,7 @@ function makeHarness(
 		toolState: () => ({ tool: 'pen', color: '#000000', width: 0.0025 }),
 		handedness: () => 'right',
 		paletteActivation: () => currentActivation.value,
+		renderProfile: () => ({ version: 2, smoothing: 0.5, pressureSensitivity: 0.5 }),
 	}).attach();
 
 	return { canvas, palette, strokes, sidecar, undo, activation: currentActivation };
