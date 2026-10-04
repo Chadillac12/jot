@@ -113,7 +113,7 @@ export class JotNoteView extends TextFileView {
 		const session = this.session;
 		const oldPath = session?.path;
 		if (session && oldPath && oldPath !== file.path) {
-			this.plugin.renameDocumentSession(oldPath, file.path);
+			await this.plugin.renameDocumentSession(oldPath, file.path);
 		}
 		await super.onRename(file);
 		this.render();
