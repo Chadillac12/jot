@@ -5,6 +5,8 @@ import {
 	drawHighlighterPolyline,
 	drawSegment,
 	drawStroke,
+	penOutline,
+	setInkRenderTuning,
 } from '../src/stroke-render';
 
 const point = (x: number, y: number, pressure = 1): NormalizedPoint => ({ x, y, pressure });
@@ -161,5 +163,28 @@ describe('drawStroke', () => {
 			dpr: 2,
 		});
 		expect(ctx.setTransform).toHaveBeenCalledWith(2, 0, 0, 2, 0, 0);
+	});
+});
+
+
+describe('deterministic persisted rendering', () => {
+	const points = [point(0.1, 0.1, 0.2), point(0.5, 0.6, 0.8), point(0.9, 0.8, 0.4)];
+	const canvas = { width: 800, height: 600 };
+
+	it('uses a persisted render profile regardless of current settings', () => {
+		const profile = { version: 2 as const, smoothing: 0.25, pressureSensitivity: 0.8 };
+		setInkRenderTuning({ smoothing: 0, pressureSensitivity: 0 });
+		const first = penOutline(points, 0.003, canvas, profile);
+		setInkRenderTuning({ smoothing: 1, pressureSensitivity: 1 });
+		const second = penOutline(points, 0.003, canvas, profile);
+		expect(second).toEqual(first);
+	});
+
+	it('uses a fixed compatibility profile for legacy strokes without a profile', () => {
+		setInkRenderTuning({ smoothing: 0, pressureSensitivity: 0 });
+		const first = penOutline(points, 0.003, canvas);
+		setInkRenderTuning({ smoothing: 1, pressureSensitivity: 1 });
+		const second = penOutline(points, 0.003, canvas);
+		expect(second).toEqual(first);
 	});
 });
