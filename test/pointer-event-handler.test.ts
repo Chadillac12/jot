@@ -178,6 +178,11 @@ describe('PointerEventHandler palette activation', () => {
 			y: 0.3,
 			pressure: 0.6,
 		});
+		expect(strokes.forKey('notes.pdf::1')[0]?.render).toEqual({
+			version: 2,
+			smoothing: 0.5,
+			pressureSensitivity: 0.5,
+		});
 		expect(sidecar.scheduleSave).toHaveBeenCalledWith('notes.pdf');
 	});
 
