@@ -179,8 +179,8 @@ export class JotNoteView extends TextFileView {
 
 		this.pagesEl = this.contentEl.createDiv({ cls: 'jot-note-pages' });
 		this.surface = new JotNoteSurface(this.pagesEl, session.strokes, (canvas) => {
-			if (!this.surface || !this.undoController) return;
-			this.plugin.wireInkCanvas(
+			if (!this.surface || !this.undoController) return () => {};
+			return this.plugin.wireInkCanvas(
 				canvas,
 				this.surface,
 				{ scheduleSave: () => this.markDirtyAndSave() },
