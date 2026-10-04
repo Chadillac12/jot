@@ -12,6 +12,7 @@ export const OVERLAY_KEY_ATTR = INK_KEY_ATTR;
 
 export class OverlayManager {
 	private containerObservers = new Map<WorkspaceLeaf, MutationObserver>();
+	private containerElements = new Map<WorkspaceLeaf, HTMLElement>();
 	private pageBindings = new Map<WorkspaceLeaf, Map<HTMLElement, PdfPageBinding>>();
 
 	constructor(
@@ -26,17 +27,30 @@ export class OverlayManager {
 		const filePath = this.filePathForLeaf(leaf);
 		if (!filePath) return;
 		const container = leaf.view.containerEl;
+		const previousContainer = this.containerElements.get(leaf);
+		if (previousContainer && previousContainer !== container) {
+			this.disposeLeaf(leaf);
+		}
 
 		this.syncPages(leaf, container, filePath);
 		if (this.containerObservers.has(leaf)) return;
 
 		const observer = new MutationObserver(() => {
 			const currentPath = this.filePathForLeaf(leaf);
-			if (!currentPath) return;
+			if (!currentPath || leaf.view.getViewType?.() !== 'pdf') {
+				this.disposeLeaf(leaf);
+				return;
+			}
+			const currentContainer = leaf.view.containerEl;
+			if (currentContainer !== container) {
+				this.disposeLeaf(leaf);
+				return;
+			}
 			this.syncPages(leaf, container, currentPath);
 		});
 		observer.observe(container, { childList: true, subtree: true });
 		this.containerObservers.set(leaf, observer);
+		this.containerElements.set(leaf, container);
 	}
 
 	pruneClosedObservers(): void {
@@ -46,7 +60,10 @@ export class OverlayManager {
 			...this.containerObservers.keys(),
 			...this.pageBindings.keys(),
 		])) {
-			if (!live.has(leaf)) this.disposeLeaf(leaf);
+			const trackedContainer = this.containerElements.get(leaf);
+			const stillPdf = leaf.view.getViewType?.() === 'pdf' && this.filePathForLeaf(leaf) !== null;
+			const sameContainer = !trackedContainer || trackedContainer === leaf.view.containerEl;
+			if (!live.has(leaf) || !stillPdf || !sameContainer) this.disposeLeaf(leaf);
 		}
 	}
 
@@ -146,6 +163,7 @@ export class OverlayManager {
 	private disposeLeaf(leaf: WorkspaceLeaf): void {
 		this.containerObservers.get(leaf)?.disconnect();
 		this.containerObservers.delete(leaf);
+		this.containerElements.delete(leaf);
 		for (const binding of this.pageBindings.get(leaf)?.values() ?? []) binding.dispose();
 		this.pageBindings.delete(leaf);
 	}
