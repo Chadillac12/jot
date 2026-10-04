@@ -1,14 +1,25 @@
 import type { DataAdapter } from 'obsidian';
+import type { DocumentSessionManager } from './document-session';
 import {
+	JOT_FORMAT_VERSION,
 	isSupportedVersion,
 	jotPathFor,
 	parseJotText,
 } from './jot-file';
 import type { StrokeStore } from './stroke-store';
+import { transactionalWriteText } from './transactional-write';
 
 const SAVE_DEBOUNCE_MS = 750;
+const RETRY_DELAY_MS = 2000;
 const SELF_SAVE_SUPPRESS_MS = 1500;
 const PLUGIN_LOG = '[jot]';
+
+export type SidecarLoadStatus =
+	| 'loaded'
+	| 'missing'
+	| 'protected'
+	| 'dirty'
+	| 'error';
 
 export class SidecarStore {
 	private saveTimers = new Map<string, number>();
@@ -18,109 +29,148 @@ export class SidecarStore {
 	constructor(
 		private adapter: DataAdapter,
 		private strokes: StrokeStore,
+		private sessions: DocumentSessionManager,
+		private onSaveError?: (pdfPath: string, error: Error) => void,
 	) {}
 
-	async load(pdfPath: string): Promise<'loaded' | 'missing' | 'protected' | 'error'> {
+	async load(pdfPath: string): Promise<SidecarLoadStatus> {
+		const session = this.sessions.get(pdfPath);
+		if (!session.beginLoad()) return 'dirty';
+
 		const path = jotPathFor(pdfPath);
 		try {
 			if (!(await this.adapter.exists(path))) {
 				this.protectedOriginals.delete(pdfPath);
 				this.strokes.clearFor(pdfPath);
+				session.completeLoad();
 				return 'missing';
 			}
+
 			const text = await this.adapter.read(path);
 			const parsed = parseJotText(text);
 			if (!parsed) {
 				this.protectedOriginals.set(pdfPath, text);
-				console.warn(`${PLUGIN_LOG} ${path} is invalid; keeping current annotations in memory`);
+				const error = new Error(`${path} is invalid`);
+				session.failLoad(error);
+				console.warn(`${PLUGIN_LOG} ${error.message}; keeping current annotations in memory`);
 				return 'protected';
 			}
 			if (!isSupportedVersion(parsed.version)) {
 				this.protectedOriginals.set(pdfPath, text);
-				console.warn(
-					`${PLUGIN_LOG} ${path} has unknown version ${parsed.version}; keeping current annotations in memory`,
-				);
+				const error = new Error(`${path} has unknown version ${parsed.version}`);
+				session.failLoad(error);
+				console.warn(`${PLUGIN_LOG} ${error.message}; keeping current annotations in memory`);
 				return 'protected';
 			}
 
-			// Validate completely before mutating the live store. A malformed or
-			// future sidecar must never clear annotations that are already visible.
 			this.protectedOriginals.delete(pdfPath);
 			this.strokes.clearFor(pdfPath);
 			this.strokes.populateFromPayload(pdfPath, parsed.pages);
+			session.completeLoad();
 			return 'loaded';
-		} catch (err) {
-			console.error(`${PLUGIN_LOG} load failed for ${path}:`, err);
+		} catch (error) {
+			session.failLoad(error);
+			console.error(`${PLUGIN_LOG} load failed for ${path}:`, error);
 			return 'error';
 		}
 	}
 
-	async save(pdfPath: string): Promise<void> {
-		const path = jotPathFor(pdfPath);
-		const payload = this.strokes.buildPayload(pdfPath);
-		try {
-			if (!payload) {
-				// Never delete a sidecar we explicitly refused to parse. Leaving the
-				// original in place is safer than treating "could not load" as empty.
-				if (this.protectedOriginals.has(pdfPath)) return;
-				if (await this.adapter.exists(path)) {
-					await this.adapter.remove(path);
-				}
-				return;
-			}
+	async save(pdfPath: string): Promise<boolean> {
+		const session = this.sessions.get(pdfPath);
+		const token = session.beginSave();
+		if (!token) return !session.isDirty;
 
+		const path = jotPathFor(pdfPath);
+		const payload = this.strokes.buildPayload(pdfPath) ?? {
+			version: JOT_FORMAT_VERSION,
+			pages: {},
+		};
+		const text = JSON.stringify(payload, null, 2);
+
+		try {
 			const protectedText = this.protectedOriginals.get(pdfPath);
 			if (protectedText !== undefined) {
 				const recoveryPath = `${path}.recovery-${Date.now()}.json`;
-				// If the recovery copy cannot be written, abort rather than destroy
-				// an unknown/corrupt original.
-				await this.adapter.write(recoveryPath, protectedText);
-				this.protectedOriginals.delete(pdfPath);
+				await transactionalWriteText(this.adapter, recoveryPath, protectedText);
 			}
 
-			await this.adapter.write(path, JSON.stringify(payload, null, 2));
+			await transactionalWriteText(
+				this.adapter,
+				path,
+				text,
+				(candidate) => {
+					const parsed = parseJotText(candidate);
+					return parsed !== null && isSupportedVersion(parsed.version);
+				},
+			);
+			this.protectedOriginals.delete(pdfPath);
 			this.recentSelfSaves.set(path, Date.now());
-		} catch (err) {
-			console.error(`${PLUGIN_LOG} save failed for ${path}:`, err);
+			session.completeSave(token);
+
+			// A new edit may have arrived while the previous revision was in flight.
+			if (session.isDirty) this.queueSave(pdfPath, SAVE_DEBOUNCE_MS);
+			return true;
+		} catch (error) {
+			session.failSave(token, error);
+			const normalized = error instanceof Error ? error : new Error(String(error));
+			console.error(`${PLUGIN_LOG} save failed for ${path}:`, normalized);
+			this.onSaveError?.(pdfPath, normalized);
+			this.queueSave(pdfPath, RETRY_DELAY_MS);
+			return false;
 		}
 	}
 
 	scheduleSave(pdfPath: string): void {
-		const existing = this.saveTimers.get(pdfPath);
-		if (existing !== undefined) window.clearTimeout(existing);
-		const id = window.setTimeout(() => {
-			this.saveTimers.delete(pdfPath);
-			void this.save(pdfPath);
-		}, SAVE_DEBOUNCE_MS);
-		this.saveTimers.set(pdfPath, id);
+		this.sessions.get(pdfPath).markDirty();
+		this.queueSave(pdfPath, SAVE_DEBOUNCE_MS);
+	}
+
+	async flush(pdfPath: string): Promise<boolean> {
+		this.clearTimer(pdfPath);
+		const session = this.sessions.get(pdfPath);
+		if (!session.isDirty) return true;
+		return this.save(pdfPath);
+	}
+
+	async flushAll(): Promise<boolean> {
+		const paths = new Set<string>([
+			...this.saveTimers.keys(),
+			...this.sessions
+				.all()
+				.filter((session) => session.isDirty)
+				.map((session) => session.path),
+		]);
+		let allSaved = true;
+		for (const path of paths) {
+			if (!(await this.flush(path))) allSaved = false;
+		}
+		return allSaved;
 	}
 
 	hasPendingSave(pdfPath: string): boolean {
-		return this.saveTimers.has(pdfPath);
+		return this.sessions.get(pdfPath).isDirty || this.saveTimers.has(pdfPath);
 	}
 
-	/**
-	 * An external sidecar edit arrived while local Pencil input is still dirty.
-	 * Preserve the external bytes in a conflict file before allowing the local
-	 * state to win, so neither device's annotations are silently destroyed.
-	 */
 	async preserveExternalConflictAndFlushLocal(pdfPath: string): Promise<string | null> {
-		const timer = this.saveTimers.get(pdfPath);
-		if (timer === undefined) return null;
+		const session = this.sessions.get(pdfPath);
+		if (!session.isDirty) return null;
 
 		const sidecarPath = jotPathFor(pdfPath);
 		try {
 			if (!(await this.adapter.exists(sidecarPath))) return null;
 			const remoteText = await this.adapter.read(sidecarPath);
 			const conflictPath = `${sidecarPath}.conflict-${Date.now()}.json`;
-			await this.adapter.write(conflictPath, remoteText);
-
-			window.clearTimeout(timer);
-			this.saveTimers.delete(pdfPath);
-			await this.save(pdfPath);
+			await transactionalWriteText(this.adapter, conflictPath, remoteText);
+			session.markConflict();
+			session.resolveConflictKeepLocal();
+			await this.flush(pdfPath);
 			return conflictPath;
-		} catch (err) {
-			console.error(`${PLUGIN_LOG} could not preserve external conflict for ${sidecarPath}:`, err);
+		} catch (error) {
+			session.markConflict(error);
+			console.error(
+				`${PLUGIN_LOG} could not preserve external conflict for ${sidecarPath}:`,
+				error,
+			);
 			return null;
 		}
 	}
@@ -134,32 +184,36 @@ export class SidecarStore {
 			this.protectedOriginals.delete(oldPdfPath);
 			this.protectedOriginals.set(newPdfPath, protectedText);
 		}
-		const pending = this.saveTimers.get(oldPdfPath);
-		if (pending !== undefined) {
-			window.clearTimeout(pending);
-			this.saveTimers.delete(oldPdfPath);
-		}
+
+		const hadPending = this.hasPendingSave(oldPdfPath);
+		this.clearTimer(oldPdfPath);
+		this.sessions.rename(oldPdfPath, newPdfPath);
 
 		try {
 			if (await this.adapter.exists(oldSidecar)) {
 				if (await this.adapter.exists(newSidecar)) {
 					const destinationText = await this.adapter.read(newSidecar);
 					const conflictPath = `${newSidecar}.conflict-${Date.now()}.json`;
-					await this.adapter.write(conflictPath, destinationText);
+					await transactionalWriteText(this.adapter, conflictPath, destinationText);
 					await this.adapter.remove(newSidecar);
 				}
 				await this.adapter.rename(oldSidecar, newSidecar);
 			}
 			this.recentSelfSaves.delete(oldSidecar);
-		} catch (err) {
+		} catch (error) {
 			console.error(
 				`${PLUGIN_LOG} could not move sidecar from ${oldSidecar} to ${newSidecar}:`,
-				err,
+				error,
+			);
+			this.onSaveError?.(
+				newPdfPath,
+				error instanceof Error ? error : new Error(String(error)),
 			);
 		}
 
-		if (pending !== undefined || this.strokes.hasFor(newPdfPath)) {
-			this.scheduleSave(newPdfPath);
+		if (hadPending || this.strokes.hasFor(newPdfPath)) {
+			if (!this.sessions.get(newPdfPath).isDirty) this.sessions.get(newPdfPath).markDirty();
+			this.queueSave(newPdfPath, SAVE_DEBOUNCE_MS);
 		}
 	}
 
@@ -172,19 +226,25 @@ export class SidecarStore {
 	}
 
 	async discard(pdfPath: string): Promise<void> {
+		await this.flush(pdfPath);
 		const path = jotPathFor(pdfPath);
 		this.protectedOriginals.delete(pdfPath);
-		try {
-			if (await this.adapter.exists(path)) {
-				await this.adapter.remove(path);
-			}
-		} catch (err) {
-			console.error(`${PLUGIN_LOG} could not delete sidecar ${path}:`, err);
-		}
+		if (await this.adapter.exists(path)) await this.adapter.remove(path);
+		this.sessions.remove(pdfPath);
 	}
 
-	cancelAllPending(): void {
-		this.saveTimers.forEach((id) => window.clearTimeout(id));
-		this.saveTimers.clear();
+	private queueSave(pdfPath: string, delayMs: number): void {
+		this.clearTimer(pdfPath);
+		const id = window.setTimeout(() => {
+			this.saveTimers.delete(pdfPath);
+			void this.save(pdfPath);
+		}, delayMs);
+		this.saveTimers.set(pdfPath, id);
+	}
+
+	private clearTimer(pdfPath: string): void {
+		const existing = this.saveTimers.get(pdfPath);
+		if (existing !== undefined) window.clearTimeout(existing);
+		this.saveTimers.delete(pdfPath);
 	}
 }
