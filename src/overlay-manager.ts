@@ -79,10 +79,14 @@ class PdfPageBinding {
 			this.onResize(this);
 			return;
 		}
-		this.resizeFrame = win.requestAnimationFrame(() => {
+		let completedSynchronously = false;
+		let frame = 0;
+		frame = win.requestAnimationFrame(() => {
+			completedSynchronously = true;
 			this.resizeFrame = null;
 			if (!this.disposed) this.onResize(this);
 		});
+		if (!completedSynchronously) this.resizeFrame = frame;
 	}
 
 	dispose(): void {
