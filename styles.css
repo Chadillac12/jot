@@ -405,6 +405,8 @@
 .jot-note-live-ink {
 	position: absolute;
 	inset: 0;
+	width: 100%;
+	height: 100%;
 }
 
 .jot-note-ink {
@@ -417,6 +419,9 @@
 	z-index: 2;
 	/* Finger gestures remain available for scrolling/zooming while Pencil
 	   events are captured by Jot's stylus-specific input path. */
-	touch-action: pan-y pinch-zoom;
+	/* WebKit may apply touch-action to direct stylus input as well as fingers.
+	   manipulation keeps finger scrolling/zooming available without the more
+	   aggressive pan-y cancellation behavior that was stealing Pencil streams. */
+	touch-action: manipulation;
 }
 
