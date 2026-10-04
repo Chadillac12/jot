@@ -330,6 +330,21 @@ describe('SidecarStore conflicts and renames', () => {
 		expect(fs.files['New/a.pdf.jot.json']).toContain('#222222');
 	});
 
+	it('moves a protected unreadable sidecar byte-for-byte with the renamed PDF', async () => {
+		const broken = '{broken';
+		const fs = makeFs({ 'Old/a.pdf.jot.json': broken });
+		const sessions = new DocumentSessionManager();
+		const store = new SidecarStore(fs.adapter, sessions);
+		expect(await store.load('Old/a.pdf')).toBe('protected');
+
+		await store.renamePdfPath('Old/a.pdf', 'New/a.pdf');
+
+		expect(fs.files['Old/a.pdf.jot.json']).toBeUndefined();
+		expect(fs.files['New/a.pdf.jot.json']).toBe(broken);
+		expect(sessions.get('Old/a.pdf')).toBeNull();
+		expect(sessions.pdf('New/a.pdf').state).toBe('conflict');
+	});
+
 	it('preserves a destination sidecar conflict before replacing it on rename', async () => {
 		const source = payload('#111111');
 		const destination = payload('#999999');
