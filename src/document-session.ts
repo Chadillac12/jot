@@ -81,6 +81,7 @@ export class DocumentSession {
 	}
 
 	beginSave(): SaveToken | null {
+		if (this.currentState === 'saving' || this.currentState === 'loading') return null;
 		if (!this.isDirty) {
 			if (this.currentState !== 'conflict') this.currentState = 'clean';
 			return null;
