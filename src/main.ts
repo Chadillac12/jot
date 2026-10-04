@@ -399,7 +399,7 @@ export default class JotPlugin extends Plugin {
 		const conflictPath = await this.sidecar.preserveExternalConflictAndFlushLocal(pdfPath);
 		if (!conflictPath) {
 			new Notice(
-				'Jot: an external annotation update conflicted with local unsaved ink. Local ink remains dirty; run “Retry unsaved data”.',
+				'Jot: an external annotation update conflicted with local unsaved ink. Local ink remains dirty; run “retry unsaved data”.',
 				8000,
 			);
 			return;
