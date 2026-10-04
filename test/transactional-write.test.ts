@@ -9,13 +9,13 @@ interface MockFs {
 	text: Record<string, string>;
 	binary: Record<string, ArrayBuffer>;
 	adapter: DataAdapter;
-	renameMock: ReturnType<typeof vi.fn>;
+	renameMock: ReturnType<typeof vi.fn<(oldPath: string, newPath: string) => Promise<void>>>;
 }
 
 function makeFs(): MockFs {
 	const text: Record<string, string> = {};
 	const binary: Record<string, ArrayBuffer> = {};
-	const renameMock = vi.fn(async (oldPath: string, newPath: string) => {
+	const renameMock = vi.fn<(oldPath: string, newPath: string) => Promise<void>>(async (oldPath, newPath) => {
 		if (oldPath in text) {
 			text[newPath] = text[oldPath]!;
 			delete text[oldPath];
