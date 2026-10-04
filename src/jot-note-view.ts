@@ -86,25 +86,15 @@ export class JotNoteView extends TextFileView {
 		this.render();
 	}
 
-	override async save(clear?: boolean): Promise<void> {
+	override async save(_clear?: boolean): Promise<void> {
 		const session = this.session;
 		if (!session || session.loadError) return;
-		const revision = session.beginSave();
-		if (revision === null) {
-			if (session.state === 'saving') return;
-			await super.save(clear);
-			return;
-		}
-
-		const serialized = session.serializeCurrent();
 		try {
-			await super.save(clear);
-			session.notebookSaveSucceeded(revision, serialized);
-			this.data = serialized;
+			await this.plugin.saveNotebookSession(session);
+			this.data = session.rawData;
 			this.saveRetryCount = 0;
 			this.clearSaveRetry();
 		} catch (error) {
-			session.saveFailed(error);
 			this.scheduleSaveRetry();
 			new Notice(
 				`Jot: notebook save failed and remains dirty — ${error instanceof Error ? error.message : String(error)}`,
