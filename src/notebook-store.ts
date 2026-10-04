@@ -1,4 +1,4 @@
-import type { TFile, Vault } from 'obsidian';
+import type { TAbstractFile, TFile, Vault } from 'obsidian';
 import type { NotebookSessionManager } from './notebook-session';
 
 const SAVE_DEBOUNCE_MS = 750;
@@ -96,9 +96,9 @@ export class NotebookStore {
 		let externalConflict: string | null = null;
 		try {
 			const file = this.vault.getAbstractFileByPath(path);
-			if (!file || !('extension' in file)) throw new Error(`Notebook file not found: ${path}`);
+			if (!isTFile(file)) throw new Error(`Notebook file not found: ${path}`);
 			const baseline = session.rawData;
-			await this.vault.process(file as TFile, (current) => {
+			await this.vault.process(file, (current) => {
 				if (current !== baseline && current !== prepared.text) {
 					externalConflict = current;
 					throw new Error('Notebook changed externally during save');
@@ -137,3 +137,8 @@ export class NotebookStore {
 		this.saveTimers.delete(path);
 	}
 }
+
+function isTFile(file: TAbstractFile | null): file is TFile {
+	return file !== null && 'extension' in file;
+}
+
