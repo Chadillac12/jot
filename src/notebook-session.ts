@@ -127,6 +127,12 @@ export class NotebookSession {
 		this.notify('state');
 	}
 
+	recordExternalConflict(text: string, error?: unknown): void {
+		this.externalConflictDataValue = text;
+		this.lifecycle.markConflict(error);
+		this.notify('state');
+	}
+
 	resolveConflictKeepLocal(): void {
 		this.externalConflictDataValue = null;
 		this.lifecycle.resolveConflictKeepLocal();
