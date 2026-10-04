@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/unbound-method */
 import type { DataAdapter } from 'obsidian';
 import { describe, expect, it, vi } from 'vitest';
 import { transactionalWriteBinary, transactionalWriteText } from '../src/transactional-write';
