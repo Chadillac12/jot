@@ -1,0 +1,191 @@
+import type { DocumentSession, DocumentSessionManager, SaveToken } from './document-session';
+import { documentPageKey } from './jot-file';
+import {
+	createJotNote,
+	nextPageId,
+	parseJotNoteTextResult,
+	serializeJotNote,
+	type JotNoteFile,
+	type JotNoteParseResult,
+	type JotPaperStyle,
+} from './jot-note-file';
+import { StrokeStore } from './stroke-store';
+import { UndoHistory } from './undo';
+
+export type NotebookLoadStatus = 'loaded' | 'unchanged' | 'conflict' | 'error';
+
+export class NotebookSession {
+	readonly strokes = new StrokeStore();
+	readonly history = new UndoHistory();
+	readonly document: DocumentSession;
+
+	private noteValue: JotNoteFile = createJotNote();
+	private rawDataValue = '';
+	private loadErrorValue: string | null = null;
+	private listeners = new Set<() => void>();
+
+	constructor(
+		path: string,
+		documentSessions: DocumentSessionManager,
+	) {
+		this.document = documentSessions.get(path);
+	}
+
+	get path(): string {
+		return this.document.path;
+	}
+
+	get note(): JotNoteFile {
+		return this.noteValue;
+	}
+
+	get rawData(): string {
+		return this.rawDataValue;
+	}
+
+	get loadError(): string | null {
+		return this.loadErrorValue;
+	}
+
+	loadFromText(text: string): NotebookLoadStatus {
+		if (!this.document.canReload()) {
+			if (text === this.rawDataValue) return 'unchanged';
+			this.document.markConflict(
+				new Error('External notebook data changed while local edits were dirty'),
+			);
+			return 'conflict';
+		}
+		if (!this.document.beginLoad()) return 'conflict';
+
+		const parsed = parseJotNoteTextResult(text);
+		if (!parsed.ok) {
+			this.rawDataValue = text;
+			this.loadErrorValue = parsed.message;
+			this.document.failLoad(new Error(parsed.message));
+			this.notify();
+			return 'error';
+		}
+
+		this.applyParsed(parsed, text);
+		return 'loaded';
+	}
+
+	serialize(): string {
+		if (this.loadErrorValue) return this.rawDataValue;
+		this.noteValue = {
+			...this.noteValue,
+			pages: this.noteValue.pages.map((page) => ({
+				...page,
+				strokes: [...this.strokes.forKey(documentPageKey(this.path, page.id))],
+			})),
+		};
+		this.rawDataValue = serializeJotNote(this.noteValue);
+		return this.rawDataValue;
+	}
+
+	markDirty(): number {
+		const revision = this.document.markDirty();
+		this.notify();
+		return revision;
+	}
+
+	beginSave(): SaveToken | null {
+		return this.document.beginSave();
+	}
+
+	completeSave(token: SaveToken): void {
+		this.rawDataValue = this.serialize();
+		this.document.completeSave(token);
+		this.notify();
+	}
+
+	failSave(token: SaveToken, error: unknown): void {
+		this.document.failSave(token, error);
+		this.notify();
+	}
+
+	setPaperStyle(style: JotPaperStyle): void {
+		if (this.loadErrorValue || this.noteValue.paper === style) return;
+		this.noteValue = { ...this.noteValue, paper: style };
+		this.markDirty();
+	}
+
+	addPage(): string | null {
+		if (this.loadErrorValue) return null;
+		const id = nextPageId(this.noteValue.pages);
+		this.noteValue = {
+			...this.noteValue,
+			pages: [
+				...this.noteValue.pages,
+				{
+					id,
+					width: 1536,
+					height: 2048,
+					strokes: [],
+				},
+			],
+		};
+		this.markDirty();
+		return id;
+	}
+
+	rename(newPath: string): void {
+		const oldPath = this.path;
+		if (oldPath === newPath) return;
+		this.strokes.rekeyDocumentPath(oldPath, newPath);
+		this.history.rekeyPath(oldPath, newPath);
+		this.document.rename(newPath);
+		this.notify();
+	}
+
+	subscribe(listener: () => void): () => void {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
+	}
+
+	notify(): void {
+		for (const listener of this.listeners) listener();
+	}
+
+	private applyParsed(parsed: Extract<JotNoteParseResult, { ok: true }>, text: string): void {
+		this.noteValue = parsed.note;
+		this.rawDataValue = text;
+		this.loadErrorValue = null;
+		this.strokes.clearFor(this.path);
+		for (const page of parsed.note.pages) {
+			this.strokes.setForKey(documentPageKey(this.path, page.id), [...page.strokes]);
+		}
+		this.history.dropPath(this.path);
+		this.document.completeLoad();
+		this.notify();
+	}
+}
+
+export class NotebookSessionManager {
+	private sessions = new Map<string, NotebookSession>();
+
+	constructor(private documentSessions: DocumentSessionManager) {}
+
+	get(path: string): NotebookSession {
+		let session = this.sessions.get(path);
+		if (!session) {
+			session = new NotebookSession(path, this.documentSessions);
+			this.sessions.set(path, session);
+		}
+		return session;
+	}
+
+	rename(oldPath: string, newPath: string): NotebookSession {
+		const session = this.get(oldPath);
+		this.sessions.delete(oldPath);
+		this.documentSessions.rename(oldPath, newPath);
+		session.rename(newPath);
+		this.sessions.set(newPath, session);
+		return session;
+	}
+
+	remove(path: string): void {
+		this.sessions.delete(path);
+		this.documentSessions.remove(path);
+	}
+}
