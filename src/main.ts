@@ -1,43 +1,76 @@
 import { Notice, Plugin, TFile } from 'obsidian';
+import {
+	DocumentSessionManager,
+	type NotebookDocumentSession,
+} from './document-session';
 import type { InkSaveScheduler, InkSurfaceController } from './ink-surface';
-import { DEFAULT_TOOL_STATE, Palette, ToolState } from './palette';
+import { DEFAULT_TOOL_STATE, Palette, type ToolState } from './palette';
 import { normalizePalettePreferences } from './palette-activation';
-import { DEFAULT_SETTINGS, JotSettings, JotSettingTab } from './settings';
+import { DEFAULT_SETTINGS, type JotSettings, JotSettingTab } from './settings';
 import { ConfirmClearModal } from './clear';
 import { collectClearOperations, countStrokes, toUndoEntries } from './clear-ops';
 import { FloatingPaletteButton } from './floating-palette-button';
 import { PointerEventHandler } from './pointer-event-handler';
 import { isSidecarPath, pdfPathFromSidecar } from './jot-file';
-import { JOT_NOTE_EXTENSION, JOT_NOTE_VIEW_TYPE, createJotNote, serializeJotNote } from './jot-note-file';
+import {
+	JOT_NOTE_EXTENSION,
+	JOT_NOTE_VIEW_TYPE,
+	createJotNote,
+	serializeJotNote,
+} from './jot-note-file';
 import { JotNoteView } from './jot-note-view';
 import { MergeService } from './merge-service';
+import { NotebookStore } from './notebook-store';
 import { OverlayManager } from './overlay-manager';
-import { SidecarStore } from './sidecar-store';
-import { StrokeStore } from './stroke-store';
-import { setInkRenderTuning } from './stroke-render';
+import { SidecarStore, type SidecarLoadStatus } from './sidecar-store';
+import {
+	currentInkRenderProfile,
+	setInkRenderTuning,
+} from './stroke-render';
 import { UndoController } from './undo-controller';
-import { UndoEntry, UndoHistory } from './undo';
+import type { UndoEntry } from './undo';
 
 export type { Handedness } from './palette';
 
 const PLUGIN_LOG = '[jot]';
 
 export default class JotPlugin extends Plugin {
-	private strokes = new StrokeStore();
+	private readonly sessions = new DocumentSessionManager();
+	private readonly strokes = this.sessions.strokes;
+	private readonly history = this.sessions.history;
 	private sidecar!: SidecarStore;
+	private notebookStore!: NotebookStore;
 	private merge!: MergeService;
 	private overlays!: OverlayManager;
 	private toolState: ToolState = { ...DEFAULT_TOOL_STATE };
 	private palette!: Palette;
 	private floatingPaletteButton!: FloatingPaletteButton;
 	settings: JotSettings = { ...DEFAULT_SETTINGS };
-	private history = new UndoHistory();
 	private undoController!: UndoController;
+	private lastActivePdfPath: string | null = null;
 
 	async onload() {
 		await this.loadSettings();
 		this.applyInkSettings();
-		this.sidecar = new SidecarStore(this.app.vault.adapter, this.strokes);
+
+		this.sidecar = new SidecarStore(this.app.vault.adapter, this.sessions, {
+			onSaveError: (path, error, retryCount) => {
+				const retrying = retryCount <= 3 ? ' Jot will retry automatically.' : '';
+				new Notice(`Jot: could not save annotations for ${path}: ${error.message}.${retrying}`, 8000);
+			},
+			onSaveRecovered: (path) => {
+				new Notice(`Jot: annotation saving recovered for ${path}.`);
+			},
+		});
+		this.notebookStore = new NotebookStore(this.app.vault.adapter, this.sessions, {
+			onSaveError: (path, error) => {
+				new Notice(`Jot: could not save ${path}: ${error.message}. The notebook remains dirty.`, 8000);
+			},
+			onSaveRecovered: (path) => {
+				new Notice(`Jot: notebook saving recovered for ${path}.`);
+			},
+		});
+
 		this.overlays = new OverlayManager(this.app, this.strokes, (canvas) =>
 			this.wirePointerEvents(canvas),
 		);
@@ -56,16 +89,23 @@ export default class JotPlugin extends Plugin {
 				redrawOverlays: () => this.overlays.redrawOverlaysForActivePdf(),
 			},
 		);
+
 		this.registerView(
 			JOT_NOTE_VIEW_TYPE,
 			(leaf) => new JotNoteView(leaf, this),
 		);
 		this.registerExtensions([JOT_NOTE_EXTENSION], JOT_NOTE_VIEW_TYPE);
 		this.addSettingTab(new JotSettingTab(this.app, this));
+
 		this.addCommand({
 			id: 'new-handwritten-note',
 			name: 'Create handwritten note',
 			callback: () => void this.createJotNoteFile(),
+		});
+		this.addCommand({
+			id: 'retry-unsaved-data',
+			name: 'Retry unsaved Jot data',
+			callback: () => void this.flushAllPersistence(true),
 		});
 		this.addCommand({
 			id: 'merge-notes-into-pdf',
@@ -97,6 +137,7 @@ export default class JotPlugin extends Plugin {
 				return true;
 			},
 		});
+
 		this.palette = new Palette(
 			this.toolState,
 			(state) => {
@@ -119,6 +160,7 @@ export default class JotPlugin extends Plugin {
 				highlighter: this.settings.highlighterState,
 			},
 		);
+
 		this.floatingPaletteButton = new FloatingPaletteButton((doc, x, y) => {
 			this.palette.show(doc.body, x, y, this.settings.handedness);
 		});
@@ -128,12 +170,25 @@ export default class JotPlugin extends Plugin {
 
 		this.registerEvent(
 			this.app.workspace.on('file-open', async (file: TFile | null) => {
-				if (file?.extension !== 'pdf') {
+				const nextPdfPath = file?.extension === 'pdf' ? file.path : null;
+				const previousPdfPath = this.lastActivePdfPath;
+				if (previousPdfPath && previousPdfPath !== nextPdfPath) {
+					try {
+						await this.sidecar.flush(previousPdfPath);
+					} catch (error) {
+						console.error(`${PLUGIN_LOG} outgoing PDF flush failed:`, error);
+					}
+				}
+				this.lastActivePdfPath = nextPdfPath;
+
+				if (!nextPdfPath) {
 					this.refreshFloatingPaletteButton();
 					return;
 				}
-				await this.ensureLoaded(file.path);
-				window.setTimeout(() => {
+
+				await this.ensureLoaded(nextPdfPath);
+				const win = this.app.workspace.getMostRecentLeaf()?.view.containerEl.ownerDocument.defaultView;
+				win?.setTimeout(() => {
 					this.overlays.attachToActivePdf();
 					this.refreshFloatingPaletteButton();
 				}, 300);
@@ -161,14 +216,27 @@ export default class JotPlugin extends Plugin {
 				void this.reloadSidecar(pdfPath);
 			}),
 		);
+
 		this.registerEvent(
 			this.app.vault.on('rename', (file, oldPath) => {
-				if (!(file instanceof TFile) || file.extension !== 'pdf') return;
-				void this.handlePdfRename(oldPath, file.path);
+				if (!(file instanceof TFile)) return;
+				if (file.extension === 'pdf') {
+					void this.handlePdfRename(oldPath, file.path);
+					return;
+				}
+				if (file.extension === JOT_NOTE_EXTENSION) {
+					this.renameDocumentSession(oldPath, file.path);
+				}
 			}),
 		);
 
 		this.registerDomEvent(window, 'resize', () => this.refreshFloatingPaletteButton());
+		this.registerDomEvent(window, 'pagehide', () => {
+			void this.flushAllPersistence(false);
+		});
+		this.registerDomEvent(document, 'visibilitychange', () => {
+			if (document.visibilityState === 'hidden') void this.flushAllPersistence(false);
+		});
 
 		this.app.workspace.onLayoutReady(async () => {
 			const filePath = this.overlays.getActivePdfFilePath();
@@ -176,6 +244,7 @@ export default class JotPlugin extends Plugin {
 				this.refreshFloatingPaletteButton();
 				return;
 			}
+			this.lastActivePdfPath = filePath;
 			await this.ensureLoaded(filePath);
 			this.overlays.attachToActivePdf();
 			this.refreshFloatingPaletteButton();
@@ -183,61 +252,39 @@ export default class JotPlugin extends Plugin {
 	}
 
 	onunload() {
+		void this.flushAllPersistence(false);
 		this.overlays?.disconnectAll();
-		this.sidecar?.cancelAllPending();
 		this.palette?.hide();
 		this.floatingPaletteButton?.hide();
 	}
 
-	private async ensureLoaded(pdfPath: string) {
-		const status = await this.sidecar.load(pdfPath);
-		if (status === 'protected') {
-			new Notice(
-				'Jot: the existing annotation sidecar could not be safely loaded. It is protected from overwrite and will be backed up before any new annotations are saved.',
-				8000,
-			);
-		}
+	getNotebookSession(path: string): NotebookDocumentSession {
+		return this.sessions.notebook(path);
 	}
 
-	private async reloadSidecar(pdfPath: string) {
-		const status = await this.sidecar.load(pdfPath);
-		if (status === 'protected') {
-			new Notice(
-				'Jot: an external annotation sidecar could not be safely loaded. The file was left untouched and current annotations were kept in memory.',
-				8000,
-			);
-		}
-		this.overlays.redrawOverlaysForPdf(pdfPath);
+	renameDocumentSession(oldPath: string, newPath: string): void {
+		const session = this.sessions.get(oldPath);
+		if (!session || session.path === newPath) return;
+		this.sessions.rename(oldPath, newPath);
 	}
 
-	private async handlePdfRename(oldPath: string, newPath: string): Promise<void> {
-		this.strokes.rekeyDocumentPath(oldPath, newPath);
-		this.history.rekeyPath(oldPath, newPath);
-		await this.sidecar.renamePdfPath(oldPath, newPath);
-		this.overlays.attachToActivePdf();
-		this.overlays.redrawOverlaysForPdf(newPath);
+	async saveNotebookSession(session: NotebookDocumentSession): Promise<void> {
+		await this.notebookStore.save(session);
+		this.forEachNotebookView(session.path, (view) => {
+			view.syncSavedData(session.rawData);
+		});
 	}
 
-	private async resolveExternalSidecarConflict(pdfPath: string): Promise<void> {
-		const conflictPath = await this.sidecar.preserveExternalConflictAndFlushLocal(pdfPath);
-		if (!conflictPath) {
-			new Notice(
-				'Jot: an external annotation update arrived while local ink was unsaved. Local ink was kept in memory; avoid closing the PDF until the conflict is resolved.',
-			);
-			return;
-		}
-		new Notice(
-			`Jot: simultaneous annotation edits detected. The external copy was preserved at ${conflictPath}.`,
-			8000,
-		);
+	notifyNotebookInkChanged(path: string, source: JotNoteView): void {
+		this.forEachNotebookView(path, (view) => {
+			if (view !== source) view.redrawAll();
+		});
 	}
 
-	private scheduleSave(pdfPath: string): void {
-		this.sidecar.scheduleSave(pdfPath);
-	}
-
-	private wirePointerEvents(canvas: HTMLCanvasElement) {
-		this.wireInkCanvas(canvas, this.overlays, this.sidecar, this.undoController, this.strokes);
+	notifyNotebookStructureChanged(path: string, source: JotNoteView): void {
+		this.forEachNotebookView(path, (view) => {
+			if (view !== source) view.refreshFromSharedSession();
+		});
 	}
 
 	wireInkCanvas(
@@ -246,13 +293,13 @@ export default class JotPlugin extends Plugin {
 		saveScheduler: InkSaveScheduler,
 		undo: UndoController,
 		strokes = this.strokes,
-	): void {
+	): () => void {
 		const ctx = canvas.getContext('2d');
 		if (!ctx) {
 			console.error(`${PLUGIN_LOG} no 2d context`);
-			return;
+			return () => {};
 		}
-		new PointerEventHandler(canvas, ctx, {
+		return new PointerEventHandler(canvas, ctx, {
 			palette: this.palette,
 			strokes,
 			overlays: surface,
@@ -261,6 +308,7 @@ export default class JotPlugin extends Plugin {
 			toolState: () => this.toolState,
 			handedness: () => this.settings.handedness,
 			paletteActivation: () => this.settings.paletteActivation,
+			renderProfile: () => currentInkRenderProfile(),
 		}).attach();
 	}
 
@@ -283,8 +331,6 @@ export default class JotPlugin extends Plugin {
 			smoothing: this.settings.inkSmoothing,
 			pressureSensitivity: this.settings.pressureSensitivity,
 		});
-		this.overlays?.redrawOverlaysForActivePdf();
-		this.activeJotNoteView()?.redrawAll();
 	}
 
 	refreshFloatingPaletteButton(): void {
@@ -308,6 +354,89 @@ export default class JotPlugin extends Plugin {
 		this.palette.show(doc.body, x, y, this.settings.handedness);
 	}
 
+	private async ensureLoaded(pdfPath: string): Promise<SidecarLoadStatus> {
+		const status = await this.sidecar.load(pdfPath);
+		if (status === 'protected') {
+			new Notice(
+				'Jot: the existing annotation sidecar could not be safely loaded. It is protected from overwrite until recovered.',
+				8000,
+			);
+		} else if (status === 'error') {
+			new Notice('Jot: annotations could not be loaded. The existing in-memory state was not replaced.', 8000);
+		}
+		return status;
+	}
+
+	private async reloadSidecar(pdfPath: string): Promise<void> {
+		const status = await this.sidecar.load(pdfPath);
+		if (status === 'protected') {
+			new Notice(
+				'Jot: an external annotation sidecar could not be safely loaded. Current annotations were kept.',
+				8000,
+			);
+		}
+		if (status === 'loaded' || status === 'missing') {
+			this.overlays.redrawOverlaysForPdf(pdfPath);
+		}
+	}
+
+	private async handlePdfRename(oldPath: string, newPath: string): Promise<void> {
+		try {
+			await this.sidecar.renamePdfPath(oldPath, newPath);
+			if (this.lastActivePdfPath === oldPath) this.lastActivePdfPath = newPath;
+			this.overlays.attachToActivePdf();
+			this.overlays.redrawOverlaysForPdf(newPath);
+		} catch (error) {
+			console.error(`${PLUGIN_LOG} PDF rename migration failed:`, error);
+			new Notice(
+				`Jot: PDF moved, but annotation migration failed — ${error instanceof Error ? error.message : String(error)}`,
+				8000,
+			);
+		}
+	}
+
+	private async resolveExternalSidecarConflict(pdfPath: string): Promise<void> {
+		const conflictPath = await this.sidecar.preserveExternalConflictAndFlushLocal(pdfPath);
+		if (!conflictPath) {
+			new Notice(
+				'Jot: an external annotation update conflicted with local unsaved ink. Local ink remains dirty; use “Retry unsaved Jot data”.',
+				8000,
+			);
+			return;
+		}
+		new Notice(
+			`Jot: simultaneous annotation edits detected. The external copy was preserved at ${conflictPath}.`,
+			8000,
+		);
+	}
+
+	private async flushAllPersistence(showResult: boolean): Promise<void> {
+		const [pdfFailures, notebookFailures] = await Promise.all([
+			this.sidecar?.flushAll() ?? Promise.resolve([]),
+			this.notebookStore?.flushAll() ?? Promise.resolve([]),
+		]);
+		const failures = [...pdfFailures, ...notebookFailures];
+		if (failures.length > 0) {
+			console.error(`${PLUGIN_LOG} persistence flush failures:`, failures);
+			if (showResult) {
+				new Notice(
+					`Jot: ${failures.length} document${failures.length === 1 ? '' : 's'} still could not be saved. They remain dirty and retryable.`,
+					8000,
+				);
+			}
+		} else if (showResult) {
+			new Notice('Jot: all pending data saved successfully.');
+		}
+	}
+
+	private scheduleSave(pdfPath: string): void {
+		this.sidecar.scheduleSave(pdfPath);
+	}
+
+	private wirePointerEvents(canvas: HTMLCanvasElement): () => void {
+		return this.wireInkCanvas(canvas, this.overlays, this.sidecar, this.undoController, this.strokes);
+	}
+
 	private activeJotNoteView(): JotNoteView | null {
 		const leaf = this.app.workspace.getMostRecentLeaf();
 		return leaf?.view instanceof JotNoteView ? leaf.view : null;
@@ -323,6 +452,14 @@ export default class JotPlugin extends Plugin {
 		const noteView = this.activeJotNoteView();
 		if (noteView) return noteView.containerEl;
 		return this.overlays?.getActivePdfLeaf()?.view.containerEl ?? null;
+	}
+
+	private forEachNotebookView(path: string, callback: (view: JotNoteView) => void): void {
+		this.app.workspace.iterateAllLeaves((leaf) => {
+			if (!(leaf.view instanceof JotNoteView)) return;
+			if (leaf.view.getSessionPath() !== path) return;
+			callback(leaf.view);
+		});
 	}
 
 	private async createJotNoteFile(): Promise<void> {
@@ -363,6 +500,3 @@ export default class JotPlugin extends Plugin {
 		);
 	}
 }
-
-
-
