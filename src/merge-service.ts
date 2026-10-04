@@ -8,7 +8,7 @@ import type { UndoHistory } from './undo';
 
 const PLUGIN_LOG = '[jot]';
 
-type MergeChoice = 'overwrite' | 'copy';
+export type MergeChoice = 'overwrite' | 'copy';
 
 export interface MergeServiceCallbacks {
 	ensureLoaded: (pdfPath: string) => Promise<SidecarLoadStatus>;
@@ -56,11 +56,20 @@ export class MergeService {
 		}
 	}
 
+	async execute(
+		pdfPath: string,
+		choice: MergeChoice,
+		copyTarget: string,
+	): Promise<string> {
+		await this.sidecar.flush(pdfPath);
+		const outPath = await this.writeMerged(pdfPath, choice, copyTarget);
+		if (choice === 'overwrite') await this.discardAnnotations(pdfPath);
+		return outPath;
+	}
+
 	private async run(pdfPath: string, choice: MergeChoice, copyTarget: string): Promise<void> {
 		try {
-			await this.sidecar.flush(pdfPath);
-			const outPath = await this.writeMerged(pdfPath, choice, copyTarget);
-			if (choice === 'overwrite') await this.discardAnnotations(pdfPath);
+			const outPath = await this.execute(pdfPath, choice, copyTarget);
 			new Notice(`Jot: notes merged into ${outPath}`);
 		} catch (err) {
 			console.error(`${PLUGIN_LOG} merge failed:`, err);
