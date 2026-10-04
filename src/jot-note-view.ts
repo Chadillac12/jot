@@ -25,6 +25,7 @@ export class JotNoteView extends TextFileView {
 	private pagesEl: HTMLElement | null = null;
 	private unsubscribeSession: (() => void) | null = null;
 	private retryTimer: number | null = null;
+	private saveSnapshot: string | null = null;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -46,7 +47,7 @@ export class JotNoteView extends TextFileView {
 	}
 
 	getViewData(): string {
-		return this.session?.serialize() ?? this.data ?? '';
+		return this.saveSnapshot ?? this.session?.serialize() ?? this.data ?? '';
 	}
 
 	setViewData(data: string, clear: boolean): void {
@@ -82,9 +83,11 @@ export class JotNoteView extends TextFileView {
 		}
 
 		try {
+			this.saveSnapshot = session.serialize();
+			const persistedText = this.saveSnapshot;
 			await super.save(clear);
-			session.completeSave(token);
-			this.data = session.rawData;
+			session.completeSave(token, persistedText);
+			this.data = persistedText;
 			this.clearRetryTimer();
 			if (session.document.isDirty) this.requestSave();
 		} catch (error) {
@@ -96,6 +99,8 @@ export class JotNoteView extends TextFileView {
 			);
 			this.scheduleRetry();
 			throw error;
+		} finally {
+			this.saveSnapshot = null;
 		}
 	}
 
