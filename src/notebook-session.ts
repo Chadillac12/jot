@@ -13,6 +13,7 @@ import { StrokeStore } from './stroke-store';
 import { UndoHistory } from './undo';
 
 export type NotebookLoadStatus = 'loaded' | 'unchanged' | 'conflict' | 'error';
+export type NotebookSessionEvent = 'load' | 'ink' | 'paper' | 'structure' | 'state';
 
 export class NotebookSession {
 	readonly strokes = new StrokeStore();
@@ -22,7 +23,7 @@ export class NotebookSession {
 	private noteValue: JotNoteFile = createJotNote();
 	private rawDataValue = '';
 	private loadErrorValue: string | null = null;
-	private listeners = new Set<() => void>();
+	private listeners = new Set<(event: NotebookSessionEvent) => void>();
 
 	constructor(
 		path: string,
@@ -62,7 +63,7 @@ export class NotebookSession {
 			this.rawDataValue = text;
 			this.loadErrorValue = parsed.message;
 			this.document.failLoad(new Error(parsed.message));
-			this.notify();
+			this.notify('load');
 			return 'error';
 		}
 
@@ -85,7 +86,7 @@ export class NotebookSession {
 
 	markDirty(): number {
 		const revision = this.document.markDirty();
-		this.notify();
+		this.notify('ink');
 		return revision;
 	}
 
@@ -96,18 +97,19 @@ export class NotebookSession {
 	completeSave(token: SaveToken): void {
 		this.rawDataValue = this.serialize();
 		this.document.completeSave(token);
-		this.notify();
+		this.notify('state');
 	}
 
 	failSave(token: SaveToken, error: unknown): void {
 		this.document.failSave(token, error);
-		this.notify();
+		this.notify('state');
 	}
 
 	setPaperStyle(style: JotPaperStyle): void {
 		if (this.loadErrorValue || this.noteValue.paper === style) return;
 		this.noteValue = { ...this.noteValue, paper: style };
-		this.markDirty();
+		this.document.markDirty();
+		this.notify('paper');
 	}
 
 	addPage(): string | null {
@@ -125,7 +127,8 @@ export class NotebookSession {
 				},
 			],
 		};
-		this.markDirty();
+		this.document.markDirty();
+		this.notify('structure');
 		return id;
 	}
 
@@ -133,16 +136,16 @@ export class NotebookSession {
 		if (oldPath === newPath) return;
 		this.strokes.rekeyDocumentPath(oldPath, newPath);
 		this.history.rekeyPath(oldPath, newPath);
-		this.notify();
+		this.notify('structure');
 	}
 
-	subscribe(listener: () => void): () => void {
+	subscribe(listener: (event: NotebookSessionEvent) => void): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
 	}
 
-	notify(): void {
-		for (const listener of this.listeners) listener();
+	notify(event: NotebookSessionEvent): void {
+		for (const listener of this.listeners) listener(event);
 	}
 
 	private applyParsed(parsed: Extract<JotNoteParseResult, { ok: true }>, text: string): void {
@@ -155,7 +158,7 @@ export class NotebookSession {
 		}
 		this.history.dropPath(this.path);
 		this.document.completeLoad();
-		this.notify();
+		this.notify('load');
 	}
 }
 
