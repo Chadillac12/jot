@@ -163,7 +163,14 @@ export class SidecarStore {
 				const destinationText = await this.adapter.read(newSidecar);
 				await this.writeConflictCopy(newSidecar, destinationText);
 			}
-			await transactionalWriteText(this.adapter, newSidecar, sourceText, validateSidecarText);
+			const sourceIsProtected =
+				protectedText !== undefined && sourceText === protectedText;
+			await transactionalWriteText(
+				this.adapter,
+				newSidecar,
+				sourceText,
+				sourceIsProtected ? () => {} : validateSidecarText,
+			);
 			try {
 				await this.adapter.remove(oldSidecar);
 			} catch (error) {
