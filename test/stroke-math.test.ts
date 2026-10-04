@@ -143,3 +143,21 @@ describe('strokeIntersects', () => {
 		expect(strokeIntersects(pen([]), 0.5, 0.5, 0.1)).toBe(false);
 	});
 });
+
+
+describe('strokeIntersects segment geometry', () => {
+	it('detects an eraser hit between sparse stroke samples', () => {
+		const sparse = pen([point(0.1, 0.5), point(0.9, 0.5)]);
+		expect(strokeIntersects(sparse, 0.5, 0.5, 0.05)).toBe(true);
+	});
+
+	it('supports different normalized radii to preserve a circular screen-space eraser', () => {
+		const vertical = pen([point(0.5, 0.7)]);
+		expect(strokeIntersects(vertical, 0.5, 0.5, 0.1, 0.25)).toBe(true);
+		expect(strokeIntersects(vertical, 0.5, 0.5, 0.1, 0.1)).toBe(false);
+	});
+
+	it('rejects zero-sized eraser radii', () => {
+		expect(strokeIntersects(pen([point(0.5, 0.5)]), 0.5, 0.5, 0, 0.1)).toBe(false);
+	});
+});
