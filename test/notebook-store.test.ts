@@ -192,6 +192,27 @@ describe('NotebookStore concurrent revision handling', () => {
 	});
 });
 
+describe('NotebookStore lifecycle flushing', () => {
+	it('flushAll persists every dirty notebook session', async () => {
+		const fs = makeAdapter();
+		const sessions = new DocumentSessionManager();
+		const first = sessions.notebook('One.jot');
+		const second = sessions.notebook('Two.jot');
+		first.loadText(notebookText());
+		second.loadText(notebookText());
+		first.setPaperStyle('grid');
+		second.setPaperStyle('dot');
+		const store = new NotebookStore(fs.adapter, sessions);
+
+		expect(await store.flushAll()).toEqual([]);
+
+		expect(fs.files['One.jot']).toContain('"paper": "grid"');
+		expect(fs.files['Two.jot']).toContain('"paper": "dot"');
+		expect(first.state).toBe('clean');
+		expect(second.state).toBe('clean');
+	});
+});
+
 describe('NotebookStore conflict preservation', () => {
 	it('does not save an invalid conflict with no local edits', async () => {
 		const fs = makeAdapter();
