@@ -232,7 +232,8 @@ describe('SidecarStore concurrent revision handling', () => {
 			signalStarted = resolve;
 		});
 		let blockFirstTempWrite = true;
-		vi.mocked(fs.adapter.write).mockImplementation(async (path: string, data: string) => {
+		const writeSpy = vi.spyOn(fs.adapter, 'write');
+		writeSpy.mockImplementation(async (path: string, data: string) => {
 			if (blockFirstTempWrite && path.includes('.jot-tmp-')) {
 				blockFirstTempWrite = false;
 				signalStarted();
