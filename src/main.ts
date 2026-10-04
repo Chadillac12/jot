@@ -231,7 +231,7 @@ export default class JotPlugin extends Plugin {
 					return;
 				}
 				if (file.extension === JOT_NOTE_EXTENSION) {
-					this.renameDocumentSession(oldPath, file.path);
+					void this.renameDocumentSession(oldPath, file.path);
 				}
 			}),
 		);
@@ -268,10 +268,17 @@ export default class JotPlugin extends Plugin {
 		return this.sessions.notebook(path);
 	}
 
-	renameDocumentSession(oldPath: string, newPath: string): void {
-		const session = this.sessions.get(oldPath);
-		if (!session || session.path === newPath) return;
-		this.sessions.rename(oldPath, newPath);
+	async renameDocumentSession(oldPath: string, newPath: string): Promise<void> {
+		try {
+			await this.notebookStore.renameSession(oldPath, newPath);
+		} catch (error) {
+			console.error(`${PLUGIN_LOG} notebook rename migration failed:`, error);
+			new Notice(
+				`Jot: notebook moved, but session migration failed — ${error instanceof Error ? error.message : String(error)}`,
+				8000,
+			);
+			throw error;
+		}
 	}
 
 	async saveNotebookSession(session: NotebookDocumentSession): Promise<void> {
