@@ -83,6 +83,27 @@ describe('NotebookDocumentSession', () => {
 		expect(session.note.paper).toBe('ruled');
 	});
 
+	it('notifies sibling views when an initialized shared notebook reloads from disk', () => {
+		const manager = new DocumentSessionManager();
+		const session = manager.notebook('Lecture.jot');
+		const original = JSON.stringify({
+			version: 1,
+			type: 'notebook',
+			paper: 'ruled',
+			pages: [{ id: 'page-1', width: 1536, height: 2048, strokes: [] }],
+		});
+		const changes: string[] = [];
+		session.subscribe((change) => changes.push(change));
+		expect(session.loadText(original)).toBe('loaded');
+		changes.length = 0;
+
+		const external = original.replace('"ruled"', '"grid"');
+		expect(session.loadText(external)).toBe('loaded');
+
+		expect(session.note.paper).toBe('grid');
+		expect(changes).toContain('reload');
+	});
+
 	it('serializes the shared stroke store rather than a view-local copy', () => {
 		const manager = new DocumentSessionManager();
 		const session = manager.notebook('Lecture.jot');
