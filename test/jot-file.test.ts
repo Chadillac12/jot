@@ -81,6 +81,54 @@ describe('parseJotText', () => {
 		).toBeNull();
 	});
 
+	it('preserves a valid deterministic render profile', () => {
+		const result = parseJotText(JSON.stringify({
+			version: 2,
+			pages: {
+				'1': [{
+					points: [{ x: 0.1, y: 0.2, pressure: 0.5 }],
+					color: '#123456',
+					width: 0.0025,
+					tool: 'pen',
+					render: { version: 2, smoothing: 0.3, pressureSensitivity: 0.7 },
+				}],
+			},
+		}));
+		expect(result?.pages['1']?.[0]?.render).toEqual({
+			version: 2,
+			smoothing: 0.3,
+			pressureSensitivity: 0.7,
+		});
+	});
+
+	it('rejects unsupported render profiles and persisted eraser strokes', () => {
+		const badRender = {
+			version: 2,
+			pages: {
+				'1': [{
+					points: [{ x: 0.1, y: 0.2, pressure: 0.5 }],
+					color: '#123456',
+					width: 0.0025,
+					tool: 'pen',
+					render: { version: 99, smoothing: 0.5, pressureSensitivity: 0.5 },
+				}],
+			},
+		};
+		const eraser = {
+			version: 2,
+			pages: {
+				'1': [{
+					points: [{ x: 0.1, y: 0.2, pressure: 0.5 }],
+					color: '#123456',
+					width: 0.0025,
+					tool: 'eraser',
+				}],
+			},
+		};
+		expect(parseJotText(JSON.stringify(badRender))).toBeNull();
+		expect(parseJotText(JSON.stringify(eraser))).toBeNull();
+	});
+
 	it('returns the parsed payload for a valid sidecar file', () => {
 		const result = parseJotText(JSON.stringify({ version: 2, pages: { '1': [] } }));
 		expect(result).toEqual({ version: 2, pages: { '1': [] } });
