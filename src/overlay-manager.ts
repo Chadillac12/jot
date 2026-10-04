@@ -29,6 +29,7 @@ class PdfPageBinding {
 
 	private mutationObserver: MutationObserver;
 	private resizeObserver: ResizeObserver;
+	private disposeInput: () => void;
 	private resizeFrame: number | null = null;
 	private disposed = false;
 
@@ -37,7 +38,7 @@ class PdfPageBinding {
 		readonly key: string,
 		private onResize: (binding: PdfPageBinding) => void,
 		private onInvalidated: (binding: PdfPageBinding) => void,
-		wireOverlay: (canvas: HTMLCanvasElement) => void,
+		wireOverlay: (canvas: HTMLCanvasElement) => () => void,
 	) {
 		const doc = page.ownerDocument;
 		page.classList.add(PAGE_ANCHOR_CLASS);
@@ -57,7 +58,7 @@ class PdfPageBinding {
 		this.live.className = LIVE_OVERLAY_CLASS;
 		this.live.setAttribute(OVERLAY_KEY_ATTR, key);
 		page.appendChild(this.live);
-		wireOverlay(this.live);
+		this.disposeInput = wireOverlay(this.live);
 
 		this.mutationObserver = new MutationObserver(() => {
 			if (this.disposed) return;
@@ -94,6 +95,7 @@ class PdfPageBinding {
 		this.disposed = true;
 		this.mutationObserver.disconnect();
 		this.resizeObserver.disconnect();
+		this.disposeInput();
 		const win = this.page.ownerDocument.defaultView;
 		if (win && this.resizeFrame !== null) win.cancelAnimationFrame(this.resizeFrame);
 		this.resizeFrame = null;
@@ -112,7 +114,7 @@ export class OverlayManager {
 	constructor(
 		private app: App,
 		private strokes: StrokeStore,
-		private wireOverlay: (canvas: HTMLCanvasElement) => void,
+		private wireOverlay: (canvas: HTMLCanvasElement) => () => void,
 	) {}
 
 	attachToActivePdf(): void {
