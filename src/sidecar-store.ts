@@ -212,6 +212,13 @@ export class SidecarStore {
 
 	async renamePdfPath(oldPdfPath: string, newPdfPath: string): Promise<void> {
 		if (oldPdfPath === newPdfPath) return;
+
+		// A save transaction may already have captured the old-path payload. Let
+		// that transaction finish before moving lifecycle/path ownership so its
+		// revision token can complete against the path it was issued for.
+		const inFlight = this.inFlightSaves.get(oldPdfPath);
+		if (inFlight) await inFlight;
+
 		const oldSidecar = jotPathFor(oldPdfPath);
 		const newSidecar = jotPathFor(newPdfPath);
 		const protectedText = this.protectedOriginals.get(oldPdfPath);
