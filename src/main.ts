@@ -38,6 +38,7 @@ export default class JotPlugin extends Plugin {
 	private sessions = new DocumentSessionManager();
 	readonly notebookSessions = new NotebookSessionManager(this.sessions);
 	private lastSaveErrorByPath = new Map<string, string>();
+	private lastActivePdfPath: string | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -138,12 +139,18 @@ export default class JotPlugin extends Plugin {
 
 		this.registerEvent(
 			this.app.workspace.on('file-open', async (file: TFile | null) => {
-				if (file?.extension !== 'pdf') {
+				const nextPdfPath = file?.extension === 'pdf' ? file.path : null;
+				if (this.lastActivePdfPath && this.lastActivePdfPath !== nextPdfPath) {
+					await this.sidecar.flush(this.lastActivePdfPath);
+				}
+				this.lastActivePdfPath = nextPdfPath;
+				if (!nextPdfPath) {
 					this.refreshFloatingPaletteButton();
 					return;
 				}
-				await this.ensureLoaded(file.path);
-				window.setTimeout(() => {
+				await this.ensureLoaded(nextPdfPath);
+				const win = this.app.workspace.getMostRecentLeaf()?.view.containerEl.ownerDocument.defaultView;
+				win?.setTimeout(() => {
 					this.overlays.attachToActivePdf();
 					this.refreshFloatingPaletteButton();
 				}, 300);
@@ -179,6 +186,9 @@ export default class JotPlugin extends Plugin {
 		);
 
 		this.registerDomEvent(window, 'resize', () => this.refreshFloatingPaletteButton());
+		this.registerDomEvent(window, 'pagehide', () => {
+			void this.sidecar.flushAll();
+		});
 
 		this.app.workspace.onLayoutReady(async () => {
 			const filePath = this.overlays.getActivePdfFilePath();
@@ -230,6 +240,7 @@ export default class JotPlugin extends Plugin {
 	}
 
 	private async handlePdfRename(oldPath: string, newPath: string): Promise<void> {
+		if (this.lastActivePdfPath === oldPath) this.lastActivePdfPath = newPath;
 		this.strokes.rekeyDocumentPath(oldPath, newPath);
 		this.history.rekeyPath(oldPath, newPath);
 		await this.sidecar.renamePdfPath(oldPath, newPath);
