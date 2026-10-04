@@ -1,4 +1,4 @@
-import type { App, DataAdapter } from 'obsidian';
+import type { DataAdapter } from 'obsidian';
 import { PDFDocument } from 'pdf-lib';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -13,7 +13,7 @@ vi.mock('obsidian', () => ({
 }));
 import { DocumentSessionManager } from '../src/document-session';
 import { JOT_FORMAT_VERSION } from '../src/jot-file';
-import { MergeService } from '../src/merge-service';
+import { PdfMergeExecutor } from '../src/pdf-merge-executor';
 import { SidecarStore } from '../src/sidecar-store';
 
 interface MergeFs {
@@ -116,16 +116,12 @@ async function harness() {
 	const sidecar = new SidecarStore(fs.adapter, sessions);
 	expect(await sidecar.load('notes.pdf')).toBe('loaded');
 	const redraw = vi.fn();
-	const merge = new MergeService(
-		{} as App,
+	const merge = new PdfMergeExecutor(
 		fs.adapter,
 		sessions.strokes,
 		sidecar,
 		sessions.history,
-		{
-			ensureLoaded: (path) => sidecar.load(path),
-			redrawOverlays: redraw,
-		},
+		redraw,
 	);
 	return { fs, sessions, sidecar, merge, redraw };
 }
@@ -152,7 +148,7 @@ describe('MergeService transactional overwrite', () => {
 	it('clears sidecar and in-memory ink only after a verified overwrite succeeds', async () => {
 		const { fs, sessions, merge, redraw } = await harness();
 
-		const outPath = await merge.execute('notes.pdf', 'overwrite', 'unused.pdf');
+		const { outPath } = await merge.execute('notes.pdf', 'overwrite', 'unused.pdf');
 
 		expect(outPath).toBe('notes.pdf');
 		const committed = fs.binary['notes.pdf'];
