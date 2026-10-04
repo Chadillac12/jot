@@ -16,7 +16,6 @@ import type {
 import { UndoController } from './undo-controller';
 import type JotPlugin from './main';
 
-const NOTE_SAVE_RETRY_MS = 2000;
 
 export class JotNoteView extends TextFileView {
 	private session: NotebookSession | null = null;
@@ -24,8 +23,6 @@ export class JotNoteView extends TextFileView {
 	private undoController: UndoController | null = null;
 	private pagesEl: HTMLElement | null = null;
 	private unsubscribeSession: (() => void) | null = null;
-	private retryTimer: number | null = null;
-	private saveSnapshot: string | null = null;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -47,10 +44,11 @@ export class JotNoteView extends TextFileView {
 	}
 
 	getViewData(): string {
-		return this.saveSnapshot ?? this.session?.serialize() ?? this.data ?? '';
+		return this.session?.serialize() ?? this.data ?? '';
 	}
 
 	setViewData(data: string, clear: boolean): void {
+		const needsInitialRender = clear || this.surface === null;
 		if (clear) this.detachViewState();
 		this.data = data;
 
@@ -67,41 +65,19 @@ export class JotNoteView extends TextFileView {
 		if (status === 'conflict') {
 			void this.resolveConflictAndResume();
 		}
+		if (status === 'unchanged' && !needsInitialRender) return;
 		this.render();
 	}
 
-	override async save(clear?: boolean): Promise<void> {
+	override async save(_clear?: boolean): Promise<void> {
 		const session = this.session;
 		if (!session || session.loadError) return;
-
-		const prepared = session.prepareSave();
-		if (!prepared) {
-			if (session.lifecycle.state === 'conflict') {
-				new Notice('Jot: this notebook has an unresolved external-edit conflict.');
-			}
+		if (session.lifecycle.state === 'conflict') {
+			new Notice('Jot: this notebook has an unresolved external-edit conflict.');
 			return;
 		}
-
-		const { token, text: persistedText } = prepared;
-		try {
-			this.saveSnapshot = persistedText;
-			await super.save(clear);
-			session.completeSave(token, persistedText);
-			this.data = persistedText;
-			this.clearRetryTimer();
-			if (session.lifecycle.isDirty) this.requestSave();
-		} catch (error) {
-			session.failSave(token, error);
-			const message = error instanceof Error ? error.message : String(error);
-			new Notice(
-				`Jot: notebook save failed. The shared session remains dirty and will retry. ${message}`,
-				10000,
-			);
-			this.scheduleRetry();
-			throw error;
-		} finally {
-			this.saveSnapshot = null;
-		}
+		const saved = await this.plugin.flushNotebook(session.path);
+		if (saved) this.data = session.rawData;
 	}
 
 	clear(): void {
@@ -113,7 +89,8 @@ export class JotNoteView extends TextFileView {
 	override async onRename(file: TFile): Promise<void> {
 		const oldPath = this.session?.path;
 		if (oldPath && oldPath !== file.path) {
-			this.session = this.plugin.notebookSessions.rename(oldPath, file.path);
+			await this.plugin.renameNotebookSession(oldPath, file.path);
+			this.session = this.plugin.notebookSessions.get(file.path);
 		}
 		await super.onRename(file);
 		this.render();
@@ -137,7 +114,6 @@ export class JotNoteView extends TextFileView {
 	}
 
 	private detachViewState(): void {
-		this.clearRetryTimer();
 		this.surface?.disconnect();
 		this.surface = null;
 		this.pagesEl = null;
@@ -250,7 +226,7 @@ export class JotNoteView extends TextFileView {
 	private setPaperStyle(style: JotPaperStyle): void {
 		if (!this.session || this.session.loadError) return;
 		this.session.setPaperStyle(style);
-		this.requestSave();
+		this.plugin.scheduleNotebookSave(this.session.path);
 	}
 
 	private addPage(): void {
@@ -269,29 +245,13 @@ export class JotNoteView extends TextFileView {
 	private async resolveConflictAndResume(): Promise<void> {
 		const session = this.session;
 		if (!session) return;
-		if (await this.plugin.resolveNotebookConflict(session)) this.requestSave();
+		await this.plugin.resolveNotebookConflict(session);
 	}
 
 	private markDirtyAndSave(): void {
 		if (!this.session || this.session.loadError) return;
 		this.session.markDirty();
-		this.requestSave();
+		this.plugin.scheduleNotebookSave(this.session.path);
 	}
 
-	private scheduleRetry(): void {
-		this.clearRetryTimer();
-		const win = this.containerEl.ownerDocument.defaultView;
-		if (!win) return;
-		this.retryTimer = win.setTimeout(() => {
-			this.retryTimer = null;
-			if (this.session?.lifecycle.isDirty) this.requestSave();
-		}, NOTE_SAVE_RETRY_MS);
-	}
-
-	private clearRetryTimer(): void {
-		if (this.retryTimer === null) return;
-		const win = this.containerEl.ownerDocument.defaultView;
-		if (win) win.clearTimeout(this.retryTimer);
-		this.retryTimer = null;
-	}
 }
