@@ -43,7 +43,10 @@ function makeContext(): CanvasRenderingContext2D {
 	} as unknown as CanvasRenderingContext2D;
 }
 
-function makeHarness(activation: PaletteActivation = 'pencil-double-tap-hold'): Harness {
+function makeHarness(
+	activation: PaletteActivation = 'pencil-double-tap-hold',
+	pointerCaptureFails = false,
+): Harness {
 	const canvas = document.createElement('canvas');
 	canvas.setAttribute('data-jot-key', 'notes.pdf::1');
 	canvas.getBoundingClientRect = () =>
@@ -58,7 +61,9 @@ function makeHarness(activation: PaletteActivation = 'pencil-double-tap-hold'): 
 			y: 0,
 			toJSON: () => ({}),
 		});
-	Object.defineProperty(canvas, 'setPointerCapture', { value: vi.fn() });
+	Object.defineProperty(canvas, 'setPointerCapture', {
+		value: pointerCaptureFails ? vi.fn(() => { throw new Error('capture failed'); }) : vi.fn(),
+	});
 	Object.defineProperty(canvas, 'releasePointerCapture', { value: vi.fn() });
 	document.body.appendChild(canvas);
 
@@ -146,6 +151,17 @@ describe('PointerEventHandler palette activation', () => {
 
 		expect(start).not.toHaveBeenCalled();
 		expect(document.querySelector('.jot-hold-indicator')).toBeNull();
+	});
+
+	it('continues writing when WKWebView pointer capture fails', () => {
+		const { canvas, strokes } = makeHarness('pencil-double-tap-hold', true);
+
+		pointer(canvas, 'pointerdown', 'pen', 1, 20, 20);
+		pointer(canvas, 'pointermove', 'pen', 1, 40, 40);
+		pointer(canvas, 'pointerup', 'pen', 1, 50, 50);
+
+		expect(strokes.forKey('notes.pdf::1')).toHaveLength(1);
+		expect(strokes.forKey('notes.pdf::1')[0]?.points.length).toBeGreaterThan(1);
 	});
 
 	it('records and schedules an ordinary Pencil tap', () => {
