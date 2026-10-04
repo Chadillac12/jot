@@ -226,7 +226,9 @@ export class SidecarStore {
 	}
 
 	async discard(pdfPath: string): Promise<void> {
-		await this.flush(pdfPath);
+		if (!(await this.flush(pdfPath))) {
+			throw new Error(`Cannot discard ${pdfPath} annotations because dirty data failed to save`);
+		}
 		const path = jotPathFor(pdfPath);
 		this.protectedOriginals.delete(pdfPath);
 		if (await this.adapter.exists(path)) await this.adapter.remove(path);
