@@ -1,4 +1,4 @@
-import type { DataAdapter } from 'obsidian';
+import { activeWindow, type DataAdapter } from 'obsidian';
 import { DocumentSessionManager } from './document-session';
 import {
 	JOT_FORMAT_VERSION,
@@ -27,8 +27,8 @@ export interface TimerHost {
 }
 
 const DEFAULT_TIMER_HOST: TimerHost = {
-	setTimeout: (callback, delayMs) => globalThis.setTimeout(callback, delayMs) as unknown as number,
-	clearTimeout: (id) => globalThis.clearTimeout(id),
+	setTimeout: (callback, delayMs) => activeWindow.setTimeout(callback, delayMs),
+	clearTimeout: (id) => activeWindow.clearTimeout(id),
 };
 
 export class SidecarStore {
