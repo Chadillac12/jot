@@ -218,6 +218,7 @@ export class SidecarStore {
 
 	private async save(pdfPath: string): Promise<void> {
 		const session = this.sessions.pdf(pdfPath);
+		const previousState = session.state;
 		const revision = session.beginSave();
 		if (revision === null) return;
 
@@ -235,9 +236,8 @@ export class SidecarStore {
 			await transactionalWriteText(this.adapter, path, text, validateSidecarText);
 			this.recentSelfSaves.set(path, Date.now());
 			this.protectedOriginals.delete(pdfPath);
-			const hadError = session.state === 'save-error';
 			session.saveSucceeded(revision);
-			if (hadError) this.callbacks.onSaveRecovered?.(pdfPath);
+			if (previousState === 'save-error') this.callbacks.onSaveRecovered?.(pdfPath);
 			this.retryCounts.delete(pdfPath);
 		} catch (error) {
 			session.saveFailed(error);
