@@ -25,6 +25,7 @@ export class SidecarStore {
 	private saveTimers = new Map<string, number>();
 	private recentSelfSaves = new Map<string, number>();
 	private protectedOriginals = new Map<string, string>();
+	private ownedPdfPaths = new Set<string>();
 
 	constructor(
 		private adapter: DataAdapter,
@@ -34,6 +35,7 @@ export class SidecarStore {
 	) {}
 
 	async load(pdfPath: string): Promise<SidecarLoadStatus> {
+		this.ownedPdfPaths.add(pdfPath);
 		const session = this.sessions.get(pdfPath);
 		if (!session.beginLoad()) return 'dirty';
 
@@ -121,6 +123,7 @@ export class SidecarStore {
 	}
 
 	scheduleSave(pdfPath: string): void {
+		this.ownedPdfPaths.add(pdfPath);
 		this.sessions.get(pdfPath).markDirty();
 		this.queueSave(pdfPath, SAVE_DEBOUNCE_MS);
 	}
@@ -135,10 +138,9 @@ export class SidecarStore {
 	async flushAll(): Promise<boolean> {
 		const paths = new Set<string>([
 			...this.saveTimers.keys(),
-			...this.sessions
-				.all()
-				.filter((session) => session.isDirty)
-				.map((session) => session.path),
+			...Array.from(this.ownedPdfPaths).filter(
+				(path) => this.sessions.peek(path)?.isDirty === true,
+			),
 		]);
 		let allSaved = true;
 		for (const path of paths) {
@@ -187,6 +189,8 @@ export class SidecarStore {
 
 		const hadPending = this.hasPendingSave(oldPdfPath);
 		this.clearTimer(oldPdfPath);
+		this.ownedPdfPaths.delete(oldPdfPath);
+		this.ownedPdfPaths.add(newPdfPath);
 		this.sessions.rename(oldPdfPath, newPdfPath);
 
 		try {
@@ -233,6 +237,7 @@ export class SidecarStore {
 		const path = jotPathFor(pdfPath);
 		this.protectedOriginals.delete(pdfPath);
 		if (await this.adapter.exists(path)) await this.adapter.remove(path);
+		this.ownedPdfPaths.delete(pdfPath);
 		this.sessions.remove(pdfPath);
 	}
 
