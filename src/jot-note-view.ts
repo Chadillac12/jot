@@ -105,6 +105,12 @@ export class JotNoteView extends TextFileView {
 	}
 
 	clear(): void {
+		const session = this.session;
+		if (session?.isDirty && !session.loadError) {
+			void this.plugin.saveNotebookSession(session).catch((error: unknown) => {
+				console.error('[jot] notebook teardown flush failed:', error);
+			});
+		}
 		this.detachViewState();
 		this.contentEl.empty();
 	}
