@@ -47,6 +47,7 @@ function makeContext(): CanvasRenderingContext2D {
 function makeHarness(
 	activation: PaletteActivation = 'pencil-double-tap-hold',
 	pointerCaptureFails = false,
+	canEdit = true,
 ): Harness {
 	const canvas = document.createElement('canvas');
 	canvas.setAttribute('data-jot-key', 'notes.pdf::1');
@@ -100,6 +101,7 @@ function makeHarness(
 		handedness: () => 'right',
 		paletteActivation: () => currentActivation.value,
 		renderProfile: () => ({ version: 2, smoothing: 0.5, pressureSensitivity: 0.5 }),
+		canEdit: () => canEdit,
 	}).attach();
 
 	return { canvas, palette, strokes, sidecar, undo, activation: currentActivation, dispose };
@@ -143,6 +145,17 @@ describe('PointerEventHandler palette activation', () => {
 		document.body.innerHTML = '';
 		vi.restoreAllMocks();
 		vi.useRealTimers();
+	});
+
+	it('refuses Pencil mutation while the document is exclusively locked', () => {
+		const { canvas, strokes, sidecar } = makeHarness('pencil-double-tap-hold', false, false);
+
+		pointer(canvas, 'pointerdown', 'pen', 1, 20, 20);
+		pointer(canvas, 'pointermove', 'pen', 1, 40, 40);
+		pointer(canvas, 'pointerup', 'pen', 1, 50, 50);
+
+		expect(strokes.forKey('notes.pdf::1')).toHaveLength(0);
+		expect(sidecar.scheduleSave).not.toHaveBeenCalled();
 	});
 
 	it('detaches every input listener so disposed page bindings cannot keep writing', () => {
