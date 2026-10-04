@@ -23,6 +23,7 @@ export class NotebookStore {
 		private vault: Vault,
 		private sessions: NotebookSessionManager,
 		private onSaveError?: (path: string, error: Error) => void,
+		private onConflict?: (path: string) => void,
 		private timers: NotebookTimerHost = DEFAULT_TIMER_HOST,
 	) {}
 
@@ -112,7 +113,7 @@ export class NotebookStore {
 			const normalized = error instanceof Error ? error : new Error(String(error));
 			if (externalConflict !== null) {
 				session.recordExternalConflict(externalConflict, normalized);
-				this.onSaveError?.(path, normalized);
+				this.onConflict?.(path);
 				return false;
 			}
 			this.onSaveError?.(path, normalized);
