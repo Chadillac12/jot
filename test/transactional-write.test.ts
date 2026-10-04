@@ -108,6 +108,29 @@ describe('transactionalWriteText', () => {
 	});
 });
 
+describe('transactionalWriteBinary corruption handling', () => {
+	it('rejects a temporary binary write whose bytes differ from the requested payload', async () => {
+		const fs = makeFs();
+		fs.binary['a.bin'] = Uint8Array.from([1, 2, 3]).buffer;
+		vi.mocked(fs.adapter.writeBinary).mockImplementation(async (path: string, value: ArrayBuffer) => {
+			const bytes = new Uint8Array(value.slice(0));
+			if (bytes.length > 0) bytes[0] = (bytes[0] ?? 0) ^ 0xff;
+			fs.binary[path] = bytes.buffer;
+		});
+
+		await expect(
+			transactionalWriteBinary(
+				fs.adapter,
+				'a.bin',
+				Uint8Array.from([9, 8, 7]).buffer,
+				() => {},
+			),
+		).rejects.toThrow('Temporary binary write verification failed');
+
+		expect([...new Uint8Array(fs.binary['a.bin']!)]).toEqual([1, 2, 3]);
+	});
+});
+
 describe('transactionalWriteBinary', () => {
 	it('validates both temporary and committed binary data', async () => {
 		const fs = makeFs();
