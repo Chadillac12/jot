@@ -7,33 +7,24 @@ import {
 	type IconName,
 	type WorkspaceLeaf,
 } from 'obsidian';
-import { documentPageKey } from './jot-file';
-import {
-	JOT_NOTE_VIEW_TYPE,
-	createJotPage,
-	createJotNote,
-	nextPageId,
-	parseJotNoteTextResult,
-	serializeJotNote,
-	type JotNoteFile,
-	type JotPaperStyle,
-} from './jot-note-file';
+import { JOT_NOTE_VIEW_TYPE, type JotPaperStyle } from './jot-note-file';
 import { JotNoteSurface } from './jot-note-surface';
-import { StrokeStore } from './stroke-store';
+import type {
+	NotebookSession,
+	NotebookSessionEvent,
+} from './notebook-session';
 import { UndoController } from './undo-controller';
-import { UndoHistory } from './undo';
 import type JotPlugin from './main';
 
+const NOTE_SAVE_RETRY_MS = 2000;
+
 export class JotNoteView extends TextFileView {
-	private note: JotNoteFile = createJotNote();
-	private strokes = new StrokeStore();
-	private history = new UndoHistory();
+	private session: NotebookSession | null = null;
 	private surface: JotNoteSurface | null = null;
 	private undoController: UndoController | null = null;
 	private pagesEl: HTMLElement | null = null;
-	private documentPath: string | null = null;
-	private rawData = '';
-	private loadError: string | null = null;
+	private unsubscribeSession: (() => void) | null = null;
+	private retryTimer: number | null = null;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -55,96 +46,127 @@ export class JotNoteView extends TextFileView {
 	}
 
 	getViewData(): string {
-		if (this.loadError) return this.rawData;
-		const path = this.documentPath ?? this.file?.path;
-		if (path) {
-			this.note = {
-				...this.note,
-				pages: this.note.pages.map((page) => ({
-					...page,
-					strokes: [...this.strokes.forKey(documentPageKey(path, page.id))],
-				})),
-			};
-		}
-		this.rawData = serializeJotNote(this.note);
-		return this.rawData;
+		return this.session?.serialize() ?? this.data ?? '';
 	}
 
 	setViewData(data: string, clear: boolean): void {
-		if (clear) this.resetState();
-		this.rawData = data;
+		if (clear) this.detachViewState();
 		this.data = data;
-		this.documentPath = this.file?.path ?? this.documentPath;
 
-		const parsed = parseJotNoteTextResult(data);
-		if (!parsed.ok) {
-			this.loadError = parsed.message;
-			this.renderLoadError(parsed.message);
+		const path = this.file?.path;
+		if (!path) return;
+		this.attachSession(path);
+		if (!this.session) return;
+
+		const status = this.session.loadFromText(data);
+		if (status === 'error') {
+			this.renderLoadError(this.session.loadError ?? 'This Jot note could not be validated.');
 			return;
 		}
-
-		this.loadError = null;
-		this.note = parsed.note;
-		// Disk reloads define a new history boundary. Keeping undo entries from
-		// before an external/sync update could resurrect stale strokes.
-		this.history = new UndoHistory();
-		this.undoController = null;
-		this.loadStrokesFromNote();
+		if (status === 'conflict') {
+			new Notice(
+				'Jot: this notebook changed on disk while local edits were unsaved. Local edits were kept and the session is in conflict until saved or reopened.',
+				8000,
+			);
+		}
 		this.render();
 	}
 
+	override async save(clear?: boolean): Promise<void> {
+		const session = this.session;
+		if (!session || session.loadError) return;
+
+		const token = session.beginSave();
+		if (!token) {
+			if (session.document.state === 'conflict') {
+				new Notice('Jot: this notebook has an unresolved external-edit conflict.');
+			}
+			return;
+		}
+
+		try {
+			await super.save(clear);
+			session.completeSave(token);
+			this.data = session.rawData;
+			this.clearRetryTimer();
+			if (session.document.isDirty) this.requestSave();
+		} catch (error) {
+			session.failSave(token, error);
+			const message = error instanceof Error ? error.message : String(error);
+			new Notice(
+				`Jot: notebook save failed. The shared session remains dirty and will retry. ${message}`,
+				10000,
+			);
+			this.scheduleRetry();
+			throw error;
+		}
+	}
+
 	clear(): void {
-		this.surface?.disconnect();
-		this.surface = null;
-		this.pagesEl = null;
+		this.detachViewState();
 		this.contentEl.empty();
-		this.resetState();
+		this.data = '';
 	}
 
 	override async onRename(file: TFile): Promise<void> {
-		const oldPath = this.documentPath;
-		const newPath = file.path;
-		if (!this.loadError && oldPath && oldPath !== newPath) {
-			this.strokes.rekeyDocumentPath(oldPath, newPath);
-			this.history.rekeyPath(oldPath, newPath);
+		const oldPath = this.session?.path;
+		if (oldPath && oldPath !== file.path) {
+			this.session = this.plugin.notebookSessions.rename(oldPath, file.path);
 		}
-		this.documentPath = newPath;
 		await super.onRename(file);
-		if (!this.loadError) this.render();
+		this.render();
 	}
 
 	getUndoController(): UndoController | null {
-		return this.loadError ? null : this.undoController;
+		return this.session?.loadError ? null : this.undoController;
 	}
 
 	redrawAll(): void {
-		if (!this.loadError) this.surface?.redrawAll();
+		if (!this.session?.loadError) this.surface?.redrawAll();
 	}
 
-	private resetState(): void {
+	private attachSession(path: string): void {
+		const next = this.plugin.notebookSessions.get(path);
+		if (this.session === next && this.unsubscribeSession) return;
+
+		this.unsubscribeSession?.();
+		this.session = next;
+		this.unsubscribeSession = next.subscribe((event) => this.onSessionEvent(event));
+	}
+
+	private detachViewState(): void {
+		this.clearRetryTimer();
 		this.surface?.disconnect();
-		this.note = createJotNote();
-		this.strokes = new StrokeStore();
-		this.history = new UndoHistory();
+		this.surface = null;
+		this.pagesEl = null;
 		this.undoController = null;
-		this.documentPath = null;
-		this.rawData = '';
-		this.data = '';
-		this.loadError = null;
+		this.unsubscribeSession?.();
+		this.unsubscribeSession = null;
+		this.session = null;
 	}
 
-	private loadStrokesFromNote(): void {
-		const path = this.documentPath ?? this.file?.path;
-		if (!path) return;
-		this.strokes = new StrokeStore();
-		for (const page of this.note.pages) {
-			this.strokes.setForKey(documentPageKey(path, page.id), [...page.strokes]);
+	private onSessionEvent(event: NotebookSessionEvent): void {
+		if (!this.session) return;
+		if (event === 'ink') {
+			this.surface?.redrawAll();
+			return;
+		}
+		if (event === 'paper') {
+			this.surface?.setPaperStyle(this.session.note.paper);
+			return;
+		}
+		if (event === 'structure' || event === 'load') {
+			this.render();
 		}
 	}
 
 	private render(): void {
-		const path = this.documentPath ?? this.file?.path;
-		if (!path || this.loadError) return;
+		const session = this.session;
+		if (!session) return;
+		if (session.loadError) {
+			this.renderLoadError(session.loadError);
+			return;
+		}
 
 		this.surface?.disconnect();
 		this.contentEl.empty();
@@ -154,28 +176,28 @@ export class JotNoteView extends TextFileView {
 		this.renderToolbar(toolbar);
 
 		this.pagesEl = this.contentEl.createDiv({ cls: 'jot-note-pages' });
-		this.surface = new JotNoteSurface(this.pagesEl, this.strokes, (canvas) => {
+		this.surface = new JotNoteSurface(this.pagesEl, session.strokes, (canvas) => {
 			if (!this.surface || !this.undoController) return;
 			this.plugin.wireInkCanvas(
 				canvas,
 				this.surface,
-				{ scheduleSave: () => this.requestSave() },
+				{ scheduleSave: () => this.markDirtyAndSave() },
 				this.undoController,
-				this.strokes,
+				session.strokes,
 			);
 		});
 
 		this.undoController = new UndoController(
-			this.history,
-			this.strokes,
+			session.history,
+			session.strokes,
 			this.surface,
 			{
-				activeDocumentPath: () => this.documentPath ?? this.file?.path ?? null,
-				onAfterApply: () => this.requestSave(),
+				activeDocumentPath: () => session.path,
+				onAfterApply: () => this.markDirtyAndSave(),
 			},
 		);
 
-		this.surface.render(this.note, path);
+		this.surface.render(session.note, session.path);
 	}
 
 	private renderLoadError(message: string): void {
@@ -194,6 +216,9 @@ export class JotNoteView extends TextFileView {
 	}
 
 	private renderToolbar(toolbar: HTMLElement): void {
+		const session = this.session;
+		if (!session) return;
+
 		const paperWrap = toolbar.createDiv({ cls: 'jot-note-toolbar-group' });
 		paperWrap.createSpan({ text: 'Paper' });
 		new DropdownComponent(paperWrap)
@@ -201,7 +226,7 @@ export class JotNoteView extends TextFileView {
 			.addOption('ruled', 'Ruled')
 			.addOption('grid', 'Grid')
 			.addOption('dot', 'Dot')
-			.setValue(this.note.paper)
+			.setValue(session.note.paper)
 			.onChange((value) => this.setPaperStyle(value as JotPaperStyle));
 
 		new ButtonComponent(toolbar)
@@ -221,22 +246,44 @@ export class JotNoteView extends TextFileView {
 	}
 
 	private setPaperStyle(style: JotPaperStyle): void {
-		if (this.loadError || this.note.paper === style) return;
-		this.note = { ...this.note, paper: style };
-		this.surface?.setPaperStyle(style);
+		if (!this.session || this.session.loadError) return;
+		this.session.setPaperStyle(style);
 		this.requestSave();
 	}
 
 	private addPage(): void {
-		if (this.loadError) {
+		const session = this.session;
+		if (!session || session.loadError) {
 			new Notice('Jot: this notebook is read-only because its data could not be validated.');
 			return;
 		}
-		const page = createJotPage(nextPageId(this.note.pages));
-		this.note = { ...this.note, pages: [...this.note.pages, page] };
-		this.render();
+		const pageId = session.addPage();
+		if (!pageId) return;
 		this.requestSave();
 		const pages = this.pagesEl?.querySelectorAll<HTMLElement>('.jot-note-page');
 		pages?.[pages.length - 1]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+	}
+
+	private markDirtyAndSave(): void {
+		if (!this.session || this.session.loadError) return;
+		this.session.markDirty();
+		this.requestSave();
+	}
+
+	private scheduleRetry(): void {
+		this.clearRetryTimer();
+		const win = this.containerEl.ownerDocument.defaultView;
+		if (!win) return;
+		this.retryTimer = win.setTimeout(() => {
+			this.retryTimer = null;
+			if (this.session?.document.isDirty) this.requestSave();
+		}, NOTE_SAVE_RETRY_MS);
+	}
+
+	private clearRetryTimer(): void {
+		if (this.retryTimer === null) return;
+		const win = this.containerEl.ownerDocument.defaultView;
+		if (win) win.clearTimeout(this.retryTimer);
+		this.retryTimer = null;
 	}
 }
