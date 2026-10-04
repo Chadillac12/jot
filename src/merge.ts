@@ -1,4 +1,3 @@
-import { App, Modal } from 'obsidian';
 import { LineCapStyle, PDFPage, rgb } from 'pdf-lib';
 import type { Stroke } from './stroke-math';
 import {
@@ -17,7 +16,7 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
 	};
 }
 
-export function drawStrokesOnPdfPage(page: PDFPage, strokes: Stroke[]) {
+export function drawStrokesOnPdfPage(page: PDFPage, strokes: Stroke[]): void {
 	const pageW = page.getWidth();
 	const pageH = page.getHeight();
 	for (const stroke of strokes) {
@@ -51,8 +50,6 @@ export function drawStrokesOnPdfPage(page: PDFPage, strokes: Stroke[]) {
 		);
 		const path = svgPathFromOutline(outline);
 		if (path) {
-			// drawSvgPath uses SVG's downward-positive Y axis. Anchoring at the
-			// page top makes the exported outline line up with the screen surface.
 			page.drawSvgPath(path, {
 				x: 0,
 				y: pageH,
@@ -60,55 +57,5 @@ export function drawStrokesOnPdfPage(page: PDFPage, strokes: Stroke[]) {
 				opacity: 1,
 			});
 		}
-	}
-}
-
-export class ExportChoiceModal extends Modal {
-	private onChoice: (choice: 'overwrite' | 'copy' | 'cancel') => void;
-	private copyTarget: string;
-
-	constructor(
-		app: App,
-		copyTarget: string,
-		onChoice: (choice: 'overwrite' | 'copy' | 'cancel') => void,
-	) {
-		super(app);
-		this.copyTarget = copyTarget;
-		this.onChoice = onChoice;
-	}
-
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.empty();
-		contentEl.createEl('h2', { text: 'Merge notes into PDF' });
-		contentEl.createEl('p', {
-			text: 'Bake the strokes for this PDF into a PDF file. The sidecar .jot.json is dropped only if you overwrite the original.',
-		});
-		const annotatedName = this.copyTarget.replace(/.*\//, '');
-		const buttons = contentEl.createDiv({ cls: 'jot-modal-buttons' });
-		const copyBtn = buttons.createEl('button', {
-			text: `Save as "${annotatedName}"`,
-		});
-		copyBtn.classList.add('mod-cta');
-		copyBtn.addEventListener('click', () => {
-			this.onChoice('copy');
-			this.close();
-		});
-		const overwriteBtn = buttons.createEl('button', {
-			text: 'Overwrite original',
-		});
-		overwriteBtn.addEventListener('click', () => {
-			this.onChoice('overwrite');
-			this.close();
-		});
-		const cancelBtn = buttons.createEl('button', { text: 'Cancel' });
-		cancelBtn.addEventListener('click', () => {
-			this.onChoice('cancel');
-			this.close();
-		});
-	}
-
-	onClose() {
-		this.contentEl.empty();
 	}
 }
