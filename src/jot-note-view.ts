@@ -131,6 +131,10 @@ export class JotNoteView extends TextFileView {
 		if (!this.session?.loadError) this.surface?.redrawAll();
 	}
 
+	syncSavedData(data: string): void {
+		this.data = data;
+	}
+
 	refreshFromSharedSession(): void {
 		if (!this.session?.loadError) this.render();
 	}
