@@ -124,24 +124,33 @@ export class JotNoteSurface implements InkSurfaceController {
 		this.wireOverlay(live);
 		this.host.appendChild(wrapper);
 
-		const resize = () => {
-			this.sizeCanvas(persistent, sheet);
-			this.sizeCanvas(live, sheet);
+		const applyResize = () => {
+			const persistentChanged = this.sizeCanvas(persistent, sheet);
+			const liveChanged = this.sizeCanvas(live, sheet);
+			if (!persistentChanged && !liveChanged) return;
 			this.redrawPage(persistent);
 			this.clearLivePage(live);
 		};
 
-		const observer = new ResizeObserver(resize);
+		let resizeFrame: number | null = null;
+		const scheduleResize = () => {
+			const win = doc.defaultView;
+			if (!win) {
+				applyResize();
+				return;
+			}
+			if (resizeFrame !== null) return;
+			resizeFrame = win.requestAnimationFrame(() => {
+				resizeFrame = null;
+				applyResize();
+			});
+			this.frames.push(resizeFrame);
+		};
+
+		const observer = new ResizeObserver(scheduleResize);
 		observer.observe(sheet);
 		this.observers.push(observer);
-
-		const win = doc.defaultView;
-		if (win) {
-			const frame = win.requestAnimationFrame(resize);
-			this.frames.push(frame);
-		} else {
-			resize();
-		}
+		scheduleResize();
 	}
 
 	private makeCanvas(doc: Document, className: string, key: string): HTMLCanvasElement {
@@ -151,17 +160,17 @@ export class JotNoteSurface implements InkSurfaceController {
 		return canvas;
 	}
 
-	private sizeCanvas(canvas: HTMLCanvasElement, sheet: HTMLElement): void {
+	private sizeCanvas(canvas: HTMLCanvasElement, sheet: HTMLElement): boolean {
 		const rect = sheet.getBoundingClientRect();
-		if (rect.width <= 0 || rect.height <= 0) return;
+		if (rect.width <= 0 || rect.height <= 0) return false;
 		const win = sheet.ownerDocument.defaultView ?? window;
 		const requestedDpr = devicePixelRatioFor(win);
 		const effectiveDpr = safeBackingStoreDpr(rect.width, rect.height, requestedDpr);
-		applyBackingStoreSize(canvas, rect.width, rect.height, effectiveDpr);
-		canvas.setCssStyles({
-			width: `${rect.width}px`,
-			height: `${rect.height}px`,
-		});
+		// Canvas CSS sizing is handled entirely by the stylesheet (100% x 100%).
+		// Only mutate the backing store when its pixel dimensions truly change;
+		// repeatedly writing CSS pixel sizes from ResizeObserver can create a
+		// WebKit resize/repaint feedback loop on iPad.
+		return applyBackingStoreSize(canvas, rect.width, rect.height, effectiveDpr);
 	}
 
 	private persistentCanvasFor(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
