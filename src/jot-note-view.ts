@@ -64,10 +64,7 @@ export class JotNoteView extends TextFileView {
 			return;
 		}
 		if (status === 'conflict') {
-			new Notice(
-				'Jot: this notebook changed on disk while local edits were unsaved. Local edits were kept and the session is in conflict until saved or reopened.',
-				8000,
-			);
+			void this.resolveConflictAndResume();
 		}
 		this.render();
 	}
@@ -262,6 +259,12 @@ export class JotNoteView extends TextFileView {
 		this.requestSave();
 		const pages = this.pagesEl?.querySelectorAll<HTMLElement>('.jot-note-page');
 		pages?.[pages.length - 1]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+	}
+
+	private async resolveConflictAndResume(): Promise<void> {
+		const session = this.session;
+		if (!session) return;
+		if (await this.plugin.resolveNotebookConflict(session)) this.requestSave();
 	}
 
 	private markDirtyAndSave(): void {
