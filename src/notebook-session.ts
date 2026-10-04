@@ -81,15 +81,14 @@ export class NotebookSession {
 
 	serialize(): string {
 		if (this.loadErrorValue) return this.rawDataValue;
-		this.noteValue = {
+		const snapshot: JotNoteFile = {
 			...this.noteValue,
 			pages: this.noteValue.pages.map((page) => ({
 				...page,
 				strokes: [...this.strokes.forKey(documentPageKey(this.path, page.id))],
 			})),
 		};
-		this.rawDataValue = serializeJotNote(this.noteValue);
-		return this.rawDataValue;
+		return serializeJotNote(snapshot);
 	}
 
 	markDirty(): number {
@@ -102,8 +101,8 @@ export class NotebookSession {
 		return this.document.beginSave();
 	}
 
-	completeSave(token: SaveToken): void {
-		this.rawDataValue = this.serialize();
+	completeSave(token: SaveToken, persistedText: string): void {
+		this.rawDataValue = persistedText;
 		this.document.completeSave(token);
 		this.notify('state');
 	}
