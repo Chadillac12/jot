@@ -1,4 +1,4 @@
-import { TFile, type Vault } from 'obsidian';
+import type { TFile, Vault } from 'obsidian';
 import type { NotebookSessionManager } from './notebook-session';
 
 const SAVE_DEBOUNCE_MS = 750;
@@ -94,8 +94,8 @@ export class NotebookStore {
 
 		try {
 			const file = this.vault.getAbstractFileByPath(path);
-			if (!(file instanceof TFile)) throw new Error(`Notebook file not found: ${path}`);
-			await this.vault.modify(file, prepared.text);
+			if (!file || !('extension' in file)) throw new Error(`Notebook file not found: ${path}`);
+			await this.vault.modify(file as TFile, prepared.text);
 			session.completeSave(prepared.token, prepared.text);
 			if (session.lifecycle.isDirty) this.queueSave(path, SAVE_DEBOUNCE_MS);
 			return true;
