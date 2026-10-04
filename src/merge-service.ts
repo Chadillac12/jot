@@ -1,7 +1,8 @@
 import { App, DataAdapter, Notice } from 'obsidian';
 import { PDFDocument } from 'pdf-lib';
 import { ExportChoiceModal, drawStrokesOnPdfPage } from './merge';
-import type { SidecarStore } from './sidecar-store';
+import type { SidecarLoadStatus, SidecarStore } from './sidecar-store';
+import { transactionalWriteBinary } from './transactional-write';
 import type { StrokeStore } from './stroke-store';
 import type { UndoHistory } from './undo';
 
@@ -10,7 +11,7 @@ const PLUGIN_LOG = '[jot]';
 type MergeChoice = 'overwrite' | 'copy';
 
 export interface MergeServiceCallbacks {
-	ensureLoaded: (pdfPath: string) => Promise<void>;
+	ensureLoaded: (pdfPath: string) => Promise<SidecarLoadStatus>;
 	redrawOverlays: () => void;
 }
 
@@ -25,7 +26,15 @@ export class MergeService {
 	) {}
 
 	async start(pdfPath: string): Promise<void> {
-		await this.callbacks.ensureLoaded(pdfPath);
+		if (!(await this.sidecar.flush(pdfPath))) {
+			new Notice('Jot: annotations are not safely saved yet. Merge was blocked; Jot will retry saving first.');
+			return;
+		}
+		const loadStatus = await this.callbacks.ensureLoaded(pdfPath);
+		if (loadStatus === 'protected' || loadStatus === 'error' || loadStatus === 'dirty') {
+			new Notice('Jot: merge was blocked because the annotation source is not in a verified clean state.');
+			return;
+		}
 		if (!this.strokes.hasFor(pdfPath)) {
 			new Notice('Jot: no notes on this PDF to merge.');
 			return;
@@ -67,7 +76,15 @@ export class MergeService {
 		const buffer = new ArrayBuffer(out.byteLength);
 		new Uint8Array(buffer).set(out);
 		const outPath = choice === 'overwrite' ? pdfPath : copyTarget;
-		await this.adapter.writeBinary(outPath, buffer);
+		const expectedPages = pages.length;
+		await transactionalWriteBinary(this.adapter, outPath, buffer, async (candidate) => {
+			const verified = await PDFDocument.load(candidate);
+			if (verified.getPageCount() !== expectedPages) {
+				throw new Error(
+					`Merged PDF verification failed: expected ${expectedPages} pages, found ${verified.getPageCount()}`,
+				);
+			}
+		});
 		return outPath;
 	}
 
