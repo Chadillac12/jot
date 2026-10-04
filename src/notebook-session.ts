@@ -134,6 +134,13 @@ export class NotebookSession {
 	}
 
 	resolveConflictKeepLocal(): void {
+		// The external bytes have already been preserved by the caller. Promote
+		// that exact disk content to the compare-and-swap baseline so the next
+		// save may intentionally replace that known version with the retained
+		// local model without rediscovering the same conflict.
+		if (this.externalConflictDataValue !== null) {
+			this.rawDataValue = this.externalConflictDataValue;
+		}
 		this.externalConflictDataValue = null;
 		this.lifecycle.resolveConflictKeepLocal();
 		this.notify('state');
