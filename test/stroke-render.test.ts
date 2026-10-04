@@ -5,6 +5,8 @@ import {
 	drawHighlighterPolyline,
 	drawSegment,
 	drawStroke,
+	penOutline,
+	setInkRenderTuning,
 } from '../src/stroke-render';
 
 const point = (x: number, y: number, pressure = 1): NormalizedPoint => ({ x, y, pressure });
@@ -161,5 +163,39 @@ describe('drawStroke', () => {
 			dpr: 2,
 		});
 		expect(ctx.setTransform).toHaveBeenCalledWith(2, 0, 0, 2, 0, 0);
+	});
+});
+
+
+describe('persisted render determinism', () => {
+	it('ignores later global tuning when a stroke stores its render profile', () => {
+		const points = [point(0.1, 0.2, 0.3), point(0.5, 0.5, 0.8), point(0.9, 0.7, 0.4)];
+		const profile = { version: 2 as const, smoothing: 0.2, pressureSensitivity: 0.9 };
+		const canvas = { width: 800, height: 600 };
+
+		setInkRenderTuning({ smoothing: 0, pressureSensitivity: 0 });
+		const before = penOutline(points, 0.01, canvas, profile);
+		setInkRenderTuning({ smoothing: 1, pressureSensitivity: 1 });
+		const after = penOutline(points, 0.01, canvas, profile);
+
+		expect(after).toEqual(before);
+	});
+
+	it('uses a fixed default for legacy strokes without render metadata', () => {
+		const stroke: Stroke = {
+			points: [point(0.1, 0.2, 0.3), point(0.5, 0.5, 0.8), point(0.9, 0.7, 0.4)],
+			color: '#000000',
+			width: 0.01,
+			tool: 'pen',
+		};
+		const first = makeCtx();
+		setInkRenderTuning({ smoothing: 0, pressureSensitivity: 0 });
+		drawStroke(first as unknown as CanvasRenderingContext2D, stroke, { width: 800, height: 600 });
+
+		const second = makeCtx();
+		setInkRenderTuning({ smoothing: 1, pressureSensitivity: 1 });
+		drawStroke(second as unknown as CanvasRenderingContext2D, stroke, { width: 800, height: 600 });
+
+		expect(second.quadraticCurveTo.mock.calls).toEqual(first.quadraticCurveTo.mock.calls);
 	});
 });
