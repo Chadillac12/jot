@@ -55,7 +55,10 @@ export class JotNoteView extends TextFileView {
 	}
 
 	getViewData(): string {
-		if (this.loadError) return this.rawData;
+		if (this.loadError) {
+			this.data = this.rawData;
+			return this.rawData;
+		}
 		const path = this.documentPath ?? this.file?.path;
 		if (path) {
 			this.note = {
@@ -67,12 +70,14 @@ export class JotNoteView extends TextFileView {
 			};
 		}
 		this.rawData = serializeJotNote(this.note);
+		this.data = this.rawData;
 		return this.rawData;
 	}
 
 	setViewData(data: string, clear: boolean): void {
 		if (clear) this.resetState();
 		this.rawData = data;
+		this.data = data;
 		this.documentPath = this.file?.path ?? this.documentPath;
 
 		const parsed = parseJotNoteTextResult(data);
@@ -128,6 +133,7 @@ export class JotNoteView extends TextFileView {
 		this.undoController = null;
 		this.documentPath = null;
 		this.rawData = '';
+		this.data = '';
 		this.loadError = null;
 	}
 
