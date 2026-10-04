@@ -304,8 +304,8 @@ export default class JotPlugin extends Plugin {
 		this.sidecar.scheduleSave(pdfPath);
 	}
 
-	private wirePointerEvents(canvas: HTMLCanvasElement) {
-		this.wireInkCanvas(canvas, this.overlays, this.sidecar, this.undoController, this.strokes);
+	private wirePointerEvents(canvas: HTMLCanvasElement): () => void {
+		return this.wireInkCanvas(canvas, this.overlays, this.sidecar, this.undoController, this.strokes);
 	}
 
 	wireInkCanvas(
@@ -314,13 +314,13 @@ export default class JotPlugin extends Plugin {
 		saveScheduler: InkSaveScheduler,
 		undo: UndoController,
 		strokes = this.strokes,
-	): void {
+	): () => void {
 		const ctx = canvas.getContext('2d');
 		if (!ctx) {
 			console.error(`${PLUGIN_LOG} no 2d context`);
-			return;
+			return () => {};
 		}
-		new PointerEventHandler(canvas, ctx, {
+		return new PointerEventHandler(canvas, ctx, {
 			palette: this.palette,
 			strokes,
 			overlays: surface,
