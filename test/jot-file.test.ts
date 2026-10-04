@@ -119,7 +119,7 @@ describe('migrateStroke', () => {
 			width: 0.009,
 			tool: 'pen',
 		});
-		expect(migrated.color).toBe('#f00');
+		expect(migrated.color).toBe('#ff0000');
 		expect(migrated.width).toBe(0.009);
 		expect(migrated.points).toEqual([{ x: 0.5, y: 0.5, pressure: 1 }]);
 	});
