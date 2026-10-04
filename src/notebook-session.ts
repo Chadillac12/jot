@@ -24,6 +24,7 @@ export class NotebookSession {
 	private rawDataValue = '';
 	private loadErrorValue: string | null = null;
 	private externalConflictDataValue: string | null = null;
+	private expectedPersistedTextValue: string | null = null;
 	private listeners = new Set<(event: NotebookSessionEvent) => void>();
 	private inkNotificationQueued = false;
 
@@ -55,7 +56,12 @@ export class NotebookSession {
 	}
 
 	loadFromText(text: string): NotebookLoadStatus {
-		if (this.lifecycle.state !== 'unloaded' && text === this.rawDataValue) return 'unchanged';
+		if (
+			this.lifecycle.state !== 'unloaded' &&
+			(text === this.rawDataValue || text === this.expectedPersistedTextValue)
+		) {
+			return 'unchanged';
+		}
 		if (!this.lifecycle.canReload()) {
 			if (text === this.rawDataValue) return 'unchanged';
 			this.externalConflictDataValue = text;
@@ -98,17 +104,25 @@ export class NotebookSession {
 		return revision;
 	}
 
-	beginSave(): SaveToken | null {
-		return this.lifecycle.beginSave();
+	prepareSave(): { token: SaveToken; text: string } | null {
+		const token = this.lifecycle.beginSave();
+		if (!token) return null;
+		const text = this.serialize();
+		this.expectedPersistedTextValue = text;
+		return { token, text };
 	}
 
 	completeSave(token: SaveToken, persistedText: string): void {
 		this.rawDataValue = persistedText;
+		if (this.expectedPersistedTextValue === persistedText) {
+			this.expectedPersistedTextValue = null;
+		}
 		this.lifecycle.completeSave(token);
 		this.notify('state');
 	}
 
 	failSave(token: SaveToken, error: unknown): void {
+		this.expectedPersistedTextValue = null;
 		this.lifecycle.failSave(token, error);
 		this.notify('state');
 	}
@@ -176,6 +190,7 @@ export class NotebookSession {
 		this.rawDataValue = text;
 		this.loadErrorValue = null;
 		this.externalConflictDataValue = null;
+		this.expectedPersistedTextValue = null;
 		this.strokes.clearFor(this.path);
 		for (const page of parsed.note.pages) {
 			this.strokes.setForKey(documentPageKey(this.path, page.id), [...page.strokes]);
