@@ -204,13 +204,14 @@ export default class JotPlugin extends Plugin {
 
 	private async ensureLoaded(pdfPath: string) {
 		const status = await this.sidecar.load(pdfPath);
-		if (status === 'dirty') return;
+		if (status === 'dirty') return status;
 		if (status === 'protected') {
 			new Notice(
 				'Jot: the existing annotation sidecar could not be safely loaded. It is protected from overwrite and will be backed up before any new annotations are saved.',
 				8000,
 			);
 		}
+		return status;
 	}
 
 	private async reloadSidecar(pdfPath: string) {
