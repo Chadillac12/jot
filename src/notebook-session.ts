@@ -25,6 +25,7 @@ export class NotebookSession {
 	private loadErrorValue: string | null = null;
 	private externalConflictDataValue: string | null = null;
 	private listeners = new Set<(event: NotebookSessionEvent) => void>();
+	private inkNotificationQueued = false;
 
 	constructor(
 		path: string,
@@ -93,7 +94,7 @@ export class NotebookSession {
 
 	markDirty(): number {
 		const revision = this.document.markDirty();
-		this.notify('ink');
+		this.queueInkNotification();
 		return revision;
 	}
 
@@ -159,6 +160,15 @@ export class NotebookSession {
 
 	notify(event: NotebookSessionEvent): void {
 		for (const listener of this.listeners) listener(event);
+	}
+
+	private queueInkNotification(): void {
+		if (this.inkNotificationQueued) return;
+		this.inkNotificationQueued = true;
+		queueMicrotask(() => {
+			this.inkNotificationQueued = false;
+			this.notify('ink');
+		});
 	}
 
 	private applyParsed(parsed: Extract<JotNoteParseResult, { ok: true }>, text: string): void {
