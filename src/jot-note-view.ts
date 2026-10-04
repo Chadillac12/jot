@@ -7,33 +7,28 @@ import {
 	type IconName,
 	type WorkspaceLeaf,
 } from 'obsidian';
-import { documentPageKey } from './jot-file';
+import type { NotebookDocumentSession, SessionChange } from './document-session';
 import {
 	JOT_NOTE_VIEW_TYPE,
 	createJotPage,
-	createJotNote,
 	nextPageId,
-	parseJotNoteTextResult,
-	serializeJotNote,
-	type JotNoteFile,
 	type JotPaperStyle,
 } from './jot-note-file';
 import { JotNoteSurface } from './jot-note-surface';
-import { StrokeStore } from './stroke-store';
 import { UndoController } from './undo-controller';
-import { UndoHistory } from './undo';
 import type JotPlugin from './main';
 
+const NOTE_SAVE_RETRY_MS = 2000;
+const MAX_NOTE_SAVE_RETRIES = 3;
+
 export class JotNoteView extends TextFileView {
-	private note: JotNoteFile = createJotNote();
-	private strokes = new StrokeStore();
-	private history = new UndoHistory();
+	private session: NotebookDocumentSession | null = null;
 	private surface: JotNoteSurface | null = null;
 	private undoController: UndoController | null = null;
 	private pagesEl: HTMLElement | null = null;
-	private documentPath: string | null = null;
-	private rawData = '';
-	private loadError: string | null = null;
+	private unsubscribeSession: (() => void) | null = null;
+	private saveRetryCount = 0;
+	private saveRetryTimer: number | null = null;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -55,96 +50,122 @@ export class JotNoteView extends TextFileView {
 	}
 
 	getViewData(): string {
-		if (this.loadError) return this.rawData;
-		const path = this.documentPath ?? this.file?.path;
-		if (path) {
-			this.note = {
-				...this.note,
-				pages: this.note.pages.map((page) => ({
-					...page,
-					strokes: [...this.strokes.forKey(documentPageKey(path, page.id))],
-				})),
-			};
-		}
-		this.rawData = serializeJotNote(this.note);
-		return this.rawData;
+		if (!this.session) return this.data ?? '';
+		if (this.session.loadError) return this.session.rawData;
+		return this.session.serializeCurrent();
 	}
 
 	setViewData(data: string, clear: boolean): void {
-		if (clear) this.resetState();
-		this.rawData = data;
-		this.data = data;
-		this.documentPath = this.file?.path ?? this.documentPath;
-
-		const parsed = parseJotNoteTextResult(data);
-		if (!parsed.ok) {
-			this.loadError = parsed.message;
-			this.renderLoadError(parsed.message);
+		if (clear) this.detachViewState();
+		const path = this.file?.path;
+		if (!path) {
+			this.data = data;
 			return;
 		}
 
-		this.loadError = null;
-		this.note = parsed.note;
-		// Disk reloads define a new history boundary. Keeping undo entries from
-		// before an external/sync update could resurrect stale strokes.
-		this.history = new UndoHistory();
-		this.undoController = null;
-		this.loadStrokesFromNote();
+		const session = this.plugin.getNotebookSession(path);
+		this.attachSession(session);
+		const result = session.loadText(data);
+
+		if (result === 'invalid') {
+			this.data = session.rawData;
+			this.renderLoadError(session.loadError ?? 'This Jot notebook could not be validated.');
+			return;
+		}
+		if (result === 'conflict') {
+			this.data = session.rawData;
+			new Notice(
+				'Jot: this notebook changed on disk while local edits were unsaved. Local edits were kept and the session is marked as conflicted.',
+				8000,
+			);
+			this.render();
+			return;
+		}
+
+		this.data = session.rawData;
 		this.render();
 	}
 
+	override async save(clear?: boolean): Promise<void> {
+		const session = this.session;
+		if (!session || session.loadError) return;
+		const revision = session.beginSave();
+		if (revision === null) {
+			if (session.state === 'saving') return;
+			await super.save(clear);
+			return;
+		}
+
+		const serialized = session.serializeCurrent();
+		try {
+			await super.save(clear);
+			session.notebookSaveSucceeded(revision, serialized);
+			this.data = serialized;
+			this.saveRetryCount = 0;
+			this.clearSaveRetry();
+		} catch (error) {
+			session.saveFailed(error);
+			this.scheduleSaveRetry();
+			new Notice(
+				`Jot: notebook save failed and remains dirty — ${error instanceof Error ? error.message : String(error)}`,
+				8000,
+			);
+			throw error;
+		}
+	}
+
 	clear(): void {
-		this.surface?.disconnect();
-		this.surface = null;
-		this.pagesEl = null;
+		this.detachViewState();
 		this.contentEl.empty();
-		this.resetState();
 	}
 
 	override async onRename(file: TFile): Promise<void> {
-		const oldPath = this.documentPath;
-		const newPath = file.path;
-		if (!this.loadError && oldPath && oldPath !== newPath) {
-			this.strokes.rekeyDocumentPath(oldPath, newPath);
-			this.history.rekeyPath(oldPath, newPath);
+		const session = this.session;
+		const oldPath = session?.path;
+		if (session && oldPath && oldPath !== file.path) {
+			this.plugin.renameDocumentSession(oldPath, file.path);
 		}
-		this.documentPath = newPath;
 		await super.onRename(file);
-		if (!this.loadError) this.render();
+		this.render();
 	}
 
 	getUndoController(): UndoController | null {
-		return this.loadError ? null : this.undoController;
+		return this.session?.loadError ? null : this.undoController;
+	}
+
+	getSessionPath(): string | null {
+		return this.session?.path ?? null;
 	}
 
 	redrawAll(): void {
-		if (!this.loadError) this.surface?.redrawAll();
+		if (!this.session?.loadError) this.surface?.redrawAll();
 	}
 
-	private resetState(): void {
+	refreshFromSharedSession(): void {
+		if (!this.session?.loadError) this.render();
+	}
+
+	private attachSession(session: NotebookDocumentSession): void {
+		if (this.session === session) return;
+		this.unsubscribeSession?.();
+		this.session = session;
+		this.unsubscribeSession = session.subscribe((change) => this.onSessionChange(change));
+	}
+
+	private detachViewState(): void {
 		this.surface?.disconnect();
-		this.note = createJotNote();
-		this.strokes = new StrokeStore();
-		this.history = new UndoHistory();
+		this.surface = null;
+		this.pagesEl = null;
 		this.undoController = null;
-		this.documentPath = null;
-		this.rawData = '';
-		this.data = '';
-		this.loadError = null;
-	}
-
-	private loadStrokesFromNote(): void {
-		const path = this.documentPath ?? this.file?.path;
-		if (!path) return;
-		this.strokes = new StrokeStore();
-		for (const page of this.note.pages) {
-			this.strokes.setForKey(documentPageKey(path, page.id), [...page.strokes]);
-		}
+		this.unsubscribeSession?.();
+		this.unsubscribeSession = null;
+		this.session = null;
+		this.clearSaveRetry();
 	}
 
 	private render(): void {
-		const path = this.documentPath ?? this.file?.path;
-		if (!path || this.loadError) return;
+		const session = this.session;
+		if (!session || session.loadError) return;
 
 		this.surface?.disconnect();
 		this.contentEl.empty();
@@ -154,28 +175,38 @@ export class JotNoteView extends TextFileView {
 		this.renderToolbar(toolbar);
 
 		this.pagesEl = this.contentEl.createDiv({ cls: 'jot-note-pages' });
-		this.surface = new JotNoteSurface(this.pagesEl, this.strokes, (canvas) => {
-			if (!this.surface || !this.undoController) return;
-			this.plugin.wireInkCanvas(
+		this.surface = new JotNoteSurface(this.pagesEl, session.strokes, (canvas) => {
+			if (!this.surface || !this.undoController) return () => {};
+			return this.plugin.wireInkCanvas(
 				canvas,
 				this.surface,
-				{ scheduleSave: () => this.requestSave() },
+				{
+					scheduleSave: () => {
+						session.markDirty('ink');
+						this.requestSave();
+						this.plugin.notifyNotebookInkChanged(session.path, this);
+					},
+				},
 				this.undoController,
-				this.strokes,
+				session.strokes,
 			);
 		});
 
 		this.undoController = new UndoController(
-			this.history,
-			this.strokes,
+			session.history,
+			session.strokes,
 			this.surface,
 			{
-				activeDocumentPath: () => this.documentPath ?? this.file?.path ?? null,
-				onAfterApply: () => this.requestSave(),
+				activeDocumentPath: () => session.path,
+				onAfterApply: () => {
+					session.markDirty('ink');
+					this.requestSave();
+					this.plugin.notifyNotebookInkChanged(session.path, this);
+				},
 			},
 		);
 
-		this.surface.render(this.note, path);
+		this.surface.render(session.note, session.path);
 	}
 
 	private renderLoadError(message: string): void {
@@ -194,6 +225,9 @@ export class JotNoteView extends TextFileView {
 	}
 
 	private renderToolbar(toolbar: HTMLElement): void {
+		const session = this.session;
+		if (!session) return;
+
 		const paperWrap = toolbar.createDiv({ cls: 'jot-note-toolbar-group' });
 		paperWrap.createSpan({ text: 'Paper' });
 		new DropdownComponent(paperWrap)
@@ -201,7 +235,7 @@ export class JotNoteView extends TextFileView {
 			.addOption('ruled', 'Ruled')
 			.addOption('grid', 'Grid')
 			.addOption('dot', 'Dot')
-			.setValue(this.note.paper)
+			.setValue(session.note.paper)
 			.onChange((value) => this.setPaperStyle(value as JotPaperStyle));
 
 		new ButtonComponent(toolbar)
@@ -221,22 +255,47 @@ export class JotNoteView extends TextFileView {
 	}
 
 	private setPaperStyle(style: JotPaperStyle): void {
-		if (this.loadError || this.note.paper === style) return;
-		this.note = { ...this.note, paper: style };
+		const session = this.session;
+		if (!session || session.loadError || session.note.paper === style) return;
+		session.setPaperStyle(style);
 		this.surface?.setPaperStyle(style);
+		this.plugin.notifyNotebookStructureChanged(session.path, this);
 		this.requestSave();
 	}
 
 	private addPage(): void {
-		if (this.loadError) {
+		const session = this.session;
+		if (!session || session.loadError) {
 			new Notice('Jot: this notebook is read-only because its data could not be validated.');
 			return;
 		}
-		const page = createJotPage(nextPageId(this.note.pages));
-		this.note = { ...this.note, pages: [...this.note.pages, page] };
+		const page = createJotPage(nextPageId(session.note.pages));
+		session.setNote({ ...session.note, pages: [...session.note.pages, page] });
 		this.render();
+		this.plugin.notifyNotebookStructureChanged(session.path, this);
 		this.requestSave();
 		const pages = this.pagesEl?.querySelectorAll<HTMLElement>('.jot-note-page');
 		pages?.[pages.length - 1]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+	}
+
+	private onSessionChange(change: SessionChange): void {
+		if (change === 'rename') this.render();
+	}
+
+	private scheduleSaveRetry(): void {
+		if (this.saveRetryCount >= MAX_NOTE_SAVE_RETRIES || this.saveRetryTimer !== null) return;
+		this.saveRetryCount += 1;
+		const win = this.containerEl.ownerDocument.defaultView;
+		if (!win) return;
+		this.saveRetryTimer = win.setTimeout(() => {
+			this.saveRetryTimer = null;
+			void this.save();
+		}, NOTE_SAVE_RETRY_MS * this.saveRetryCount);
+	}
+
+	private clearSaveRetry(): void {
+		if (this.saveRetryTimer === null) return;
+		this.containerEl.ownerDocument.defaultView?.clearTimeout(this.saveRetryTimer);
+		this.saveRetryTimer = null;
 	}
 }
