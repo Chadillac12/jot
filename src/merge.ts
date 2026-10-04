@@ -21,7 +21,7 @@ export function drawStrokesOnPdfPage(page: PDFPage, strokes: Stroke[]) {
 	const pageW = page.getWidth();
 	const pageH = page.getHeight();
 	for (const stroke of strokes) {
-		if (stroke.points.length < 2) continue;
+		if (stroke.points.length === 0) continue;
 		const c = hexToRgb(stroke.color);
 		const baseWidth = stroke.width * pageH;
 		const color = rgb(c.r, c.g, c.b);
@@ -42,10 +42,12 @@ export function drawStrokesOnPdfPage(page: PDFPage, strokes: Stroke[]) {
 			}
 			continue;
 		}
-		const outline = penOutline(stroke.points, stroke.width, {
-			width: pageW,
-			height: pageH,
-		});
+		const outline = penOutline(
+			stroke.points,
+			stroke.width,
+			{ width: pageW, height: pageH },
+			stroke.render,
+		);
 		const path = svgPathFromOutline(outline);
 		if (path) {
 			// drawSvgPath uses SVG's downward-positive Y axis. Anchoring at the
