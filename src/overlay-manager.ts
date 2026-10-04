@@ -15,12 +15,95 @@ const OVERLAY_CLASS = 'jot-overlay';
 const LIVE_OVERLAY_CLASS = 'jot-live-overlay';
 const PAGE_ANCHOR_CLASS = 'jot-page-anchor';
 const PASSTHROUGH_CLASS = 'jot-passthrough';
-const PAGE_OBSERVED_ATTR = 'data-jot-observed';
 
 export const OVERLAY_KEY_ATTR = INK_KEY_ATTR;
 
+interface LeafObserverBinding {
+	container: HTMLElement;
+	observer: MutationObserver;
+}
+
+class PdfPageBinding {
+	readonly persistent: HTMLCanvasElement;
+	readonly live: HTMLCanvasElement;
+
+	private mutationObserver: MutationObserver;
+	private resizeObserver: ResizeObserver;
+	private resizeFrame: number | null = null;
+	private disposed = false;
+
+	constructor(
+		readonly page: HTMLElement,
+		readonly key: string,
+		private onResize: (binding: PdfPageBinding) => void,
+		private onInvalidated: (binding: PdfPageBinding) => void,
+		wireOverlay: (canvas: HTMLCanvasElement) => void,
+	) {
+		const doc = page.ownerDocument;
+		page.classList.add(PAGE_ANCHOR_CLASS);
+
+		// Remove stale canvases from a previous plugin instance before wiring new
+		// handlers. Ownership is per binding, never inferred from leftover DOM.
+		page.querySelectorAll(`canvas.${OVERLAY_CLASS}, canvas.${LIVE_OVERLAY_CLASS}`).forEach(
+			(canvas) => canvas.remove(),
+		);
+
+		this.persistent = doc.createElement('canvas');
+		this.persistent.className = OVERLAY_CLASS;
+		this.persistent.setAttribute(OVERLAY_KEY_ATTR, key);
+		page.appendChild(this.persistent);
+
+		this.live = doc.createElement('canvas');
+		this.live.className = LIVE_OVERLAY_CLASS;
+		this.live.setAttribute(OVERLAY_KEY_ATTR, key);
+		page.appendChild(this.live);
+		wireOverlay(this.live);
+
+		this.mutationObserver = new MutationObserver(() => {
+			if (this.disposed) return;
+			if (!this.page.isConnected || !this.persistent.isConnected || !this.live.isConnected) {
+				this.onInvalidated(this);
+			}
+		});
+		this.mutationObserver.observe(page, { childList: true, subtree: true });
+
+		this.resizeObserver = new ResizeObserver(() => this.scheduleResize());
+		this.resizeObserver.observe(page);
+		this.scheduleResize();
+	}
+
+	scheduleResize(): void {
+		if (this.disposed || this.resizeFrame !== null) return;
+		const win = this.page.ownerDocument.defaultView;
+		if (!win) {
+			this.onResize(this);
+			return;
+		}
+		this.resizeFrame = win.requestAnimationFrame(() => {
+			this.resizeFrame = null;
+			if (!this.disposed) this.onResize(this);
+		});
+	}
+
+	dispose(): void {
+		if (this.disposed) return;
+		this.disposed = true;
+		this.mutationObserver.disconnect();
+		this.resizeObserver.disconnect();
+		const win = this.page.ownerDocument.defaultView;
+		if (win && this.resizeFrame !== null) win.cancelAnimationFrame(this.resizeFrame);
+		this.resizeFrame = null;
+		this.persistent.remove();
+		this.live.remove();
+		this.page.classList.remove(PAGE_ANCHOR_CLASS);
+		this.page.querySelector<HTMLElement>('.textLayer')?.classList.remove(PASSTHROUGH_CLASS);
+		this.page.querySelector<HTMLElement>('.annotationLayer')?.classList.remove(PASSTHROUGH_CLASS);
+	}
+}
+
 export class OverlayManager {
-	private containerObservers = new Map<WorkspaceLeaf, MutationObserver>();
+	private leafObservers = new Map<WorkspaceLeaf, LeafObserverBinding>();
+	private pageBindings = new Map<HTMLElement, PdfPageBinding>();
 
 	constructor(
 		private app: App,
@@ -36,37 +119,35 @@ export class OverlayManager {
 		const container = leaf.view.containerEl;
 
 		this.upgradePages(container, filePath);
-		if (this.containerObservers.has(leaf)) return;
+		if (this.leafObservers.has(leaf)) return;
+
 		const observer = new MutationObserver(() => {
 			const currentPath = this.filePathForLeaf(leaf);
 			if (!currentPath) return;
 			this.upgradePages(container, currentPath);
 		});
 		observer.observe(container, { childList: true, subtree: true });
-		this.containerObservers.set(leaf, observer);
+		this.leafObservers.set(leaf, { container, observer });
 	}
 
 	pruneClosedObservers(): void {
-		if (this.containerObservers.size === 0) return;
-		const live = new Set<WorkspaceLeaf>();
-		this.app.workspace.iterateAllLeaves((leaf) => live.add(leaf));
-		for (const [leaf, observer] of this.containerObservers) {
-			if (!live.has(leaf)) {
-				observer.disconnect();
-				this.containerObservers.delete(leaf);
-			}
+		const liveLeaves = new Set<WorkspaceLeaf>();
+		this.app.workspace.iterateAllLeaves((leaf) => liveLeaves.add(leaf));
+		for (const [leaf, binding] of this.leafObservers) {
+			if (liveLeaves.has(leaf)) continue;
+			binding.observer.disconnect();
+			this.leafObservers.delete(leaf);
 		}
+		this.pruneDetachedPageBindings();
 	}
 
 	disconnectAll(): void {
-		this.containerObservers.forEach((observer) => observer.disconnect());
-		this.containerObservers.clear();
+		for (const binding of this.leafObservers.values()) binding.observer.disconnect();
+		this.leafObservers.clear();
+		for (const binding of this.pageBindings.values()) binding.dispose();
+		this.pageBindings.clear();
 	}
 
-	/**
-	 * Redraw only persisted strokes. Pointer handlers are wired to the separate
-	 * live canvas, so passing either layer here resolves to the persistent layer.
-	 */
 	redrawPage(canvas: HTMLCanvasElement): void {
 		const target = this.persistentCanvasFor(canvas);
 		if (!target) return;
@@ -77,9 +158,7 @@ export class OverlayManager {
 		ctx.clearRect(0, 0, surface.width, surface.height);
 		const key = target.getAttribute(OVERLAY_KEY_ATTR);
 		if (!key) return;
-		for (const stroke of this.strokes.forKey(key)) {
-			drawStroke(ctx, stroke, surface);
-		}
+		for (const stroke of this.strokes.forKey(key)) drawStroke(ctx, stroke, surface);
 	}
 
 	appendPersistedStroke(canvas: HTMLCanvasElement, stroke: Stroke): void {
@@ -124,9 +203,7 @@ export class OverlayManager {
 
 	getActivePdfLeaf(): WorkspaceLeaf | null {
 		const leaf = this.app.workspace.getMostRecentLeaf();
-		if (!leaf) return null;
-		const viewType = leaf.view.getViewType?.();
-		if (viewType !== 'pdf') return null;
+		if (!leaf || leaf.view.getViewType?.() !== 'pdf') return null;
 		return leaf;
 	}
 
@@ -141,76 +218,74 @@ export class OverlayManager {
 	}
 
 	private canvasesIn(leaf: WorkspaceLeaf): NodeListOf<HTMLCanvasElement> {
-		return leaf.view.containerEl.querySelectorAll<HTMLCanvasElement>(
-			`canvas.${OVERLAY_CLASS}`,
-		);
+		return leaf.view.containerEl.querySelectorAll<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
 	}
 
 	private upgradePages(container: HTMLElement, filePath: string): void {
-		container
-			.querySelectorAll<HTMLElement>('.page')
-			.forEach((page) => this.ensureOverlayOnPage(page, filePath));
+		const currentPages = new Set(
+			Array.from(container.querySelectorAll<HTMLElement>('.page')),
+		);
+		for (const page of currentPages) this.ensureBinding(page, filePath);
+
+		for (const [page, binding] of this.pageBindings) {
+			if (!page.isConnected || (container.contains(page) && !currentPages.has(page))) {
+				binding.dispose();
+				this.pageBindings.delete(page);
+			}
+		}
 	}
 
-	private ensureOverlayOnPage(page: HTMLElement, filePath: string): void {
+	private ensureBinding(page: HTMLElement, filePath: string): void {
 		const pageNumberAttr = page.getAttribute('data-page-number');
-		const pageNumber = pageNumberAttr ? parseInt(pageNumberAttr, 10) : NaN;
-		if (Number.isNaN(pageNumber)) return;
+		const pageNumber = pageNumberAttr && /^\d+$/.test(pageNumberAttr) ? Number(pageNumberAttr) : NaN;
+		if (!Number.isFinite(pageNumber) || pageNumber <= 0) return;
 		const key = pageKey(filePath, pageNumber);
-		page.classList.add(PAGE_ANCHOR_CLASS);
 
-		let persistent = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
-		if (persistent && persistent.getAttribute(OVERLAY_KEY_ATTR) !== key) {
-			persistent.remove();
-			persistent = null;
-		}
-		if (!persistent) {
-			persistent = activeDocument.createElement('canvas');
-			persistent.className = OVERLAY_CLASS;
-			persistent.setAttribute(OVERLAY_KEY_ATTR, key);
-			page.appendChild(persistent);
-		}
-
-		let live = page.querySelector<HTMLCanvasElement>(`canvas.${LIVE_OVERLAY_CLASS}`);
-		if (live && live.getAttribute(OVERLAY_KEY_ATTR) !== key) {
-			live.remove();
-			live = null;
-		}
-		if (!live) {
-			live = activeDocument.createElement('canvas');
-			live.className = LIVE_OVERLAY_CLASS;
-			live.setAttribute(OVERLAY_KEY_ATTR, key);
-			page.appendChild(live);
-			this.wireOverlay(live);
-		}
-
-		this.sizeOverlayToPage(persistent, page);
-		this.sizeOverlayToPage(live, page);
-		this.disableTextLayerInteraction(page);
-		this.redrawPage(persistent);
-
-		if (page.getAttribute(PAGE_OBSERVED_ATTR) === '1') return;
-		page.setAttribute(PAGE_OBSERVED_ATTR, '1');
-
-		new MutationObserver(() => {
+		const existing = this.pageBindings.get(page);
+		if (existing?.key === key) {
 			this.disableTextLayerInteraction(page);
-			const hasPersistent = page.querySelector(`canvas.${OVERLAY_CLASS}`);
-			const hasLive = page.querySelector(`canvas.${LIVE_OVERLAY_CLASS}`);
-			if (!hasPersistent || !hasLive) this.ensureOverlayOnPage(page, filePath);
-		}).observe(page, { childList: true, subtree: true });
+			existing.scheduleResize();
+			return;
+		}
+		if (existing) {
+			existing.dispose();
+			this.pageBindings.delete(page);
+		}
 
-		new ResizeObserver(() => {
-			const currentPersistent = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
-			const currentLive = page.querySelector<HTMLCanvasElement>(`canvas.${LIVE_OVERLAY_CLASS}`);
-			if (currentPersistent) {
-				this.sizeOverlayToPage(currentPersistent, page);
-				this.redrawPage(currentPersistent);
-			}
-			if (currentLive) {
-				this.sizeOverlayToPage(currentLive, page);
-				this.clearLivePage(currentLive);
-			}
-		}).observe(page);
+		const binding = new PdfPageBinding(
+			page,
+			key,
+			(current) => this.resizeBinding(current),
+			(current) => this.recreateBinding(current, filePath),
+			this.wireOverlay,
+		);
+		this.pageBindings.set(page, binding);
+		this.disableTextLayerInteraction(page);
+		this.resizeBinding(binding);
+	}
+
+	private recreateBinding(binding: PdfPageBinding, filePath: string): void {
+		const page = binding.page;
+		binding.dispose();
+		this.pageBindings.delete(page);
+		if (page.isConnected) this.ensureBinding(page, filePath);
+	}
+
+	private resizeBinding(binding: PdfPageBinding): void {
+		if (!binding.page.isConnected) return;
+		const persistentChanged = this.sizeOverlayToPage(binding.persistent, binding.page);
+		const liveChanged = this.sizeOverlayToPage(binding.live, binding.page);
+		this.disableTextLayerInteraction(binding.page);
+		if (persistentChanged) this.redrawPage(binding.persistent);
+		if (liveChanged) this.clearLivePage(binding.live);
+	}
+
+	private pruneDetachedPageBindings(): void {
+		for (const [page, binding] of this.pageBindings) {
+			if (page.isConnected) continue;
+			binding.dispose();
+			this.pageBindings.delete(page);
+		}
 	}
 
 	private persistentCanvasFor(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
@@ -223,16 +298,21 @@ export class OverlayManager {
 		return canvas.parentElement?.querySelector<HTMLCanvasElement>(`canvas.${LIVE_OVERLAY_CLASS}`) ?? null;
 	}
 
-	private sizeOverlayToPage(overlay: HTMLCanvasElement, page: HTMLElement): void {
+	private sizeOverlayToPage(overlay: HTMLCanvasElement, page: HTMLElement): boolean {
 		const rect = page.getBoundingClientRect();
-		if (rect.width === 0 || rect.height === 0) return;
-		const requestedDpr = devicePixelRatioFor(window);
+		if (rect.width <= 0 || rect.height <= 0) return false;
+		const win = page.ownerDocument.defaultView;
+		const requestedDpr = devicePixelRatioFor(win ?? { devicePixelRatio: 1 });
 		const effectiveDpr = safeBackingStoreDpr(rect.width, rect.height, requestedDpr);
-		applyBackingStoreSize(overlay, rect.width, rect.height, effectiveDpr);
-		overlay.setCssStyles({
-			width: `${rect.width}px`,
-			height: `${rect.height}px`,
-		});
+		const backingChanged = applyBackingStoreSize(overlay, rect.width, rect.height, effectiveDpr);
+		const width = `${rect.width}px`;
+		const height = `${rect.height}px`;
+		const cssChanged = overlay.style.width !== width || overlay.style.height !== height;
+		if (cssChanged) {
+			overlay.style.width = width;
+			overlay.style.height = height;
+		}
+		return backingChanged || cssChanged;
 	}
 
 	private disableTextLayerInteraction(page: HTMLElement): void {
