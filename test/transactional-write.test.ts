@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/unbound-method */
-import type { DataAdapter } from 'obsidian';
+import type { DataAdapter, TFile, Vault } from 'obsidian';
 import { describe, expect, it, vi } from 'vitest';
-import { transactionalWriteBinary, transactionalWriteText } from '../src/transactional-write';
+import { transactionalModifyVaultBinary, transactionalWriteBinary, transactionalWriteText } from '../src/transactional-write';
 
 function makeAdapter(initial: Record<string, string> = {}) {
 	const textFiles: Record<string, string> = { ...initial };
@@ -135,3 +135,65 @@ describe('transactionalWriteBinary', () => {
 		expect([...new Uint8Array(fs.binaryFiles.get('a.pdf')!)]).toEqual([1, 2, 3]);
 	});
 });
+
+describe('transactionalModifyVaultBinary', () => {
+	it('restores the tracked PDF when dependent sidecar cleanup fails', async () => {
+		const fs = makeAdapter();
+		const file = { path: 'a.pdf' } as TFile;
+		let current = new Uint8Array([1, 2, 3]).buffer;
+		const vault = {
+			readBinary: vi.fn(async () => current.slice(0)),
+			modifyBinary: vi.fn(async (_file: TFile, data: ArrayBuffer) => {
+				current = data.slice(0);
+			}),
+		} as unknown as Vault;
+		const replacement = new Uint8Array([4, 5, 6]).buffer;
+
+		await expect(
+			transactionalModifyVaultBinary(
+				vault,
+				fs.adapter,
+				file,
+				replacement,
+				async (candidate) => {
+					if (candidate.byteLength === 0) throw new Error('invalid');
+				},
+				async () => {
+					throw new Error('sidecar cleanup failed');
+				},
+			),
+		).rejects.toThrow('sidecar cleanup failed');
+
+		expect([...new Uint8Array(current)]).toEqual([1, 2, 3]);
+		expect(
+			[...fs.binaryFiles.keys()].some((path) => path.startsWith('a.pdf.jot-backup-')),
+		).toBe(true);
+	});
+
+	it('commits through Vault.modifyBinary and removes the recovery backup on success', async () => {
+		const fs = makeAdapter();
+		const file = { path: 'a.pdf' } as TFile;
+		let current = new Uint8Array([1, 2, 3]).buffer;
+		const vault = {
+			readBinary: vi.fn(async () => current.slice(0)),
+			modifyBinary: vi.fn(async (_file: TFile, data: ArrayBuffer) => {
+				current = data.slice(0);
+			}),
+		} as unknown as Vault;
+		const replacement = new Uint8Array([4, 5, 6]).buffer;
+
+		await transactionalModifyVaultBinary(
+			vault,
+			fs.adapter,
+			file,
+			replacement,
+			async () => {},
+		);
+
+		expect([...new Uint8Array(current)]).toEqual([4, 5, 6]);
+		expect(
+			[...fs.binaryFiles.keys()].some((path) => path.startsWith('a.pdf.jot-backup-')),
+		).toBe(false);
+	});
+});
+
