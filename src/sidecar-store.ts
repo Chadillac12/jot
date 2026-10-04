@@ -32,6 +32,7 @@ export class SidecarStore {
 	private retryCounts = new Map<string, number>();
 	private recentSelfSaves = new Map<string, number>();
 	private protectedOriginals = new Map<string, string>();
+	private inFlight = new Map<string, Promise<void>>();
 
 	constructor(
 		private adapter: DataAdapter,
@@ -217,31 +218,53 @@ export class SidecarStore {
 	}
 
 	private async save(pdfPath: string): Promise<void> {
-		const session = this.sessions.pdf(pdfPath);
-		const previousState = session.state;
-		const revision = session.beginSave();
-		if (revision === null) return;
+		const existing = this.inFlight.get(pdfPath);
+		if (existing) {
+			await existing;
+			if (this.sessions.pdf(pdfPath).isDirty) await this.save(pdfPath);
+			return;
+		}
 
-		const path = jotPathFor(pdfPath);
+		const task = this.runSaveLoop(pdfPath);
+		this.inFlight.set(pdfPath, task);
 		try {
-			const protectedText = this.protectedOriginals.get(pdfPath);
-			if (protectedText !== undefined) {
-				await this.writeRecoveryCopy(path, protectedText);
+			await task;
+		} finally {
+			if (this.inFlight.get(pdfPath) === task) this.inFlight.delete(pdfPath);
+		}
+	}
+
+	private async runSaveLoop(pdfPath: string): Promise<void> {
+		const session = this.sessions.pdf(pdfPath);
+		while (session.isDirty) {
+			const previousState = session.state;
+			const revision = session.beginSave();
+			if (revision === null) {
+				if (session.state === 'saving') return;
+				break;
 			}
 
-			const payload =
-				this.sessions.strokes.buildPayload(pdfPath) ??
-				{ version: JOT_FORMAT_VERSION, pages: {} };
-			const text = JSON.stringify(payload, null, 2);
-			await transactionalWriteText(this.adapter, path, text, validateSidecarText);
-			this.recentSelfSaves.set(path, Date.now());
-			this.protectedOriginals.delete(pdfPath);
-			session.saveSucceeded(revision);
-			if (previousState === 'save-error') this.callbacks.onSaveRecovered?.(pdfPath);
-			this.retryCounts.delete(pdfPath);
-		} catch (error) {
-			session.saveFailed(error);
-			throw error;
+			const path = jotPathFor(pdfPath);
+			try {
+				const protectedText = this.protectedOriginals.get(pdfPath);
+				if (protectedText !== undefined) {
+					await this.writeRecoveryCopy(path, protectedText);
+				}
+
+				const payload =
+					this.sessions.strokes.buildPayload(pdfPath) ??
+					{ version: JOT_FORMAT_VERSION, pages: {} };
+				const text = JSON.stringify(payload, null, 2);
+				await transactionalWriteText(this.adapter, path, text, validateSidecarText);
+				this.recentSelfSaves.set(path, Date.now());
+				this.protectedOriginals.delete(pdfPath);
+				session.saveSucceeded(revision);
+				if (previousState === 'save-error') this.callbacks.onSaveRecovered?.(pdfPath);
+				this.retryCounts.delete(pdfPath);
+			} catch (error) {
+				session.saveFailed(error);
+				throw error;
+			}
 		}
 	}
 
