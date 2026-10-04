@@ -111,8 +111,9 @@ describe('transactionalWriteText', () => {
 describe('transaction rollback after committed verification failure', () => {
 	it('removes an unverified brand-new authoritative text file', async () => {
 		const fs = makeFs();
-		const normalRead = vi.mocked(fs.adapter.read).getMockImplementation();
-		vi.mocked(fs.adapter.read).mockImplementation(async (path: string) => {
+		const readSpy = vi.spyOn(fs.adapter, 'read');
+		const normalRead = readSpy.getMockImplementation();
+		readSpy.mockImplementation(async (path: string) => {
 			if (path === 'new.txt') return 'corrupt';
 			if (!normalRead) throw new Error('missing read implementation');
 			return normalRead(path);
@@ -131,7 +132,8 @@ describe('transactionalWriteBinary corruption handling', () => {
 	it('rejects a temporary binary write whose bytes differ from the requested payload', async () => {
 		const fs = makeFs();
 		fs.binary['a.bin'] = Uint8Array.from([1, 2, 3]).buffer;
-		vi.mocked(fs.adapter.writeBinary).mockImplementation(async (path: string, value: ArrayBuffer) => {
+		const writeBinarySpy = vi.spyOn(fs.adapter, 'writeBinary');
+		writeBinarySpy.mockImplementation(async (path: string, value: ArrayBuffer) => {
 			const bytes = new Uint8Array(value.slice(0));
 			if (bytes.length > 0) bytes[0] = (bytes[0] ?? 0) ^ 0xff;
 			fs.binary[path] = bytes.buffer;
@@ -146,7 +148,9 @@ describe('transactionalWriteBinary corruption handling', () => {
 			),
 		).rejects.toThrow('Temporary binary write verification failed');
 
-		expect([...new Uint8Array(fs.binary['a.bin']!)]).toEqual([1, 2, 3]);
+		const original = fs.binary['a.bin'];
+		expect(original).toBeDefined();
+		expect([...new Uint8Array(original ?? new ArrayBuffer(0))]).toEqual([1, 2, 3]);
 	});
 });
 
