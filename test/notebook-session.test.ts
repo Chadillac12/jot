@@ -45,12 +45,12 @@ describe('NotebookSessionManager', () => {
 		expect(session.loadFromText(serializeJotNote(createJotNote()))).toBe('loaded');
 
 		session.markDirty();
-		const token = session.beginSave();
-		expect(token).not.toBeNull();
-		const persistedText = session.serialize();
+		const prepared = session.prepareSave();
+		expect(prepared).not.toBeNull();
+		const persistedText = prepared!.text;
 
 		session.setPaperStyle('grid');
-		session.completeSave(token!, persistedText);
+		session.completeSave(prepared!.token, persistedText);
 
 		expect(session.rawData).toBe(persistedText);
 		expect(session.note.paper).toBe('grid');
@@ -72,7 +72,25 @@ describe('NotebookSessionManager', () => {
 		session.resolveConflictKeepLocal();
 		expect(session.externalConflictData).toBeNull();
 		expect(session.lifecycle.state).toBe('dirty');
-		expect(session.beginSave()).not.toBeNull();
+		expect(session.prepareSave()).not.toBeNull();
+	});
+
+	it('does not classify its own in-flight persisted snapshot as an external conflict', () => {
+		const manager = new NotebookSessionManager(new DocumentSessionManager());
+		const session = manager.get('Lecture.jot');
+		expect(session.loadFromText(serializeJotNote(createJotNote()))).toBe('loaded');
+
+		session.setPaperStyle('grid');
+		const prepared = session.prepareSave();
+		expect(prepared).not.toBeNull();
+		expect(session.lifecycle.state).toBe('saving');
+
+		expect(session.loadFromText(prepared!.text)).toBe('unchanged');
+		expect(session.externalConflictData).toBeNull();
+		expect(session.lifecycle.state).toBe('saving');
+
+		session.completeSave(prepared!.token, prepared!.text);
+		expect(session.lifecycle.state).toBe('clean');
 	});
 
 	it('renames one shared model and preserves all ink/history ownership', () => {
