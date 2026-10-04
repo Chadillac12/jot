@@ -12,6 +12,8 @@ export interface NotebookStoreCallbacks {
 }
 
 export class NotebookStore {
+	private inFlight = new Map<string, Promise<boolean>>();
+
 	constructor(
 		private adapter: DataAdapter,
 		private sessions: DocumentSessionManager,
@@ -19,27 +21,44 @@ export class NotebookStore {
 	) {}
 
 	async save(session: NotebookDocumentSession): Promise<boolean> {
-		const previousState = session.state;
-		const revision = session.beginSave();
-		if (revision === null) return false;
-		const serialized = session.serializeCurrent();
+		const existing = this.inFlight.get(session.path);
+		if (existing) return existing;
 
+		const task = this.runSaveLoop(session);
+		this.inFlight.set(session.path, task);
 		try {
-			await transactionalWriteText(
-				this.adapter,
-				session.path,
-				serialized,
-				validateNotebookText,
-			);
-			session.notebookSaveSucceeded(revision, serialized);
-			if (previousState === 'save-error') this.callbacks.onSaveRecovered?.(session.path);
-			return true;
-		} catch (error) {
-			const typed = error instanceof Error ? error : new Error(String(error));
-			session.saveFailed(typed);
-			this.callbacks.onSaveError?.(session.path, typed);
-			throw typed;
+			return await task;
+		} finally {
+			if (this.inFlight.get(session.path) === task) this.inFlight.delete(session.path);
 		}
+	}
+
+	private async runSaveLoop(session: NotebookDocumentSession): Promise<boolean> {
+		let savedAny = false;
+		while (session.isDirty) {
+			const previousState = session.state;
+			const revision = session.beginSave();
+			if (revision === null) break;
+			const serialized = session.serializeCurrent();
+
+			try {
+				await transactionalWriteText(
+					this.adapter,
+					session.path,
+					serialized,
+					validateNotebookText,
+				);
+				session.notebookSaveSucceeded(revision, serialized);
+				if (previousState === 'save-error') this.callbacks.onSaveRecovered?.(session.path);
+				savedAny = true;
+			} catch (error) {
+				const typed = error instanceof Error ? error : new Error(String(error));
+				session.saveFailed(typed);
+				this.callbacks.onSaveError?.(session.path, typed);
+				throw typed;
+			}
+		}
+		return savedAny;
 	}
 
 	async flushAll(): Promise<Array<{ path: string; error: Error }>> {
