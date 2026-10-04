@@ -111,6 +111,25 @@ describe('SidecarStore session-safe load', () => {
 		expect(sessions.strokes.forPage('a.pdf', 1)[0]?.color).toBe('#0000ff');
 	});
 
+	it('drops stale PDF undo history when a clean external reload replaces the model', async () => {
+		const fs = makeFs({ 'a.pdf.jot.json': payload('#111111') });
+		const sessions = new DocumentSessionManager();
+		const store = new SidecarStore(fs.adapter, sessions);
+		await store.load('a.pdf');
+		sessions.history.push({
+			pdfPath: 'a.pdf',
+			key: 'a.pdf::1',
+			prevStrokes: [stroke('#000000')],
+		});
+		expect(sessions.history.canUndo('a.pdf')).toBe(true);
+
+		fs.files['a.pdf.jot.json'] = payload('#222222');
+		expect(await store.load('a.pdf')).toBe('loaded');
+
+		expect(sessions.history.canUndo('a.pdf')).toBe(false);
+		expect(sessions.strokes.forPage('a.pdf', 1)[0]?.color).toBe('#222222');
+	});
+
 	it('marks an invalid external sidecar as a conflict without clearing memory', async () => {
 		const fs = makeFs({ 'a.pdf.jot.json': payload('#112233') });
 		const sessions = new DocumentSessionManager();
