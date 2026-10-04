@@ -186,10 +186,15 @@ export default class JotPlugin extends Plugin {
 			}),
 		);
 
-		this.registerDomEvent(window, 'resize', () => this.refreshFloatingPaletteButton());
-		this.registerDomEvent(window, 'pagehide', () => {
-			void this.sidecar.flushAll();
-		});
+		const rootWin =
+			this.app.workspace.getMostRecentLeaf()?.view.containerEl.ownerDocument.defaultView ??
+			globalThis.window;
+		if (rootWin) {
+			this.registerDomEvent(rootWin, 'resize', () => this.refreshFloatingPaletteButton());
+			this.registerDomEvent(rootWin, 'pagehide', () => {
+				void this.sidecar.flushAll();
+			});
+		}
 
 		this.app.workspace.onLayoutReady(async () => {
 			const filePath = this.overlays.getActivePdfFilePath();
