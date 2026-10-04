@@ -3,7 +3,8 @@ import { parseStoredStroke } from './jot-file';
 
 export const JOT_NOTE_EXTENSION = 'jot';
 export const JOT_NOTE_VIEW_TYPE = 'jot-note';
-export const JOT_NOTE_FORMAT_VERSION = 1;
+export const JOT_NOTE_FORMAT_VERSION = 2;
+export const JOT_NOTE_LEGACY_VERSION = 1;
 
 export type JotPaperStyle = 'blank' | 'ruled' | 'grid' | 'dot';
 
@@ -85,7 +86,7 @@ export function parseJotNoteTextResult(text: string): JotNoteParseResult {
 		};
 	}
 
-	if (raw.version !== JOT_NOTE_FORMAT_VERSION) {
+	if (raw.version !== JOT_NOTE_FORMAT_VERSION && raw.version !== JOT_NOTE_LEGACY_VERSION) {
 		return {
 			ok: false,
 			reason: 'unsupported-version',
