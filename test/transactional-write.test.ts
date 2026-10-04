@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/unbound-method */
+/* eslint-disable @typescript-eslint/unbound-method, obsidianmd/no-tfile-tfolder-cast */
 import type { DataAdapter, TFile, Vault } from 'obsidian';
 import { describe, expect, it, vi } from 'vitest';
 import { transactionalModifyVaultBinary, transactionalWriteBinary, transactionalWriteText } from '../src/transactional-write';
