@@ -11,7 +11,8 @@ import { PointerEventHandler } from './pointer-event-handler';
 import { isSidecarPath, pdfPathFromSidecar } from './jot-file';
 import { JOT_NOTE_EXTENSION, JOT_NOTE_VIEW_TYPE, createJotNote, serializeJotNote } from './jot-note-file';
 import { JotNoteView } from './jot-note-view';
-import { NotebookSessionManager } from './notebook-session';
+import { NotebookSessionManager, type NotebookSession } from './notebook-session';
+import { transactionalWriteText } from './transactional-write';
 import { MergeService } from './merge-service';
 import { OverlayManager } from './overlay-manager';
 import { SidecarStore } from './sidecar-store';
@@ -262,6 +263,27 @@ export default class JotPlugin extends Plugin {
 		);
 	}
 
+
+	async resolveNotebookConflict(session: NotebookSession): Promise<boolean> {
+		const external = session.externalConflictData;
+		if (external === null) return true;
+		const conflictPath = `${session.path}.conflict-${Date.now()}.json`;
+		try {
+			await transactionalWriteText(this.app.vault.adapter, conflictPath, external);
+			session.resolveConflictKeepLocal();
+			new Notice(
+				`Jot: simultaneous notebook edits detected. The external copy was preserved at ${conflictPath}.`,
+				8000,
+			);
+			return true;
+		} catch (error) {
+			new Notice(
+				`Jot: could not preserve the external notebook conflict, so local save remains blocked. ${error instanceof Error ? error.message : String(error)}`,
+				10000,
+			);
+			return false;
+		}
+	}
 
 	private reportSaveError(pdfPath: string, error: Error): void {
 		const message = error.message || String(error);
