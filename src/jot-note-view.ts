@@ -273,7 +273,7 @@ export class JotNoteView extends TextFileView {
 	}
 
 	private onSessionChange(change: SessionChange): void {
-		if (change === 'rename') this.render();
+		if (change === 'rename' || change === 'reload') this.render();
 	}
 
 	private scheduleSaveRetry(): void {
