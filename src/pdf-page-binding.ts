@@ -39,8 +39,11 @@ export class PdfPageBinding {
 
 	get key(): string | null {
 		const pageNumberAttr = this.page.getAttribute('data-page-number');
-		const pageNumber = pageNumberAttr ? Number.parseInt(pageNumberAttr, 10) : NaN;
-		return Number.isNaN(pageNumber) ? null : pageKey(this.filePath, pageNumber);
+		if (!pageNumberAttr || !/^\d+$/.test(pageNumberAttr)) return null;
+		const pageNumber = Number(pageNumberAttr);
+		return Number.isSafeInteger(pageNumber) && pageNumber > 0
+			? pageKey(this.filePath, pageNumber)
+			: null;
 	}
 
 	get persistentCanvas(): HTMLCanvasElement | null {
