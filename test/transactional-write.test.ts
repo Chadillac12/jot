@@ -60,6 +60,18 @@ describe('transactionalWriteText', () => {
 		expect(fs.textFiles['a.json']).toBe('old');
 	});
 
+	it('removes a newly committed file when final validation fails and no original existed', async () => {
+		const fs = makeAdapter();
+		let validations = 0;
+		await expect(
+			transactionalWriteText(fs.adapter, 'new.json', 'candidate', () => {
+				validations += 1;
+				return validations === 1;
+			}),
+		).rejects.toThrow('Committed write validation failed');
+		expect(fs.textFiles['new.json']).toBeUndefined();
+	});
+
 	it('never replaces the original when temporary validation fails', async () => {
 		const fs = makeAdapter({ 'a.json': 'old' });
 		await expect(
@@ -70,6 +82,21 @@ describe('transactionalWriteText', () => {
 });
 
 describe('transactionalWriteBinary', () => {
+	it('removes an invalid newly committed binary when there was no original', async () => {
+		const fs = makeAdapter();
+		const replacement = new Uint8Array([4, 5, 6]).buffer;
+		let verificationCount = 0;
+
+		await expect(
+			transactionalWriteBinary(fs.adapter, 'new.pdf', replacement, async () => {
+				verificationCount += 1;
+				if (verificationCount === 2) throw new Error('committed PDF invalid');
+			}),
+		).rejects.toThrow('committed PDF invalid');
+
+		expect(fs.binaryFiles.has('new.pdf')).toBe(false);
+	});
+
 	it('rolls back the original binary when committed verification fails', async () => {
 		const fs = makeAdapter();
 		const original = new Uint8Array([1, 2, 3]).buffer;
