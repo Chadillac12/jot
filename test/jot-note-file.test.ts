@@ -30,6 +30,7 @@ describe('Jot note file format', () => {
 				{ x: 0.1, y: 0.2, pressure: 0.3 },
 				{ x: 0.4, y: 0.5, pressure: 0.8 },
 			],
+			render: { version: 2, smoothing: 0.5, pressureSensitivity: 0.5 },
 		});
 		const parsed = parseJotNoteText(serializeJotNote(note));
 		expect(parsed).toEqual(note);
