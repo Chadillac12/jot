@@ -136,6 +136,62 @@ describe('NotebookStore shared-session persistence', () => {
 });
 
 
+describe('NotebookStore concurrent revision handling', () => {
+	it('persists a newer notebook edit that arrives while an earlier revision is in flight', async () => {
+		const sessions = new DocumentSessionManager();
+		const session = sessions.notebook('Lecture.jot');
+		session.loadText(notebookText());
+		session.setPaperStyle('grid');
+
+		const files: Record<string, string> = {};
+		let releaseWrite!: () => void;
+		let signalStarted!: () => void;
+		const writeGate = new Promise<void>((resolve) => {
+			releaseWrite = resolve;
+		});
+		const writeStarted = new Promise<void>((resolve) => {
+			signalStarted = resolve;
+		});
+		let blockFirstTempWrite = true;
+		const adapter = {
+			exists: vi.fn(async (path: string) => path in files),
+			read: vi.fn(async (path: string) => {
+				const value = files[path];
+				if (value === undefined) throw new Error(`missing ${path}`);
+				return value;
+			}),
+			write: vi.fn(async (path: string, value: string) => {
+				if (blockFirstTempWrite && path.includes('.jot-tmp-')) {
+					blockFirstTempWrite = false;
+					signalStarted();
+					await writeGate;
+				}
+				files[path] = value;
+			}),
+			rename: vi.fn(async (oldPath: string, newPath: string) => {
+				const value = files[oldPath];
+				if (value === undefined) throw new Error(`missing ${oldPath}`);
+				files[newPath] = value;
+				delete files[oldPath];
+			}),
+			remove: vi.fn(async (path: string) => {
+				delete files[path];
+			}),
+		} as unknown as DataAdapter;
+		const store = new NotebookStore(adapter, sessions);
+
+		const firstSave = store.save(session);
+		await writeStarted;
+		session.setPaperStyle('dot');
+		releaseWrite();
+		await firstSave;
+
+		expect(files['Lecture.jot']).toContain('"paper": "dot"');
+		expect(session.state).toBe('clean');
+		expect(session.revision).toBe(session.persistedRevision);
+	});
+});
+
 describe('NotebookStore conflict preservation', () => {
 	it('does not save an invalid conflict with no local edits', async () => {
 		const fs = makeAdapter();
