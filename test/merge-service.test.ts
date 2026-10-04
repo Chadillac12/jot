@@ -163,8 +163,9 @@ describe('MergeService transactional overwrite', () => {
 		expect(redraw).toHaveBeenCalledTimes(1);
 	});
 
-	it('keeps the sidecar and memory if annotation cleanup fails after PDF commit', async () => {
+	it('restores the original PDF if annotation cleanup fails after commit', async () => {
 		const { fs, sessions, merge } = await harness();
+		const original = fs.binary['notes.pdf']!.slice(0);
 		fs.removeMock.mockImplementation(async (path: string) => {
 			if (path === 'notes.pdf.jot.json') throw new Error('injected sidecar delete failure');
 			delete fs.text[path];
@@ -177,6 +178,8 @@ describe('MergeService transactional overwrite', () => {
 
 		expect(fs.text['notes.pdf.jot.json']).toBeDefined();
 		expect(sessions.strokes.forPage('notes.pdf', 1)).toHaveLength(1);
-		await expect(PDFDocument.load(fs.binary['notes.pdf']!)).resolves.toBeDefined();
+		const restored = fs.binary['notes.pdf'];
+		expect(restored).toBeDefined();
+		expect([...new Uint8Array(restored!)]).toEqual([...new Uint8Array(original)]);
 	});
 });
