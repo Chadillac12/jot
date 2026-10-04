@@ -1,5 +1,5 @@
 /* @vitest-environment happy-dom */
-/* eslint-disable @typescript-eslint/unbound-method, obsidianmd/no-global-this */
+/* eslint-disable @typescript-eslint/unbound-method, obsidianmd/no-global-this, obsidianmd/prefer-active-doc */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LongPressDetector } from '../src/long-press';
 import type { OverlayManager } from '../src/overlay-manager';
