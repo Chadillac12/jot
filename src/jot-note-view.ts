@@ -221,7 +221,7 @@ export class JotNoteView extends TextFileView {
 	private setPaperStyle(style: JotPaperStyle): void {
 		if (this.loadError || this.note.paper === style) return;
 		this.note = { ...this.note, paper: style };
-		this.render();
+		this.surface?.setPaperStyle(style);
 		this.requestSave();
 	}
 
