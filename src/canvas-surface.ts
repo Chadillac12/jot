@@ -69,8 +69,19 @@ export function applyBackingStoreSize(
 export function readCanvasSurface(canvas: HTMLCanvasElement): CanvasSurface {
 	const styleW = parseFloat(canvas.style.width);
 	const styleH = parseFloat(canvas.style.height);
-	const cssWidth = Number.isFinite(styleW) && styleW > 0 ? styleW : canvas.width;
-	const cssHeight = Number.isFinite(styleH) && styleH > 0 ? styleH : canvas.height;
+	const rect = canvas.getBoundingClientRect();
+	const cssWidth =
+		Number.isFinite(styleW) && styleW > 0
+			? styleW
+			: rect.width > 0
+				? rect.width
+				: canvas.width;
+	const cssHeight =
+		Number.isFinite(styleH) && styleH > 0
+			? styleH
+			: rect.height > 0
+				? rect.height
+				: canvas.height;
 	const dpr = cssWidth > 0 ? canvas.width / cssWidth : 1;
 	return { width: cssWidth, height: cssHeight, dpr: dpr > 0 ? dpr : 1 };
 }
