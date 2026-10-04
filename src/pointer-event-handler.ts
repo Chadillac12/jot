@@ -16,7 +16,7 @@ import {
 import { INK_KEY_ATTR, type InkSaveScheduler, type InkSurfaceController } from './ink-surface';
 import { PenStrokeState } from './pen-stroke-state';
 import { ERASE_RADIUS, strokeIntersects } from './stroke-math';
-import type { NormalizedPoint, Stroke } from './stroke-math';
+import type { NormalizedPoint, Stroke, StrokeRenderProfile } from './stroke-math';
 import { drawStroke } from './stroke-render';
 import type { StrokeStore } from './stroke-store';
 import { TwoFingerHoldDetector } from './two-finger-hold';
@@ -58,6 +58,7 @@ export interface PointerEventHandlerDeps {
 	toolState: () => ToolState;
 	handedness: () => Handedness;
 	paletteActivation: () => PaletteActivation;
+	renderProfile: () => StrokeRenderProfile;
 }
 
 export class PointerEventHandler {
@@ -447,11 +448,12 @@ export class PointerEventHandler {
 		const points =
 			this.predictedPoints.length > 0 ? [...stored, ...this.predictedPoints] : stored;
 		const tool = this.deps.toolState();
+		if (tool.tool === 'eraser') return;
 		const surface = readCanvasSurface(this.canvas);
 		this.deps.overlays.clearLivePage(this.canvas);
 		drawStroke(
 			this.ctx,
-			{ points, color: tool.color, width: tool.width, tool: tool.tool },
+			{ points, color: tool.color, width: tool.width, tool: tool.tool, render: this.deps.renderProfile() },
 			surface,
 		);
 	}
@@ -477,6 +479,10 @@ export class PointerEventHandler {
 		if (key && points.length > 0) {
 			const pdfPath = documentPathFromKey(key);
 			const tool = this.deps.toolState();
+			if (tool.tool === 'eraser') {
+				this.state.reset();
+				return null;
+			}
 			const hasUndoEntry = pdfPath !== null;
 			if (pdfPath) {
 				this.deps.undo.push({ pdfPath, key, prevStrokes: [...this.deps.strokes.forKey(key)] });
@@ -486,6 +492,7 @@ export class PointerEventHandler {
 				color: tool.color,
 				width: tool.width,
 				tool: tool.tool,
+				render: this.deps.renderProfile(),
 			};
 			this.deps.strokes.appendToKey(key, stroke);
 			if (pdfPath) this.deps.sidecar.scheduleSave(pdfPath);
