@@ -124,7 +124,13 @@ export class PointerEventHandler {
 
 		this.cancelLiveFrame();
 		this.deps.overlays.clearLivePage(this.canvas);
-		this.canvas.setPointerCapture(e.pointerId);
+		// Pointer capture is helpful but not guaranteed in every WKWebView
+		// state. A capture failure must not abort Pencil input entirely.
+		try {
+			this.canvas.setPointerCapture(e.pointerId);
+		} catch {
+			/* continue without capture */
+		}
 		this.activePointerId = e.pointerId;
 
 		if (e.pointerType === 'pen') {
