@@ -1,9 +1,9 @@
-import { App, DataAdapter, Notice } from 'obsidian';
+import { App, DataAdapter, Notice, TFile } from 'obsidian';
 import { PDFDocument } from 'pdf-lib';
 import { ExportChoiceModal } from './merge';
 import { drawStrokesOnPdfPage } from './pdf-render';
 import type { SidecarLoadStatus, SidecarStore } from './sidecar-store';
-import { transactionalWriteBinary } from './transactional-write';
+import { transactionalModifyVaultBinary, transactionalWriteBinary } from './transactional-write';
 import type { StrokeStore } from './stroke-store';
 import type { UndoHistory } from './undo';
 
@@ -14,6 +14,8 @@ type MergeChoice = 'overwrite' | 'copy';
 export interface MergeServiceCallbacks {
 	ensureLoaded: (pdfPath: string) => Promise<SidecarLoadStatus>;
 	redrawOverlays: () => void;
+	acquireMutationLock: (pdfPath: string) => boolean;
+	releaseMutationLock: (pdfPath: string) => void;
 }
 
 export class MergeService {
@@ -48,13 +50,26 @@ export class MergeService {
 	}
 
 	private async run(pdfPath: string, choice: MergeChoice, copyTarget: string): Promise<void> {
+		if (!this.callbacks.acquireMutationLock(pdfPath)) {
+			new Notice('Jot: this PDF is already busy with another protected operation.');
+			return;
+		}
 		try {
+			if (!(await this.sidecar.flush(pdfPath))) {
+				throw new Error('annotations could not be safely flushed before merge');
+			}
+			const loadStatus = await this.callbacks.ensureLoaded(pdfPath);
+			if (loadStatus === 'protected' || loadStatus === 'error' || loadStatus === 'dirty') {
+				throw new Error('annotation source is not in a verified clean state');
+			}
 			const outPath = await this.writeMerged(pdfPath, choice, copyTarget);
 			if (choice === 'overwrite') this.clearAnnotationState(pdfPath);
 			new Notice(`Jot: notes merged into ${outPath}`);
 		} catch (err) {
 			console.error(`${PLUGIN_LOG} merge failed:`, err);
 			new Notice(`Jot: merge failed — ${err instanceof Error ? err.message : 'see console'}`);
+		} finally {
+			this.callbacks.releaseMutationLock(pdfPath);
 		}
 	}
 
@@ -78,20 +93,29 @@ export class MergeService {
 		new Uint8Array(buffer).set(out);
 		const outPath = choice === 'overwrite' ? pdfPath : copyTarget;
 		const expectedPages = pages.length;
-		await transactionalWriteBinary(
-			this.adapter,
-			outPath,
-			buffer,
-			async (candidate) => {
-				const verified = await PDFDocument.load(candidate);
-				if (verified.getPageCount() !== expectedPages) {
-					throw new Error(
-						`Merged PDF verification failed: expected ${expectedPages} pages, found ${verified.getPageCount()}`,
-					);
-				}
-			},
-			choice === 'overwrite' ? async () => this.sidecar.discard(pdfPath) : undefined,
-		);
+		const validatePdf = async (candidate: ArrayBuffer): Promise<void> => {
+			const verified = await PDFDocument.load(candidate);
+			if (verified.getPageCount() !== expectedPages) {
+				throw new Error(
+					`Merged PDF verification failed: expected ${expectedPages} pages, found ${verified.getPageCount()}`,
+				);
+			}
+		};
+
+		if (choice === 'overwrite') {
+			const file = this.app.vault.getAbstractFileByPath(pdfPath);
+			if (!(file instanceof TFile)) throw new Error(`PDF no longer exists at ${pdfPath}`);
+			await transactionalModifyVaultBinary(
+				this.app.vault,
+				this.adapter,
+				file,
+				buffer,
+				validatePdf,
+				async () => this.sidecar.discard(pdfPath),
+			);
+		} else {
+			await transactionalWriteBinary(this.adapter, outPath, buffer, validatePdf);
+		}
 		return outPath;
 	}
 
