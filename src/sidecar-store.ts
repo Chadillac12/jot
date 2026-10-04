@@ -49,6 +49,7 @@ export class SidecarStore {
 			if (!(await this.adapter.exists(path))) {
 				this.protectedOriginals.delete(pdfPath);
 				this.sessions.strokes.clearFor(pdfPath);
+				this.sessions.history.dropPath(pdfPath);
 				session.completeLoad();
 				return 'missing';
 			}
@@ -67,6 +68,7 @@ export class SidecarStore {
 
 			this.protectedOriginals.delete(pdfPath);
 			this.sessions.strokes.clearFor(pdfPath);
+			this.sessions.history.dropPath(pdfPath);
 			this.sessions.strokes.populateFromPayload(pdfPath, parsed.pages);
 			session.completeLoad();
 			return 'loaded';
