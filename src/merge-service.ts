@@ -1,5 +1,5 @@
 import { Notice, type App, type DataAdapter } from 'obsidian';
-import { ExportChoiceModal } from './merge';
+import { ExportChoiceModal } from './export-choice-modal';
 import {
 	PdfMergeExecutor,
 	type MergeChoice,
