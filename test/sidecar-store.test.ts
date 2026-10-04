@@ -140,7 +140,8 @@ describe('SidecarStore protected originals', () => {
 		strokes.setForKey('a.pdf::1', [
 			{ points: [{ x: 0.1, y: 0.1, pressure: 0.5 }], color: '#0f0', width: 0.005, tool: 'pen' },
 		]);
-		await store.save('a.pdf');
+		store.scheduleSave('a.pdf');
+		await store.flush('a.pdf');
 
 		const recovery = Object.keys(fs.files).find((path) =>
 			path.startsWith('a.pdf.jot.json.recovery-'),
@@ -164,7 +165,8 @@ describe('SidecarStore protected originals', () => {
 		strokes.setForKey('New/a.pdf::1', [
 			{ points: [{ x: 0.2, y: 0.2, pressure: 0.5 }], color: '#00f', width: 0.005, tool: 'pen' },
 		]);
-		await store.save('New/a.pdf');
+		store.scheduleSave('New/a.pdf');
+		await store.flush('New/a.pdf');
 
 		const recovery = Object.keys(fs.files).find((path) =>
 			path.startsWith('New/a.pdf.jot.json.recovery-'),
@@ -183,15 +185,17 @@ describe('SidecarStore.save', () => {
 			{ points: [{ x: 0, y: 0, pressure: 0.5 }], color: '#000', width: 0.005, tool: 'pen' },
 		]);
 		const store = new SidecarStore(fs.adapter, strokes);
-		await store.save('a.pdf');
+		store.scheduleSave('a.pdf');
+		expect(await store.flush('a.pdf')).toBe(true);
 		expect(fs.files['a.pdf.jot.json']).toBeDefined();
 	});
 
-	it('removes the sidecar file when there are no strokes left and the file exists', async () => {
+	it('writes a valid empty sidecar when all strokes are cleared', async () => {
 		const fs = makeFs({ 'a.pdf.jot.json': validPayload });
 		const store = new SidecarStore(fs.adapter, new StrokeStore());
-		await store.save('a.pdf');
-		expect(fs.files['a.pdf.jot.json']).toBeUndefined();
+		store.scheduleSave('a.pdf');
+		expect(await store.flush('a.pdf')).toBe(true);
+		expect(fs.files['a.pdf.jot.json']).toContain('"pages": {}');
 	});
 
 	it('does nothing when there are no strokes and no file exists', async () => {
@@ -208,7 +212,8 @@ describe('SidecarStore.save', () => {
 			{ points: [{ x: 0, y: 0, pressure: 0.5 }], color: '#000', width: 0.005, tool: 'pen' },
 		]);
 		const store = new SidecarStore(fs.adapter, strokes);
-		await store.save('a.pdf');
+		store.scheduleSave('a.pdf');
+		await store.flush('a.pdf');
 		expect(store.isOwnRecentSave('a.pdf.jot.json')).toBe(true);
 	});
 });
@@ -232,7 +237,8 @@ describe('SidecarStore.scheduleSave', () => {
 		store.scheduleSave('a.pdf');
 		store.scheduleSave('a.pdf');
 		await vi.advanceTimersByTimeAsync(750);
-		expect(fs.adapter.write).toHaveBeenCalledTimes(1);
+		expect(fs.files['a.pdf.jot.json']).toBeDefined();
+		expect(Object.keys(fs.files).filter((path) => path === 'a.pdf.jot.json')).toHaveLength(1);
 	});
 
 	it('does not save before the debounce window elapses', async () => {
@@ -359,7 +365,8 @@ describe('SidecarStore.isOwnRecentSave', () => {
 			{ points: [{ x: 0, y: 0, pressure: 0.5 }], color: '#000', width: 0.005, tool: 'pen' },
 		]);
 		const store = new SidecarStore(fs.adapter, strokes);
-		await store.save('a.pdf');
+		store.scheduleSave('a.pdf');
+		await store.flush('a.pdf');
 		expect(store.isOwnRecentSave('a.pdf.jot.json')).toBe(true);
 	});
 
@@ -370,7 +377,8 @@ describe('SidecarStore.isOwnRecentSave', () => {
 			{ points: [{ x: 0, y: 0, pressure: 0.5 }], color: '#000', width: 0.005, tool: 'pen' },
 		]);
 		const store = new SidecarStore(fs.adapter, strokes);
-		await store.save('a.pdf');
+		store.scheduleSave('a.pdf');
+		await store.flush('a.pdf');
 		vi.advanceTimersByTime(1600);
 		expect(store.isOwnRecentSave('a.pdf.jot.json')).toBe(false);
 	});
@@ -382,7 +390,8 @@ describe('SidecarStore.isOwnRecentSave', () => {
 			{ points: [{ x: 0, y: 0, pressure: 0.5 }], color: '#000', width: 0.005, tool: 'pen' },
 		]);
 		const store = new SidecarStore(fs.adapter, strokes);
-		await store.save('a.pdf');
+		store.scheduleSave('a.pdf');
+		await store.flush('a.pdf');
 		expect(store.isOwnRecentSave('a.pdf.jot.json')).toBe(true);
 		expect(store.isOwnRecentSave('a.pdf.jot.json')).toBe(false);
 	});
