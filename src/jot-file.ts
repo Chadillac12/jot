@@ -1,4 +1,4 @@
-import type { Stroke } from './stroke-math';
+import { STROKE_RENDER_VERSION, type Stroke, type StrokeRenderProfile } from './stroke-math';
 
 export const JOT_SUFFIX = '.jot.json';
 export const JOT_FORMAT_VERSION = 2;
@@ -87,15 +87,18 @@ export function parseStoredStroke(value: unknown): Stroke | null {
 	}
 
 	const color = value.color === undefined ? '#000000' : value.color;
-	if (typeof color !== 'string' || color.length === 0 || color.length > 128) return null;
+	if (typeof color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(color)) return null;
 
 	const width = value.width === undefined ? 0.0025 : value.width;
 	if (!isFiniteNumber(width) || width <= 0 || width > 0.1) return null;
 
 	const tool = value.tool === undefined ? 'pen' : value.tool;
-	if (tool !== 'pen' && tool !== 'highlighter' && tool !== 'eraser') return null;
+	if (tool !== 'pen' && tool !== 'highlighter') return null;
 
-	return { points, color, width, tool };
+	const render = parseRenderProfile(value.render);
+	if (value.render !== undefined && !render) return null;
+
+	return { points, color, width, tool, ...(render ? { render } : {}) };
 }
 
 export function migrateStroke(raw: Partial<Stroke>): Stroke {
@@ -113,14 +116,12 @@ export function migrateStroke(raw: Partial<Stroke>): Stroke {
 					pressure: clamp01(point.pressure),
 				}))
 		: [];
-	const color = typeof raw.color === 'string' && raw.color.length > 0 ? raw.color : '#000000';
+	const color = typeof raw.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(raw.color) ? raw.color : '#000000';
 	const width =
 		isFiniteNumber(raw.width) && raw.width > 0 && raw.width <= 0.1 ? raw.width : 0.0025;
-	const tool =
-		raw.tool === 'highlighter' || raw.tool === 'eraser' || raw.tool === 'pen'
-			? raw.tool
-			: 'pen';
-	return { points, color, width, tool };
+	const tool = raw.tool === 'highlighter' ? 'highlighter' : 'pen';
+	const render = parseRenderProfile(raw.render);
+	return { points, color, width, tool, ...(render ? { render } : {}) };
 }
 
 export function hasStrokesForPdf(pdfPath: string, strokesByKey: Map<string, Stroke[]>): boolean {
@@ -151,6 +152,28 @@ export function buildJotPayload(
 	}
 	if (Object.keys(pages).length === 0) return null;
 	return { version: JOT_FORMAT_VERSION, pages };
+}
+
+function parseRenderProfile(value: unknown): StrokeRenderProfile | undefined {
+	if (value === undefined) return undefined;
+	if (!isRecord(value)) return undefined;
+	if (value.version !== STROKE_RENDER_VERSION) return undefined;
+	if (!isFiniteNumber(value.smoothing) || !isFiniteNumber(value.pressureSensitivity)) {
+		return undefined;
+	}
+	if (
+		value.smoothing < 0 ||
+		value.smoothing > 1 ||
+		value.pressureSensitivity < 0 ||
+		value.pressureSensitivity > 1
+	) {
+		return undefined;
+	}
+	return {
+		version: STROKE_RENDER_VERSION,
+		smoothing: value.smoothing,
+		pressureSensitivity: value.pressureSensitivity,
+	};
 }
 
 function clamp01(value: number): number {
