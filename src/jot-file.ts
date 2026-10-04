@@ -86,8 +86,8 @@ export function parseStoredStroke(value: unknown): Stroke | null {
 		});
 	}
 
-	const color = value.color === undefined ? '#000000' : value.color;
-	if (typeof color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(color)) return null;
+	const color = normalizeHexColor(value.color === undefined ? '#000000' : value.color);
+	if (!color) return null;
 
 	const width = value.width === undefined ? 0.0025 : value.width;
 	if (!isFiniteNumber(width) || width <= 0 || width > 0.1) return null;
@@ -116,7 +116,7 @@ export function migrateStroke(raw: Partial<Stroke>): Stroke {
 					pressure: clamp01(point.pressure),
 				}))
 		: [];
-	const color = typeof raw.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(raw.color) ? raw.color : '#000000';
+	const color = normalizeHexColor(raw.color) ?? '#000000';
 	const width =
 		isFiniteNumber(raw.width) && raw.width > 0 && raw.width <= 0.1 ? raw.width : 0.0025;
 	const tool = raw.tool === 'highlighter' ? 'highlighter' : 'pen';
@@ -152,6 +152,16 @@ export function buildJotPayload(
 	}
 	if (Object.keys(pages).length === 0) return null;
 	return { version: JOT_FORMAT_VERSION, pages };
+}
+
+function normalizeHexColor(value: unknown): string | null {
+	if (typeof value !== 'string') return null;
+	if (/^#[0-9a-fA-F]{6}$/.test(value)) return value.toLowerCase();
+	if (/^#[0-9a-fA-F]{3}$/.test(value)) {
+		const [r, g, b] = value.slice(1).split('');
+		return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+	}
+	return null;
 }
 
 function parseRenderProfile(value: unknown): StrokeRenderProfile | undefined {
