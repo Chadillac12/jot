@@ -1,8 +1,9 @@
 import { App, DataAdapter, Notice } from 'obsidian';
 import { PDFDocument } from 'pdf-lib';
 import { ExportChoiceModal, drawStrokesOnPdfPage } from './merge';
-import type { SidecarStore } from './sidecar-store';
+import type { SidecarLoadStatus, SidecarStore } from './sidecar-store';
 import type { StrokeStore } from './stroke-store';
+import { transactionalWriteBinary } from './transactional-write';
 import type { UndoHistory } from './undo';
 
 const PLUGIN_LOG = '[jot]';
@@ -10,7 +11,7 @@ const PLUGIN_LOG = '[jot]';
 type MergeChoice = 'overwrite' | 'copy';
 
 export interface MergeServiceCallbacks {
-	ensureLoaded: (pdfPath: string) => Promise<void>;
+	ensureLoaded: (pdfPath: string) => Promise<SidecarLoadStatus>;
 	redrawOverlays: () => void;
 }
 
@@ -25,20 +26,39 @@ export class MergeService {
 	) {}
 
 	async start(pdfPath: string): Promise<void> {
-		await this.callbacks.ensureLoaded(pdfPath);
-		if (!this.strokes.hasFor(pdfPath)) {
-			new Notice('Jot: no notes on this PDF to merge.');
-			return;
+		try {
+			if (this.sidecar.getSession(pdfPath).isDirty) {
+				await this.sidecar.flush(pdfPath);
+			}
+			const status = await this.callbacks.ensureLoaded(pdfPath);
+			const session = this.sidecar.getSession(pdfPath);
+			if (status === 'protected' || status === 'error' || session.state === 'conflict') {
+				new Notice(
+					'Jot: merge is blocked because the annotation sidecar is unresolved. Resolve or recover the sidecar before a destructive PDF operation.',
+					8000,
+				);
+				return;
+			}
+			if (!this.strokes.hasFor(pdfPath)) {
+				new Notice('Jot: no notes on this PDF to merge.');
+				return;
+			}
+			const copyTarget = await this.uniqueAnnotatedPath(pdfPath);
+			new ExportChoiceModal(this.app, copyTarget, (choice) => {
+				if (choice === 'cancel') return;
+				void this.run(pdfPath, choice, copyTarget);
+			}).open();
+		} catch (error) {
+			console.error(`${PLUGIN_LOG} merge preparation failed:`, error);
+			new Notice(
+				`Jot: merge could not start — ${error instanceof Error ? error.message : 'see console'}`,
+			);
 		}
-		const copyTarget = await this.uniqueAnnotatedPath(pdfPath);
-		new ExportChoiceModal(this.app, copyTarget, (choice) => {
-			if (choice === 'cancel') return;
-			void this.run(pdfPath, choice, copyTarget);
-		}).open();
 	}
 
 	private async run(pdfPath: string, choice: MergeChoice, copyTarget: string): Promise<void> {
 		try {
+			await this.sidecar.flush(pdfPath);
 			const outPath = await this.writeMerged(pdfPath, choice, copyTarget);
 			if (choice === 'overwrite') await this.discardAnnotations(pdfPath);
 			new Notice(`Jot: notes merged into ${outPath}`);
@@ -54,8 +74,9 @@ export class MergeService {
 		copyTarget: string,
 	): Promise<string> {
 		const bytes = await this.adapter.readBinary(pdfPath);
-		const pdfDoc = await PDFDocument.load(bytes);
-		const pages = pdfDoc.getPages();
+		const sourceDoc = await PDFDocument.load(bytes);
+		const sourcePageCount = sourceDoc.getPageCount();
+		const pages = sourceDoc.getPages();
 		for (let i = 0; i < pages.length; i++) {
 			const page = pages[i];
 			if (!page) continue;
@@ -63,11 +84,24 @@ export class MergeService {
 			if (strokes.length === 0) continue;
 			drawStrokesOnPdfPage(page, strokes);
 		}
-		const out = await pdfDoc.save();
-		const buffer = new ArrayBuffer(out.byteLength);
-		new Uint8Array(buffer).set(out);
+
+		const out = await sourceDoc.save();
+		const buffer = toArrayBuffer(out);
+		await validatePdf(buffer, sourcePageCount);
+
 		const outPath = choice === 'overwrite' ? pdfPath : copyTarget;
-		await this.adapter.writeBinary(outPath, buffer);
+		const transaction = await transactionalWriteBinary(
+			this.adapter,
+			outPath,
+			buffer,
+			(data) => validatePdf(data, sourcePageCount),
+		);
+		if (transaction.backupPath) {
+			new Notice(
+				`Jot: PDF committed successfully, but a verified backup remains at ${transaction.backupPath} because cleanup failed.`,
+				8000,
+			);
+		}
 		return outPath;
 	}
 
@@ -87,5 +121,20 @@ export class MergeService {
 		this.strokes.clearFor(pdfPath);
 		this.history.dropPath(pdfPath);
 		this.callbacks.redrawOverlays();
+	}
+}
+
+function toArrayBuffer(data: Uint8Array): ArrayBuffer {
+	const buffer = new ArrayBuffer(data.byteLength);
+	new Uint8Array(buffer).set(data);
+	return buffer;
+}
+
+async function validatePdf(data: ArrayBuffer, expectedPageCount: number): Promise<void> {
+	const pdf = await PDFDocument.load(data);
+	if (pdf.getPageCount() !== expectedPageCount) {
+		throw new Error(
+			`PDF verification failed: expected ${expectedPageCount} pages but found ${pdf.getPageCount()}`,
+		);
 	}
 }
