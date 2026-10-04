@@ -57,6 +57,9 @@ export default class JotPlugin extends Plugin {
 			this.app.vault,
 			this.notebookSessions,
 			(path, error) => this.reportNotebookSaveError(path, error),
+			(path) => {
+				void this.resolveNotebookConflict(this.notebookSessions.get(path));
+			},
 		);
 		this.overlays = new OverlayManager(this.app, this.strokes, (canvas) =>
 			this.wirePointerEvents(canvas),
