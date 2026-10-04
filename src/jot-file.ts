@@ -1,7 +1,8 @@
-import type { Stroke } from './stroke-math';
+import { DEFAULT_STROKE_RENDER_PROFILE } from './stroke-math';
+import type { Stroke, StrokeRenderProfile } from './stroke-math';
 
 export const JOT_SUFFIX = '.jot.json';
-export const JOT_FORMAT_VERSION = 2;
+export const JOT_FORMAT_VERSION = 3;
 export const PAGE_KEY_SEPARATOR = '::';
 
 export interface JotFileFormat {
@@ -64,7 +65,7 @@ export function parseJotText(text: string): JotFileFormat | null {
 }
 
 export function isSupportedVersion(version: number): boolean {
-	return version === JOT_FORMAT_VERSION || version === 1;
+	return version === JOT_FORMAT_VERSION || version === 2 || version === 1;
 }
 
 /**
@@ -87,15 +88,18 @@ export function parseStoredStroke(value: unknown): Stroke | null {
 	}
 
 	const color = value.color === undefined ? '#000000' : value.color;
-	if (typeof color !== 'string' || color.length === 0 || color.length > 128) return null;
+	if (typeof color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(normalizeHexColor(color))) return null;
 
 	const width = value.width === undefined ? 0.0025 : value.width;
 	if (!isFiniteNumber(width) || width <= 0 || width > 0.1) return null;
 
 	const tool = value.tool === undefined ? 'pen' : value.tool;
-	if (tool !== 'pen' && tool !== 'highlighter' && tool !== 'eraser') return null;
+	if (tool !== 'pen' && tool !== 'highlighter') return null;
 
-	return { points, color, width, tool };
+	const render = parseRenderProfile(value.render);
+	if (!render) return null;
+
+	return { points, color: normalizeHexColor(color), width, tool, render };
 }
 
 export function migrateStroke(raw: Partial<Stroke>): Stroke {
@@ -113,14 +117,15 @@ export function migrateStroke(raw: Partial<Stroke>): Stroke {
 					pressure: clamp01(point.pressure),
 				}))
 		: [];
-	const color = typeof raw.color === 'string' && raw.color.length > 0 ? raw.color : '#000000';
+	const color =
+		typeof raw.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(normalizeHexColor(raw.color))
+			? normalizeHexColor(raw.color)
+			: '#000000';
 	const width =
 		isFiniteNumber(raw.width) && raw.width > 0 && raw.width <= 0.1 ? raw.width : 0.0025;
-	const tool =
-		raw.tool === 'highlighter' || raw.tool === 'eraser' || raw.tool === 'pen'
-			? raw.tool
-			: 'pen';
-	return { points, color, width, tool };
+	const tool = raw.tool === 'highlighter' || raw.tool === 'pen' ? raw.tool : 'pen';
+	const render = parseRenderProfile(raw.render) ?? { ...DEFAULT_STROKE_RENDER_PROFILE };
+	return { points, color, width, tool, render };
 }
 
 export function hasStrokesForPdf(pdfPath: string, strokesByKey: Map<string, Stroke[]>): boolean {
@@ -151,6 +156,40 @@ export function buildJotPayload(
 	}
 	if (Object.keys(pages).length === 0) return null;
 	return { version: JOT_FORMAT_VERSION, pages };
+}
+
+function parseRenderProfile(value: unknown): StrokeRenderProfile | null {
+	if (value === undefined) return { ...DEFAULT_STROKE_RENDER_PROFILE };
+	if (!isRecord(value) || value.version !== 2) return null;
+	if (!isFiniteNumber(value.smoothing) || !isFiniteNumber(value.pressureSensitivity)) return null;
+	if (
+		value.smoothing < 0 ||
+		value.smoothing > 1 ||
+		value.pressureSensitivity < 0 ||
+		value.pressureSensitivity > 1
+	) {
+		return null;
+	}
+	return {
+		version: 2,
+		smoothing: value.smoothing,
+		pressureSensitivity: value.pressureSensitivity,
+	};
+}
+
+function normalizeHexColor(value: string): string {
+	const hex = value.trim();
+	if (/^#[0-9a-fA-F]{3}$/.test(hex)) {
+		return (
+			'#' +
+			hex
+				.slice(1)
+				.split('')
+				.map((ch) => ch + ch)
+				.join('')
+		);
+	}
+	return hex;
 }
 
 function clamp01(value: number): number {
