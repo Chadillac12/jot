@@ -6,11 +6,16 @@ export interface TransactionResult {
 	backupPath: string | null;
 }
 
+export interface TransactionOptions {
+	retainBackup?: boolean;
+}
+
 export async function transactionalWriteText(
 	adapter: DataAdapter,
 	path: string,
 	text: string,
 	validate: (text: string) => void | Promise<void>,
+	options: TransactionOptions = {},
 ): Promise<TransactionResult> {
 	const { tempPath, backupPath } = await transactionPaths(adapter, path);
 	let movedOriginal = false;
@@ -31,6 +36,7 @@ export async function transactionalWriteText(
 		await validate(committed);
 
 		if (movedOriginal) {
+			if (options.retainBackup) return { backupPath };
 			try {
 				await adapter.remove(backupPath);
 				return { backupPath: null };
@@ -52,12 +58,14 @@ export async function transactionalWriteBinary(
 	path: string,
 	data: ArrayBuffer,
 	validate: (data: ArrayBuffer) => void | Promise<void>,
+	options: TransactionOptions = {},
 ): Promise<TransactionResult> {
 	const { tempPath, backupPath } = await transactionPaths(adapter, path);
 	let movedOriginal = false;
 	try {
 		await adapter.writeBinary(tempPath, data);
 		const tempData = await adapter.readBinary(tempPath);
+		if (!buffersEqual(tempData, data)) throw new Error('Temporary binary write verification failed');
 		await validate(tempData);
 
 		if (await adapter.exists(path)) {
@@ -67,9 +75,11 @@ export async function transactionalWriteBinary(
 		await adapter.rename(tempPath, path);
 
 		const committed = await adapter.readBinary(path);
+		if (!buffersEqual(committed, data)) throw new Error('Committed binary write verification failed');
 		await validate(committed);
 
 		if (movedOriginal) {
+			if (options.retainBackup) return { backupPath };
 			try {
 				await adapter.remove(backupPath);
 				return { backupPath: null };
@@ -82,6 +92,17 @@ export async function transactionalWriteBinary(
 		await rollback(adapter, path, tempPath, backupPath, movedOriginal);
 		throw error;
 	}
+}
+
+
+function buffersEqual(a: ArrayBuffer, b: ArrayBuffer): boolean {
+	if (a.byteLength !== b.byteLength) return false;
+	const left = new Uint8Array(a);
+	const right = new Uint8Array(b);
+	for (let i = 0; i < left.length; i++) {
+		if (left[i] !== right[i]) return false;
+	}
+	return true;
 }
 
 async function transactionPaths(
