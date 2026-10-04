@@ -19,6 +19,7 @@ export async function transactionalWriteText(
 ): Promise<TransactionResult> {
 	const { tempPath, backupPath } = await transactionPaths(adapter, path);
 	let movedOriginal = false;
+	let committedTemp = false;
 	try {
 		await adapter.write(tempPath, text);
 		const tempText = await adapter.read(tempPath);
@@ -30,6 +31,7 @@ export async function transactionalWriteText(
 			movedOriginal = true;
 		}
 		await adapter.rename(tempPath, path);
+		committedTemp = true;
 
 		const committed = await adapter.read(path);
 		if (committed !== text) throw new Error('Committed write verification failed');
@@ -48,7 +50,7 @@ export async function transactionalWriteText(
 		}
 		return { backupPath: null };
 	} catch (error) {
-		await rollback(adapter, path, tempPath, backupPath, movedOriginal);
+		await rollback(adapter, path, tempPath, backupPath, movedOriginal, committedTemp);
 		throw error;
 	}
 }
@@ -62,6 +64,7 @@ export async function transactionalWriteBinary(
 ): Promise<TransactionResult> {
 	const { tempPath, backupPath } = await transactionPaths(adapter, path);
 	let movedOriginal = false;
+	let committedTemp = false;
 	try {
 		await adapter.writeBinary(tempPath, data);
 		const tempData = await adapter.readBinary(tempPath);
@@ -73,6 +76,7 @@ export async function transactionalWriteBinary(
 			movedOriginal = true;
 		}
 		await adapter.rename(tempPath, path);
+		committedTemp = true;
 
 		const committed = await adapter.readBinary(path);
 		if (!buffersEqual(committed, data)) throw new Error('Committed binary write verification failed');
@@ -89,7 +93,7 @@ export async function transactionalWriteBinary(
 		}
 		return { backupPath: null };
 	} catch (error) {
-		await rollback(adapter, path, tempPath, backupPath, movedOriginal);
+		await rollback(adapter, path, tempPath, backupPath, movedOriginal, committedTemp);
 		throw error;
 	}
 }
@@ -127,6 +131,7 @@ async function rollback(
 	tempPath: string,
 	backupPath: string,
 	movedOriginal: boolean,
+	committedTemp: boolean,
 ): Promise<void> {
 	try {
 		if (await adapter.exists(tempPath)) await adapter.remove(tempPath);
@@ -134,10 +139,15 @@ async function rollback(
 		// Continue trying to restore the authoritative path.
 	}
 
-	if (!movedOriginal) return;
 	try {
-		if (await adapter.exists(path)) await adapter.remove(path);
-		if (await adapter.exists(backupPath)) await adapter.rename(backupPath, path);
+		if (committedTemp && (await adapter.exists(path))) {
+			await adapter.remove(path);
+		}
+		if (!movedOriginal) return;
+		if (!(await adapter.exists(backupPath))) {
+			throw new Error(`Original transaction backup is missing for ${path}`);
+		}
+		await adapter.rename(backupPath, path);
 	} catch (rollbackError) {
 		throw new Error(
 			`Transactional write failed and rollback also failed: ${String(rollbackError)}`,
