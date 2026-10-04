@@ -76,7 +76,7 @@ export class JotNoteView extends TextFileView {
 
 		const token = session.beginSave();
 		if (!token) {
-			if (session.document.state === 'conflict') {
+			if (session.lifecycle.state === 'conflict') {
 				new Notice('Jot: this notebook has an unresolved external-edit conflict.');
 			}
 			return;
@@ -89,7 +89,7 @@ export class JotNoteView extends TextFileView {
 			session.completeSave(token, persistedText);
 			this.data = persistedText;
 			this.clearRetryTimer();
-			if (session.document.isDirty) this.requestSave();
+			if (session.lifecycle.isDirty) this.requestSave();
 		} catch (error) {
 			session.failSave(token, error);
 			const message = error instanceof Error ? error.message : String(error);
