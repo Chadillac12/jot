@@ -1,6 +1,16 @@
 import type { App, DataAdapter } from 'obsidian';
 import { PDFDocument } from 'pdf-lib';
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('obsidian', () => ({
+	Notice: class {},
+	Modal: class {
+		contentEl = document.createElement('div');
+		constructor(_app?: unknown) {}
+		open(): void {}
+		close(): void {}
+	},
+}));
 import { DocumentSessionManager } from '../src/document-session';
 import { JOT_FORMAT_VERSION } from '../src/jot-file';
 import { MergeService } from '../src/merge-service';
