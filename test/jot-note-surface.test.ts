@@ -14,16 +14,24 @@ import { JotNoteSurface } from '../src/jot-note-surface';
 import { StrokeStore } from '../src/stroke-store';
 
 class ResizeObserverMock {
-	constructor(private callback: ResizeObserverCallback) {}
+	static instances: ResizeObserverMock[] = [];
+
+	constructor(private callback: ResizeObserverCallback) {
+		ResizeObserverMock.instances.push(this);
+	}
 	observe(): void {
 		this.callback([], this as unknown as ResizeObserver);
 	}
 	disconnect(): void {}
 	unobserve(): void {}
+	fire(): void {
+		this.callback([], this as unknown as ResizeObserver);
+	}
 }
 
 beforeEach(() => {
 	document.body.innerHTML = '';
+	ResizeObserverMock.instances = [];
 	(globalThis as any).ResizeObserver = ResizeObserverMock;
 	(globalThis as any).window.devicePixelRatio = 2;
 	(HTMLElement.prototype as any).setCssStyles = function (styles: Record<string, string>) {
@@ -110,6 +118,22 @@ describe('JotNoteSurface', () => {
 			'Lecture.jot::page-1',
 			'Lecture.jot::page-2',
 		]);
+	});
+
+	it('does not reallocate or repaint canvases when ResizeObserver reports the same size', () => {
+		const host = document.createElement('div');
+		const clearRect = vi.fn();
+		vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+			setTransform: vi.fn(),
+			clearRect,
+		} as any);
+		const surface = new JotNoteSurface(host, new StrokeStore(), vi.fn());
+
+		surface.render(createJotNote(), 'Lecture.jot');
+		const afterInitialRender = clearRect.mock.calls.length;
+		ResizeObserverMock.instances[0]?.fire();
+
+		expect(clearRect.mock.calls.length).toBe(afterInitialRender);
 	});
 
 	it('caps both notebook canvas backing stores at the iPad-safe area', () => {
