@@ -1,6 +1,6 @@
 import { getStroke } from 'perfect-freehand';
-import { widthFactorForPressure } from './stroke-math';
-import type { NormalizedPoint, Stroke } from './stroke-math';
+import { DEFAULT_STROKE_RENDER_PROFILE, widthFactorForPressure } from './stroke-math';
+import type { NormalizedPoint, Stroke, StrokeRenderProfile } from './stroke-math';
 
 export interface CanvasSize {
 	width: number;
@@ -21,8 +21,9 @@ export const DEFAULT_INK_SMOOTHING = 0.5;
 export const DEFAULT_PRESSURE_SENSITIVITY = 0.5;
 export const PEN_SIZE_FACTOR = 1.15;
 
-let inkSmoothing = DEFAULT_INK_SMOOTHING;
-let pressureSensitivity = DEFAULT_PRESSURE_SENSITIVITY;
+let newStrokeProfile: StrokeRenderProfile = {
+	...DEFAULT_STROKE_RENDER_PROFILE,
+};
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 
@@ -30,20 +31,31 @@ export function setInkRenderTuning(options: {
 	smoothing: number;
 	pressureSensitivity: number;
 }): void {
-	inkSmoothing = clamp01(options.smoothing);
-	pressureSensitivity = clamp01(options.pressureSensitivity);
+	newStrokeProfile = {
+		version: 2,
+		smoothing: clamp01(options.smoothing),
+		pressureSensitivity: clamp01(options.pressureSensitivity),
+	};
 }
 
-function penSmoothing(): number {
-	return 0.45 + inkSmoothing * 0.4;
+export function currentInkRenderProfile(): StrokeRenderProfile {
+	return { ...newStrokeProfile };
 }
 
-function penStreamline(): number {
-	return 0.1 + inkSmoothing * 0.4;
+function resolveProfile(profile?: StrokeRenderProfile): StrokeRenderProfile {
+	return profile ?? DEFAULT_STROKE_RENDER_PROFILE;
 }
 
-function penThinning(): number {
-	return 0.15 + pressureSensitivity * 0.8;
+function penSmoothing(profile: StrokeRenderProfile): number {
+	return 0.45 + clamp01(profile.smoothing) * 0.4;
+}
+
+function penStreamline(profile: StrokeRenderProfile): number {
+	return 0.1 + clamp01(profile.smoothing) * 0.4;
+}
+
+function penThinning(profile: StrokeRenderProfile): number {
+	return 0.15 + clamp01(profile.pressureSensitivity) * 0.8;
 }
 
 function denormalize(point: NormalizedPoint, canvas: CanvasSize) {
@@ -94,8 +106,10 @@ export function penOutline(
 	points: NormalizedPoint[],
 	baseWidth: number,
 	canvas: CanvasSize,
+	profile?: StrokeRenderProfile,
 ): number[][] {
 	if (points.length === 0) return [];
+	const resolved = resolveProfile(profile);
 	const input: number[][] = points.map((point) => [
 		point.x * canvas.width,
 		point.y * canvas.height,
@@ -103,9 +117,9 @@ export function penOutline(
 	]);
 	return getStroke(input, {
 		size: baseWidth * canvas.height * PEN_SIZE_FACTOR,
-		thinning: penThinning(),
-		smoothing: penSmoothing(),
-		streamline: penStreamline(),
+		thinning: penThinning(resolved),
+		smoothing: penSmoothing(resolved),
+		streamline: penStreamline(resolved),
 		simulatePressure: false,
 		last: true,
 	});
@@ -131,8 +145,9 @@ export function drawPenStroke(
 	color: string,
 	baseWidth: number,
 	canvas: CanvasSize,
+	profile?: StrokeRenderProfile,
 ) {
-	const outline = penOutline(points, baseWidth, canvas);
+	const outline = penOutline(points, baseWidth, canvas, profile);
 	if (outline.length === 0) return;
 
 	ctx.save();
@@ -186,5 +201,5 @@ export function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, canvas
 		drawHighlighterPolyline(ctx, stroke.points, stroke.color, stroke.width, canvas);
 		return;
 	}
-	drawPenStroke(ctx, stroke.points, stroke.color, stroke.width, canvas);
+	drawPenStroke(ctx, stroke.points, stroke.color, stroke.width, canvas, stroke.render);
 }
