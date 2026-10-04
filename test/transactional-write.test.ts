@@ -97,6 +97,27 @@ describe('transactionalWriteBinary', () => {
 		expect(fs.binaryFiles.has('new.pdf')).toBe(false);
 	});
 
+	it('rolls back the original binary when dependent cleanup fails', async () => {
+		const fs = makeAdapter();
+		const original = new Uint8Array([1, 2, 3]).buffer;
+		const replacement = new Uint8Array([4, 5, 6]).buffer;
+		fs.binaryFiles.set('a.pdf', original);
+
+		await expect(
+			transactionalWriteBinary(
+				fs.adapter,
+				'a.pdf',
+				replacement,
+				async () => {},
+				async () => {
+					throw new Error('sidecar cleanup failed');
+				},
+			),
+		).rejects.toThrow('sidecar cleanup failed');
+
+		expect([...new Uint8Array(fs.binaryFiles.get('a.pdf')!)]).toEqual([1, 2, 3]);
+	});
+
 	it('rolls back the original binary when committed verification fails', async () => {
 		const fs = makeAdapter();
 		const original = new Uint8Array([1, 2, 3]).buffer;
