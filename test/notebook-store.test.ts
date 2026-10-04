@@ -108,6 +108,32 @@ describe('NotebookStore', () => {
 		expect(onConflict).toHaveBeenCalledWith('Lecture.jot');
 	});
 
+	it('can keep local after preserving a CAS conflict without rediscovering it', async () => {
+		const fs = makeVault();
+		const sessions = new NotebookSessionManager(new DocumentSessionManager());
+		const session = sessions.get('Lecture.jot');
+		session.loadFromText(fs.data.get('Lecture.jot')!);
+		session.setPaperStyle('grid');
+
+		const remote = createJotNote();
+		remote.paper = 'dot';
+		const remoteText = serializeJotNote(remote);
+		fs.data.set('Lecture.jot', remoteText);
+		const store = new NotebookStore(fs.vault, sessions);
+		store.scheduleSave('Lecture.jot');
+		expect(await store.flush('Lecture.jot')).toBe(false);
+		expect(session.lifecycle.state).toBe('conflict');
+
+		// The caller has preserved remoteText to a conflict file at this point.
+		session.resolveConflictKeepLocal();
+		store.scheduleSave('Lecture.jot');
+		expect(await store.flush('Lecture.jot')).toBe(true);
+
+		expect(fs.data.get('Lecture.jot')).toContain('"paper": "grid"');
+		expect(session.lifecycle.state).toBe('clean');
+		expect(session.externalConflictData).toBeNull();
+	});
+
 	it('waits for an in-flight notebook save before re-keying rename ownership', async () => {
 		const fs = makeVault('Old/Lecture.jot');
 		const documents = new DocumentSessionManager();
