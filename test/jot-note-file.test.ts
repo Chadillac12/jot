@@ -48,6 +48,36 @@ describe('Jot note file format', () => {
 		if (!result.ok) expect(result.reason).toBe('invalid-json');
 	});
 
+	it('migrates legacy v1 notebooks to the deterministic v2 format', () => {
+		const legacy = {
+			version: 1,
+			type: 'notebook',
+			paper: 'ruled',
+			pages: [
+				{
+					id: 'page-1',
+					width: 1536,
+					height: 2048,
+					strokes: [
+						{
+							points: [{ x: 0.2, y: 0.3, pressure: 0.5 }],
+							color: '#123456',
+							width: 0.005,
+							tool: 'pen',
+						},
+					],
+				},
+			],
+		};
+		const parsed = parseJotNoteText(JSON.stringify(legacy));
+		expect(parsed?.version).toBe(JOT_NOTE_FORMAT_VERSION);
+		expect(parsed?.pages[0]?.strokes[0]?.render).toEqual({
+			version: 2,
+			smoothing: 0.5,
+			pressureSensitivity: 0.5,
+		});
+	});
+
 	it('rejects an unsupported future notebook version', () => {
 		const result = parseJotNoteTextResult(
 			JSON.stringify({
