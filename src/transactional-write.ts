@@ -68,6 +68,7 @@ export async function transactionalWriteBinary(
 	path: string,
 	bytes: ArrayBuffer,
 	validate: (bytes: ArrayBuffer) => Promise<void>,
+	beforeFinalize?: () => Promise<void>,
 ): Promise<void> {
 	const id = transactionId();
 	const tempPath = `${path}.jot-tmp-${id}`;
@@ -87,6 +88,7 @@ export async function transactionalWriteBinary(
 		await adapter.rename(tempPath, path);
 		committed = true;
 		await validate(await adapter.readBinary(path));
+		await beforeFinalize?.();
 
 		if (originalMoved) await cleanup(adapter, backupPath);
 	} catch (error) {
