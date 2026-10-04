@@ -191,13 +191,14 @@ export class SidecarStore {
 
 		try {
 			if (await this.adapter.exists(oldSidecar)) {
+				const sourceText = await this.adapter.read(oldSidecar);
 				if (await this.adapter.exists(newSidecar)) {
 					const destinationText = await this.adapter.read(newSidecar);
 					const conflictPath = `${newSidecar}.conflict-${Date.now()}.json`;
 					await transactionalWriteText(this.adapter, conflictPath, destinationText);
-					await this.adapter.remove(newSidecar);
 				}
-				await this.adapter.rename(oldSidecar, newSidecar);
+				await transactionalWriteText(this.adapter, newSidecar, sourceText);
+				await this.adapter.remove(oldSidecar);
 			}
 			this.recentSelfSaves.delete(oldSidecar);
 		} catch (error) {
