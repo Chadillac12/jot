@@ -93,11 +93,60 @@ export function forEachSmoothSegment(points: NormalizedPoint[], emit: SegmentEmi
 	emit(previousMidpoint, points[points.length - 1]!);
 }
 
-export function strokeIntersects(stroke: Stroke, x: number, y: number, radius: number): boolean {
-	const radiusSquared = radius * radius;
-	return stroke.points.some((point) => {
-		const dx = point.x - x;
-		const dy = point.y - y;
-		return dx * dx + dy * dy < radiusSquared;
-	});
+export function strokeIntersects(
+	stroke: Stroke,
+	x: number,
+	y: number,
+	radiusX: number,
+	radiusY = radiusX,
+): boolean {
+	if (stroke.points.length === 0 || radiusX <= 0 || radiusY <= 0) return false;
+	const sx = 1 / radiusX;
+	const sy = 1 / radiusY;
+	const targetX = x * sx;
+	const targetY = y * sy;
+
+	const scaled = stroke.points.map((point) => ({
+		x: point.x * sx,
+		y: point.y * sy,
+	}));
+	for (const point of scaled) {
+		const dx = point.x - targetX;
+		const dy = point.y - targetY;
+		if (dx * dx + dy * dy <= 1) return true;
+	}
+	for (let i = 1; i < scaled.length; i++) {
+		if (
+			pointToSegmentDistanceSquared(
+				targetX,
+				targetY,
+				scaled[i - 1]!,
+				scaled[i]!,
+			) <= 1
+		) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function pointToSegmentDistanceSquared(
+	px: number,
+	py: number,
+	a: { x: number; y: number },
+	b: { x: number; y: number },
+): number {
+	const vx = b.x - a.x;
+	const vy = b.y - a.y;
+	const lengthSquared = vx * vx + vy * vy;
+	if (lengthSquared === 0) {
+		const dx = px - a.x;
+		const dy = py - a.y;
+		return dx * dx + dy * dy;
+	}
+	const projection = ((px - a.x) * vx + (py - a.y) * vy) / lengthSquared;
+	const t = Math.max(0, Math.min(1, projection));
+	const dx = px - (a.x + t * vx);
+	const dy = py - (a.y + t * vy);
+	return dx * dx + dy * dy;
 }
