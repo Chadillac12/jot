@@ -129,12 +129,10 @@ export class NotebookSession {
 		return id;
 	}
 
-	rename(newPath: string): void {
-		const oldPath = this.path;
+	rekeyForRename(oldPath: string, newPath: string): void {
 		if (oldPath === newPath) return;
 		this.strokes.rekeyDocumentPath(oldPath, newPath);
 		this.history.rekeyPath(oldPath, newPath);
-		this.document.rename(newPath);
 		this.notify();
 	}
 
@@ -178,8 +176,8 @@ export class NotebookSessionManager {
 	rename(oldPath: string, newPath: string): NotebookSession {
 		const session = this.get(oldPath);
 		this.sessions.delete(oldPath);
+		session.rekeyForRename(oldPath, newPath);
 		this.documentSessions.rename(oldPath, newPath);
-		session.rename(newPath);
 		this.sessions.set(newPath, session);
 		return session;
 	}
