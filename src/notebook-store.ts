@@ -66,6 +66,53 @@ export class NotebookStore {
 		return savedAny;
 	}
 
+	async renameSession(
+		oldPath: string,
+		newPath: string,
+	): Promise<NotebookDocumentSession | null> {
+		if (oldPath === newPath) {
+			const same = this.sessions.get(newPath);
+			return same?.kind === 'notebook' ? (same as NotebookDocumentSession) : null;
+		}
+
+		const current = this.sessions.get(oldPath);
+		if (!current) {
+			const alreadyMoved = this.sessions.get(newPath);
+			return alreadyMoved?.kind === 'notebook'
+				? (alreadyMoved as NotebookDocumentSession)
+				: null;
+		}
+		if (current.kind !== 'notebook') {
+			throw new Error(`Cannot rename non-notebook session ${oldPath}`);
+		}
+		const session = current as NotebookDocumentSession;
+		const existingSave = this.inFlight.get(oldPath);
+		let oldDuplicateText: string | null = null;
+		if (existingSave) {
+			await existingSave;
+			this.inFlight.delete(oldPath);
+			if (await this.adapter.exists(oldPath)) {
+				oldDuplicateText = await this.adapter.read(oldPath);
+			}
+		}
+
+		this.sessions.rename(oldPath, newPath);
+		if (session.isDirty || existingSave) {
+			if (!session.isDirty) session.markDirty('structure');
+			await this.save(session);
+		}
+
+		if (
+			oldDuplicateText !== null &&
+			(await this.adapter.exists(oldPath)) &&
+			(await this.adapter.read(oldPath)) === oldDuplicateText &&
+			oldDuplicateText === session.rawData
+		) {
+			await this.adapter.remove(oldPath);
+		}
+		return session;
+	}
+
 	private async preserveExternalConflict(path: string): Promise<string | null> {
 		if (!(await this.adapter.exists(path))) return null;
 		const current = await this.adapter.read(path);
