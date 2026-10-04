@@ -102,3 +102,33 @@ describe('NotebookDocumentSession', () => {
 		expect(serialized.pages[0]?.strokes[0]?.color).toBe('#123456');
 	});
 });
+
+
+describe('conflict versus dirty invariants', () => {
+	it('does not treat a validation-only conflict as locally dirty', () => {
+		const manager = new DocumentSessionManager();
+		const session = manager.notebook('Broken.jot');
+		const result = session.loadText('{broken');
+		expect(result).toBe('invalid');
+		expect(session.state).toBe('conflict');
+		expect(session.isDirty).toBe(false);
+		expect(session.beginSave()).toBeNull();
+	});
+
+	it('keeps a conflict dirty when unsaved local edits exist', () => {
+		const manager = new DocumentSessionManager();
+		const session = manager.notebook('Lecture.jot');
+		const original = JSON.stringify({
+			version: 1,
+			type: 'notebook',
+			paper: 'ruled',
+			pages: [{ id: 'page-1', width: 1536, height: 2048, strokes: [] }],
+		});
+		session.loadText(original);
+		session.markDirty();
+		expect(session.loadText(original.replace('"ruled"', '"grid"'))).toBe('conflict');
+		expect(session.state).toBe('conflict');
+		expect(session.isDirty).toBe(true);
+		expect(session.beginSave()).toBe(session.revision);
+	});
+});
