@@ -74,17 +74,17 @@ export class JotNoteView extends TextFileView {
 		const session = this.session;
 		if (!session || session.loadError) return;
 
-		const token = session.beginSave();
-		if (!token) {
+		const prepared = session.prepareSave();
+		if (!prepared) {
 			if (session.lifecycle.state === 'conflict') {
 				new Notice('Jot: this notebook has an unresolved external-edit conflict.');
 			}
 			return;
 		}
 
+		const { token, text: persistedText } = prepared;
 		try {
-			this.saveSnapshot = session.serialize();
-			const persistedText = this.saveSnapshot;
+			this.saveSnapshot = persistedText;
 			await super.save(clear);
 			session.completeSave(token, persistedText);
 			this.data = persistedText;
