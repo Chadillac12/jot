@@ -75,8 +75,7 @@ export class DocumentSession {
 			this._revision !== this._persistedRevision ||
 			this._state === 'dirty' ||
 			this._state === 'saving' ||
-			this._state === 'save-error' ||
-			this._state === 'conflict'
+			this._state === 'save-error'
 		);
 	}
 
@@ -117,8 +116,14 @@ export class DocumentSession {
 
 	beginSave(): number | null {
 		if (this._state === 'saving') return null;
-		if (!this.isDirty && this._state === 'clean') return null;
-		if (this._state === 'loading' || this._state === 'unloaded') return null;
+		if (!this.isDirty) return null;
+		if (
+			this._state === 'loading' ||
+			this._state === 'unloaded' ||
+			this._state === 'load-error'
+		) {
+			return null;
+		}
 		this._saveRevision = this._revision;
 		this._state = 'saving';
 		this._lastError = null;
