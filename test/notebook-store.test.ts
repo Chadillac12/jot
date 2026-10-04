@@ -233,6 +233,27 @@ describe('NotebookStore conflict preservation', () => {
 });
 
 
+describe('NotebookStore duplicate rename notifications', () => {
+	it('coalesces duplicate rename migrations onto the same shared session', async () => {
+		const fs = makeAdapter();
+		const sessions = new DocumentSessionManager();
+		const session = sessions.notebook('Old.jot');
+		session.loadText(notebookText());
+		fs.files['New.jot'] = notebookText();
+		const store = new NotebookStore(fs.adapter, sessions);
+
+		const [first, second] = await Promise.all([
+			store.renameSession('Old.jot', 'New.jot'),
+			store.renameSession('Old.jot', 'New.jot'),
+		]);
+
+		expect(first).toBe(session);
+		expect(second).toBe(session);
+		expect(sessions.get('Old.jot')).toBeNull();
+		expect(sessions.notebook('New.jot')).toBe(session);
+	});
+});
+
 describe('NotebookStore rename serialization', () => {
 	it('moves the authoritative session after an in-flight old-path save and commits current data at the new path', async () => {
 		const sessions = new DocumentSessionManager();
