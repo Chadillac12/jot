@@ -216,6 +216,47 @@ describe('SidecarStore transactional save and retry', () => {
 	});
 });
 
+describe('SidecarStore concurrent revision handling', () => {
+	it('persists a newer edit that arrives while an earlier revision is in flight', async () => {
+		const fs = makeFs();
+		const sessions = new DocumentSessionManager();
+		const store = new SidecarStore(fs.adapter, sessions);
+		await store.load('a.pdf');
+
+		let releaseWrite!: () => void;
+		let signalStarted!: () => void;
+		const writeGate = new Promise<void>((resolve) => {
+			releaseWrite = resolve;
+		});
+		const writeStarted = new Promise<void>((resolve) => {
+			signalStarted = resolve;
+		});
+		let blockFirstTempWrite = true;
+		vi.mocked(fs.adapter.write).mockImplementation(async (path: string, data: string) => {
+			if (blockFirstTempWrite && path.includes('.jot-tmp-')) {
+				blockFirstTempWrite = false;
+				signalStarted();
+				await writeGate;
+			}
+			fs.files[path] = data;
+		});
+
+		sessions.strokes.setForKey('a.pdf::1', [stroke('#111111')]);
+		store.scheduleSave('a.pdf');
+		const firstFlush = store.flush('a.pdf');
+		await writeStarted;
+
+		sessions.strokes.setForKey('a.pdf::1', [stroke('#222222')]);
+		store.scheduleSave('a.pdf');
+		releaseWrite();
+		await firstFlush;
+
+		expect(fs.files['a.pdf.jot.json']).toContain('#222222');
+		expect(sessions.pdf('a.pdf').state).toBe('clean');
+		expect(sessions.pdf('a.pdf').revision).toBe(sessions.pdf('a.pdf').persistedRevision);
+	});
+});
+
 describe('SidecarStore conflicts and renames', () => {
 	it('preserves the external sidecar before local dirty state wins', async () => {
 		const remote = payload('#ff0000');
