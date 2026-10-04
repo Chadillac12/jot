@@ -134,3 +134,44 @@ describe('NotebookStore shared-session persistence', () => {
 		expect(session.state).toBe('clean');
 	});
 });
+
+
+describe('NotebookStore conflict preservation', () => {
+	it('does not save an invalid conflict with no local edits', async () => {
+		const fs = makeAdapter();
+		fs.files['Broken.jot'] = '{broken';
+		const sessions = new DocumentSessionManager();
+		const session = sessions.notebook('Broken.jot');
+		expect(session.loadText('{broken')).toBe('invalid');
+		const store = new NotebookStore(fs.adapter, sessions);
+
+		expect(await store.save(session)).toBe(false);
+		expect(fs.files['Broken.jot']).toBe('{broken');
+		expect(session.state).toBe('conflict');
+	});
+
+	it('preserves the external notebook before locally dirty conflict resolution', async () => {
+		const fs = makeAdapter();
+		const original = notebookText();
+		fs.files['Lecture.jot'] = original;
+		const sessions = new DocumentSessionManager();
+		const session = sessions.notebook('Lecture.jot');
+		session.loadText(original);
+		session.setPaperStyle('grid');
+		const external = original.replace('"ruled"', '"dot"');
+		fs.files['Lecture.jot'] = external;
+		expect(session.loadText(external)).toBe('conflict');
+		const onConflictPreserved = vi.fn();
+		const store = new NotebookStore(fs.adapter, sessions, { onConflictPreserved });
+
+		expect(await store.save(session)).toBe(true);
+
+		const conflictPath = Object.keys(fs.files).find((path) =>
+			path.startsWith('Lecture.jot.conflict-'),
+		);
+		expect(conflictPath).toBeDefined();
+		expect(conflictPath ? fs.files[conflictPath] : undefined).toBe(external);
+		expect(fs.files['Lecture.jot']).toContain('"paper": "grid"');
+		expect(onConflictPreserved).toHaveBeenCalledTimes(1);
+	});
+});
