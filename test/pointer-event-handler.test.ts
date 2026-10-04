@@ -100,7 +100,7 @@ function makeHarness(activation: PaletteActivation = 'pencil-double-tap-hold'): 
 
 function pointer(
 	canvas: HTMLCanvasElement,
-	type: 'pointerdown' | 'pointermove' | 'pointerup',
+	type: 'pointerdown' | 'pointermove' | 'pointerup' | 'pointercancel',
 	pointerType: 'pen' | 'touch' | 'mouse',
 	pointerId: number,
 	x: number,
@@ -162,6 +162,18 @@ describe('PointerEventHandler palette activation', () => {
 			pressure: 0.6,
 		});
 		expect(sidecar.scheduleSave).toHaveBeenCalledWith('notes.pdf');
+	});
+
+	it('discards a cancelled Pencil stroke instead of persisting a partial line', () => {
+		const { canvas, strokes, sidecar, undo } = makeHarness();
+
+		pointer(canvas, 'pointerdown', 'pen', 1, 20, 20);
+		pointer(canvas, 'pointermove', 'pen', 1, 50, 50);
+		pointer(canvas, 'pointercancel', 'pen', 1, 55, 55);
+
+		expect(strokes.forKey('notes.pdf::1')).toHaveLength(0);
+		expect(sidecar.scheduleSave).not.toHaveBeenCalled();
+		expect(undo.push).not.toHaveBeenCalled();
 	});
 
 	it('opens the palette on quick tap then nearby hold and removes the gesture mark', () => {
