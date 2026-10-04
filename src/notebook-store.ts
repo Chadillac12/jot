@@ -9,6 +9,7 @@ import { transactionalWriteText } from './transactional-write';
 export interface NotebookStoreCallbacks {
 	onSaveError?: (path: string, error: Error) => void;
 	onSaveRecovered?: (path: string) => void;
+	onConflictPreserved?: (path: string, conflictPath: string) => void;
 }
 
 export class NotebookStore {
@@ -37,6 +38,10 @@ export class NotebookStore {
 		let savedAny = false;
 		while (session.isDirty) {
 			const previousState = session.state;
+			if (previousState === 'conflict') {
+				const conflictPath = await this.preserveExternalConflict(session.path);
+				if (conflictPath) this.callbacks.onConflictPreserved?.(session.path, conflictPath);
+			}
 			const revision = session.beginSave();
 			if (revision === null) break;
 			const serialized = session.serializeCurrent();
@@ -59,6 +64,17 @@ export class NotebookStore {
 			}
 		}
 		return savedAny;
+	}
+
+	private async preserveExternalConflict(path: string): Promise<string | null> {
+		if (!(await this.adapter.exists(path))) return null;
+		const current = await this.adapter.read(path);
+		const conflictPath = `${path}.conflict-${Date.now()}.jot`;
+		await this.adapter.write(conflictPath, current);
+		if ((await this.adapter.read(conflictPath)) !== current) {
+			throw new Error(`Notebook conflict-copy verification failed for ${path}`);
+		}
+		return conflictPath;
 	}
 
 	async flushAll(): Promise<Array<{ path: string; error: Error }>> {
