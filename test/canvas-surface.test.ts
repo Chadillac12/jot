@@ -69,6 +69,28 @@ describe('readCanvasSurface', () => {
 		expect(surface.height).toBe(600);
 		expect(surface.dpr).toBe(2);
 	});
+	it('uses layout bounds when CSS sizing comes from a stylesheet', () => {
+		const canvas = makeCanvas();
+		canvas.width = 1600;
+		canvas.height = 1200;
+		canvas.getBoundingClientRect = () =>
+			({
+				left: 0,
+				top: 0,
+				right: 800,
+				bottom: 600,
+				width: 800,
+				height: 600,
+				x: 0,
+				y: 0,
+				toJSON: () => ({}),
+			});
+		const surface = readCanvasSurface(canvas);
+		expect(surface.width).toBe(800);
+		expect(surface.height).toBe(600);
+		expect(surface.dpr).toBe(2);
+	});
+
 	it('falls back to backing-store dimensions when style is missing', () => {
 		const canvas = makeCanvas();
 		canvas.width = 400;
