@@ -175,3 +175,58 @@ describe('NotebookStore conflict preservation', () => {
 		expect(onConflictPreserved).toHaveBeenCalledTimes(1);
 	});
 });
+
+
+describe('NotebookStore rename serialization', () => {
+	it('moves the authoritative session after an in-flight old-path save and commits current data at the new path', async () => {
+		const sessions = new DocumentSessionManager();
+		const session = sessions.notebook('Old.jot');
+		const original = notebookText();
+		session.loadText(original);
+		session.setPaperStyle('grid');
+
+		const files: Record<string, string> = { 'New.jot': original };
+		let releaseWrite!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			releaseWrite = resolve;
+		});
+		let gateFirstOldTempWrite = true;
+		const adapter = {
+			exists: vi.fn(async (path: string) => path in files),
+			read: vi.fn(async (path: string) => {
+				const value = files[path];
+				if (value === undefined) throw new Error(`missing ${path}`);
+				return value;
+			}),
+			write: vi.fn(async (path: string, value: string) => {
+				if (gateFirstOldTempWrite && path.startsWith('Old.jot.jot-tmp-')) {
+					gateFirstOldTempWrite = false;
+					await gate;
+				}
+				files[path] = value;
+			}),
+			rename: vi.fn(async (oldPath: string, newPath: string) => {
+				const value = files[oldPath];
+				if (value === undefined) throw new Error(`missing ${oldPath}`);
+				files[newPath] = value;
+				delete files[oldPath];
+			}),
+			remove: vi.fn(async (path: string) => {
+				delete files[path];
+			}),
+		} as unknown as DataAdapter;
+		const store = new NotebookStore(adapter, sessions);
+
+		const firstSave = store.save(session);
+		const rename = store.renameSession('Old.jot', 'New.jot');
+		releaseWrite();
+		await firstSave;
+		await rename;
+
+		expect(sessions.get('Old.jot')).toBeNull();
+		expect(sessions.notebook('New.jot')).toBe(session);
+		expect(session.state).toBe('clean');
+		expect(files['New.jot']).toContain('"paper": "grid"');
+		expect(files['Old.jot']).toBeUndefined();
+	});
+});
