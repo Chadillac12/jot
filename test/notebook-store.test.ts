@@ -106,12 +106,12 @@ describe('NotebookStore shared-session persistence', () => {
 		const store = new NotebookStore(adapter, sessions);
 
 		const first = store.save(session);
-		const second = await store.save(session);
-		expect(second).toBe(false);
+		const second = store.save(session);
 		expect(session.state).toBe('saving');
 
 		releaseWrite();
 		expect(await first).toBe(true);
+		expect(await second).toBe(true);
 		expect(session.state).toBe('clean');
 	});
 
