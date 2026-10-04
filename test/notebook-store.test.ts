@@ -13,8 +13,11 @@ function makeVault(path = 'Lecture.jot') {
 	const data = new Map<string, string>([[path, serializeJotNote(createJotNote())]]);
 	const vault = {
 		getAbstractFileByPath: vi.fn((lookup: string) => (file.path === lookup ? file : null)),
-		modify: vi.fn(async (target: TFile, text: string) => {
-			data.set(target.path, text);
+		process: vi.fn(async (target: TFile, fn: (current: string) => string) => {
+			const current = data.get(target.path) ?? '';
+			const next = fn(current);
+			data.set(target.path, next);
+			return next;
 		}),
 	} as unknown as Vault;
 	return { vault, file, data };
@@ -40,7 +43,7 @@ describe('NotebookStore', () => {
 		store.scheduleSave('Lecture.jot');
 		await vi.advanceTimersByTimeAsync(750);
 
-		expect(fs.vault.modify).toHaveBeenCalledTimes(1);
+		expect(fs.vault.process).toHaveBeenCalledTimes(1);
 		expect(fs.data.get('Lecture.jot')).toContain('"paper": "grid"');
 		expect(session.lifecycle.isDirty).toBe(false);
 	});
@@ -52,10 +55,10 @@ describe('NotebookStore', () => {
 		session.loadFromText(fs.data.get('Lecture.jot')!);
 		session.setPaperStyle('dot');
 		const onError = vi.fn();
-		const originalModify = vi.mocked(fs.vault.modify).getMockImplementation()!;
-		vi.mocked(fs.vault.modify)
+		const originalProcess = vi.mocked(fs.vault.process).getMockImplementation()!;
+		vi.mocked(fs.vault.process)
 			.mockRejectedValueOnce(new Error('disk full'))
-			.mockImplementation(originalModify);
+			.mockImplementation(originalProcess);
 
 		const store = new NotebookStore(fs.vault, sessions, onError);
 		store.scheduleSave('Lecture.jot');
@@ -83,6 +86,28 @@ describe('NotebookStore', () => {
 		expect(session.lifecycle.isDirty).toBe(false);
 	});
 
+	it('detects an atomic compare-and-swap conflict without overwriting external data', async () => {
+		const fs = makeVault();
+		const sessions = new NotebookSessionManager(new DocumentSessionManager());
+		const session = sessions.get('Lecture.jot');
+		session.loadFromText(fs.data.get('Lecture.jot')!);
+		session.setPaperStyle('grid');
+
+		const remote = createJotNote();
+		remote.paper = 'dot';
+		const remoteText = serializeJotNote(remote);
+		fs.data.set('Lecture.jot', remoteText);
+		const onConflict = vi.fn();
+		const store = new NotebookStore(fs.vault, sessions, undefined, onConflict);
+		store.scheduleSave('Lecture.jot');
+
+		expect(await store.flush('Lecture.jot')).toBe(false);
+		expect(fs.data.get('Lecture.jot')).toBe(remoteText);
+		expect(session.lifecycle.state).toBe('conflict');
+		expect(session.externalConflictData).toBe(remoteText);
+		expect(onConflict).toHaveBeenCalledWith('Lecture.jot');
+	});
+
 	it('waits for an in-flight notebook save before re-keying rename ownership', async () => {
 		const fs = makeVault('Old/Lecture.jot');
 		const documents = new DocumentSessionManager();
@@ -95,11 +120,13 @@ describe('NotebookStore', () => {
 		const gate = new Promise<void>((resolve) => {
 			releaseModify = resolve;
 		});
-		const originalModify = vi.mocked(fs.vault.modify).getMockImplementation()!;
-		vi.mocked(fs.vault.modify).mockImplementationOnce(async (file: TFile, text: string) => {
-			await gate;
-			await originalModify(file, text);
-		});
+		const originalProcess = vi.mocked(fs.vault.process).getMockImplementation()!;
+		vi.mocked(fs.vault.process).mockImplementationOnce(
+			async (file: TFile, fn: (current: string) => string) => {
+				await gate;
+				return originalProcess(file, fn);
+			},
+		);
 
 		const store = new NotebookStore(fs.vault, sessions);
 		store.scheduleSave('Old/Lecture.jot');
