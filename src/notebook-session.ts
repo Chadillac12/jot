@@ -23,6 +23,7 @@ export class NotebookSession {
 	private noteValue: JotNoteFile = createJotNote();
 	private rawDataValue = '';
 	private loadErrorValue: string | null = null;
+	private externalConflictDataValue: string | null = null;
 	private listeners = new Set<(event: NotebookSessionEvent) => void>();
 
 	constructor(
@@ -48,13 +49,19 @@ export class NotebookSession {
 		return this.loadErrorValue;
 	}
 
+	get externalConflictData(): string | null {
+		return this.externalConflictDataValue;
+	}
+
 	loadFromText(text: string): NotebookLoadStatus {
 		if (this.document.state !== 'unloaded' && text === this.rawDataValue) return 'unchanged';
 		if (!this.document.canReload()) {
 			if (text === this.rawDataValue) return 'unchanged';
+			this.externalConflictDataValue = text;
 			this.document.markConflict(
 				new Error('External notebook data changed while local edits were dirty'),
 			);
+			this.notify('state');
 			return 'conflict';
 		}
 		if (!this.document.beginLoad()) return 'conflict';
@@ -106,6 +113,12 @@ export class NotebookSession {
 		this.notify('state');
 	}
 
+	resolveConflictKeepLocal(): void {
+		this.externalConflictDataValue = null;
+		this.document.resolveConflictKeepLocal();
+		this.notify('state');
+	}
+
 	setPaperStyle(style: JotPaperStyle): void {
 		if (this.loadErrorValue || this.noteValue.paper === style) return;
 		this.noteValue = { ...this.noteValue, paper: style };
@@ -153,6 +166,7 @@ export class NotebookSession {
 		this.noteValue = parsed.note;
 		this.rawDataValue = text;
 		this.loadErrorValue = null;
+		this.externalConflictDataValue = null;
 		this.strokes.clearFor(this.path);
 		for (const page of parsed.note.pages) {
 			this.strokes.setForKey(documentPageKey(this.path, page.id), [...page.strokes]);
