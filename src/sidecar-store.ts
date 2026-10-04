@@ -1,190 +1,306 @@
 import type { DataAdapter } from 'obsidian';
+import { type DocumentSession, DocumentSessionManager } from './document-session';
 import {
+	JOT_FORMAT_VERSION,
 	isSupportedVersion,
 	jotPathFor,
 	parseJotText,
 } from './jot-file';
-import type { StrokeStore } from './stroke-store';
+import { transactionalWriteText } from './transactional-write';
 
 const SAVE_DEBOUNCE_MS = 750;
+const RETRY_BASE_MS = 2000;
+const MAX_AUTO_RETRIES = 3;
 const SELF_SAVE_SUPPRESS_MS = 1500;
 const PLUGIN_LOG = '[jot]';
 
+export type SidecarLoadStatus =
+	| 'loaded'
+	| 'missing'
+	| 'protected'
+	| 'error'
+	| 'skipped-dirty';
+
+export interface SidecarStoreCallbacks {
+	onSaveError?: (pdfPath: string, error: Error, retryCount: number) => void;
+	onSaveRecovered?: (pdfPath: string) => void;
+}
+
 export class SidecarStore {
 	private saveTimers = new Map<string, number>();
+	private retryTimers = new Map<string, number>();
+	private retryCounts = new Map<string, number>();
 	private recentSelfSaves = new Map<string, number>();
 	private protectedOriginals = new Map<string, string>();
 
 	constructor(
 		private adapter: DataAdapter,
-		private strokes: StrokeStore,
+		private sessions: DocumentSessionManager,
+		private callbacks: SidecarStoreCallbacks = {},
 	) {}
 
-	async load(pdfPath: string): Promise<'loaded' | 'missing' | 'protected' | 'error'> {
+	async load(pdfPath: string): Promise<SidecarLoadStatus> {
+		const session = this.sessions.pdf(pdfPath);
+		if (!session.beginLoad()) return 'skipped-dirty';
+
 		const path = jotPathFor(pdfPath);
 		try {
 			if (!(await this.adapter.exists(path))) {
 				this.protectedOriginals.delete(pdfPath);
-				this.strokes.clearFor(pdfPath);
+				this.sessions.strokes.clearFor(pdfPath);
+				session.completeLoad();
 				return 'missing';
 			}
+
 			const text = await this.adapter.read(path);
 			const parsed = parseJotText(text);
-			if (!parsed) {
+			if (!parsed || !isSupportedVersion(parsed.version)) {
 				this.protectedOriginals.set(pdfPath, text);
-				console.warn(`${PLUGIN_LOG} ${path} is invalid; keeping current annotations in memory`);
-				return 'protected';
-			}
-			if (!isSupportedVersion(parsed.version)) {
-				this.protectedOriginals.set(pdfPath, text);
-				console.warn(
-					`${PLUGIN_LOG} ${path} has unknown version ${parsed.version}; keeping current annotations in memory`,
+				session.markConflict(
+					parsed
+						? `Unsupported sidecar version ${parsed.version}`
+						: 'Invalid annotation sidecar',
 				);
 				return 'protected';
 			}
 
-			// Validate completely before mutating the live store. A malformed or
-			// future sidecar must never clear annotations that are already visible.
 			this.protectedOriginals.delete(pdfPath);
-			this.strokes.clearFor(pdfPath);
-			this.strokes.populateFromPayload(pdfPath, parsed.pages);
+			this.sessions.strokes.clearFor(pdfPath);
+			this.sessions.strokes.populateFromPayload(pdfPath, parsed.pages);
+			session.completeLoad();
 			return 'loaded';
-		} catch (err) {
-			console.error(`${PLUGIN_LOG} load failed for ${path}:`, err);
+		} catch (error) {
+			session.loadFailed(error);
+			console.error(`${PLUGIN_LOG} load failed for ${path}:`, error);
 			return 'error';
 		}
 	}
 
-	async save(pdfPath: string): Promise<void> {
-		const path = jotPathFor(pdfPath);
-		const payload = this.strokes.buildPayload(pdfPath);
-		try {
-			if (!payload) {
-				// Never delete a sidecar we explicitly refused to parse. Leaving the
-				// original in place is safer than treating "could not load" as empty.
-				if (this.protectedOriginals.has(pdfPath)) return;
-				if (await this.adapter.exists(path)) {
-					await this.adapter.remove(path);
-				}
-				return;
-			}
-
-			const protectedText = this.protectedOriginals.get(pdfPath);
-			if (protectedText !== undefined) {
-				const recoveryPath = `${path}.recovery-${Date.now()}.json`;
-				// If the recovery copy cannot be written, abort rather than destroy
-				// an unknown/corrupt original.
-				await this.adapter.write(recoveryPath, protectedText);
-				this.protectedOriginals.delete(pdfPath);
-			}
-
-			await this.adapter.write(path, JSON.stringify(payload, null, 2));
-			this.recentSelfSaves.set(path, Date.now());
-		} catch (err) {
-			console.error(`${PLUGIN_LOG} save failed for ${path}:`, err);
-		}
-	}
-
 	scheduleSave(pdfPath: string): void {
-		const existing = this.saveTimers.get(pdfPath);
-		if (existing !== undefined) window.clearTimeout(existing);
-		const id = window.setTimeout(() => {
+		const session = this.sessions.pdf(pdfPath);
+		session.markDirty();
+		this.clearTimer(this.saveTimers, pdfPath);
+		this.clearTimer(this.retryTimers, pdfPath);
+		this.retryCounts.delete(pdfPath);
+		const win = activeWindowForTimers();
+		const id = win.setTimeout(() => {
 			this.saveTimers.delete(pdfPath);
-			void this.save(pdfPath);
+			void this.saveWithRetry(pdfPath);
 		}, SAVE_DEBOUNCE_MS);
 		this.saveTimers.set(pdfPath, id);
 	}
 
-	hasPendingSave(pdfPath: string): boolean {
-		return this.saveTimers.has(pdfPath);
+	async flush(pdfPath: string): Promise<void> {
+		this.clearTimer(this.saveTimers, pdfPath);
+		this.clearTimer(this.retryTimers, pdfPath);
+		await this.save(pdfPath);
 	}
 
-	/**
-	 * An external sidecar edit arrived while local Pencil input is still dirty.
-	 * Preserve the external bytes in a conflict file before allowing the local
-	 * state to win, so neither device's annotations are silently destroyed.
-	 */
-	async preserveExternalConflictAndFlushLocal(pdfPath: string): Promise<string | null> {
-		const timer = this.saveTimers.get(pdfPath);
-		if (timer === undefined) return null;
+	async flushAll(): Promise<Array<{ path: string; error: Error }>> {
+		const failures: Array<{ path: string; error: Error }> = [];
+		for (const session of this.sessions.all()) {
+			if (session.kind !== 'pdf' || !session.isDirty) continue;
+			try {
+				await this.flush(session.path);
+			} catch (error) {
+				failures.push({ path: session.path, error: asError(error) });
+			}
+		}
+		return failures;
+	}
 
+	hasPendingSave(pdfPath: string): boolean {
+		const session = this.sessions.get(pdfPath);
+		return (
+			this.saveTimers.has(pdfPath) ||
+			this.retryTimers.has(pdfPath) ||
+			(session?.kind === 'pdf' && session.isDirty) ||
+			false
+		);
+	}
+
+	async preserveExternalConflictAndFlushLocal(pdfPath: string): Promise<string | null> {
+		const session = this.sessions.pdf(pdfPath);
 		const sidecarPath = jotPathFor(pdfPath);
 		try {
-			if (!(await this.adapter.exists(sidecarPath))) return null;
-			const remoteText = await this.adapter.read(sidecarPath);
-			const conflictPath = `${sidecarPath}.conflict-${Date.now()}.json`;
-			await this.adapter.write(conflictPath, remoteText);
-
-			window.clearTimeout(timer);
-			this.saveTimers.delete(pdfPath);
-			await this.save(pdfPath);
+			let conflictPath: string | null = null;
+			if (await this.adapter.exists(sidecarPath)) {
+				const remoteText = await this.adapter.read(sidecarPath);
+				conflictPath = await this.writeConflictCopy(sidecarPath, remoteText);
+			}
+			session.markConflict('External annotation update arrived while local edits were unsaved.');
+			await this.flush(pdfPath);
 			return conflictPath;
-		} catch (err) {
-			console.error(`${PLUGIN_LOG} could not preserve external conflict for ${sidecarPath}:`, err);
+		} catch (error) {
+			session.saveFailed(error);
+			console.error(
+				`${PLUGIN_LOG} could not preserve external conflict for ${sidecarPath}:`,
+				error,
+			);
 			return null;
 		}
 	}
 
 	async renamePdfPath(oldPdfPath: string, newPdfPath: string): Promise<void> {
 		if (oldPdfPath === newPdfPath) return;
+		if (this.sessions.get(newPdfPath)) {
+			throw new Error(`Cannot rename Jot session: destination already open: ${newPdfPath}`);
+		}
+
+		const oldSession = this.sessions.pdf(oldPdfPath);
+		if (oldSession.isDirty) await this.flush(oldPdfPath);
+
 		const oldSidecar = jotPathFor(oldPdfPath);
 		const newSidecar = jotPathFor(newPdfPath);
 		const protectedText = this.protectedOriginals.get(oldPdfPath);
+
+		if (await this.adapter.exists(oldSidecar)) {
+			const sourceText = await this.adapter.read(oldSidecar);
+			if (await this.adapter.exists(newSidecar)) {
+				const destinationText = await this.adapter.read(newSidecar);
+				await this.writeConflictCopy(newSidecar, destinationText);
+			}
+			await transactionalWriteText(this.adapter, newSidecar, sourceText, validateSidecarText);
+			try {
+				await this.adapter.remove(oldSidecar);
+			} catch (error) {
+				console.warn(`${PLUGIN_LOG} renamed sidecar committed but old copy remains:`, error);
+			}
+		}
+
+		this.clearTimer(this.saveTimers, oldPdfPath);
+		this.clearTimer(this.retryTimers, oldPdfPath);
+		this.retryCounts.delete(oldPdfPath);
+		this.recentSelfSaves.delete(oldSidecar);
+		this.sessions.rename(oldPdfPath, newPdfPath);
+
 		if (protectedText !== undefined) {
 			this.protectedOriginals.delete(oldPdfPath);
 			this.protectedOriginals.set(newPdfPath, protectedText);
-		}
-		const pending = this.saveTimers.get(oldPdfPath);
-		if (pending !== undefined) {
-			window.clearTimeout(pending);
-			this.saveTimers.delete(oldPdfPath);
-		}
-
-		try {
-			if (await this.adapter.exists(oldSidecar)) {
-				if (await this.adapter.exists(newSidecar)) {
-					const destinationText = await this.adapter.read(newSidecar);
-					const conflictPath = `${newSidecar}.conflict-${Date.now()}.json`;
-					await this.adapter.write(conflictPath, destinationText);
-					await this.adapter.remove(newSidecar);
-				}
-				await this.adapter.rename(oldSidecar, newSidecar);
-			}
-			this.recentSelfSaves.delete(oldSidecar);
-		} catch (err) {
-			console.error(
-				`${PLUGIN_LOG} could not move sidecar from ${oldSidecar} to ${newSidecar}:`,
-				err,
-			);
-		}
-
-		if (pending !== undefined || this.strokes.hasFor(newPdfPath)) {
-			this.scheduleSave(newPdfPath);
 		}
 	}
 
 	isOwnRecentSave(path: string): boolean {
 		const writtenAt = this.recentSelfSaves.get(path);
 		if (writtenAt === undefined) return false;
-		if (Date.now() - writtenAt >= SELF_SAVE_SUPPRESS_MS) return false;
+		if (Date.now() - writtenAt >= SELF_SAVE_SUPPRESS_MS) {
+			this.recentSelfSaves.delete(path);
+			return false;
+		}
 		this.recentSelfSaves.delete(path);
 		return true;
 	}
 
 	async discard(pdfPath: string): Promise<void> {
+		const session = this.sessions.pdf(pdfPath);
+		if (session.isDirty) await this.flush(pdfPath);
 		const path = jotPathFor(pdfPath);
 		this.protectedOriginals.delete(pdfPath);
+		if (!(await this.adapter.exists(path))) return;
+
+		const backupPath = `${path}.discard-backup-${Date.now()}.json`;
+		const original = await this.adapter.read(path);
+		await this.adapter.write(backupPath, original);
+		if ((await this.adapter.read(backupPath)) !== original) {
+			throw new Error(`Could not verify annotation backup before deleting ${path}`);
+		}
+		await this.adapter.remove(path);
 		try {
-			if (await this.adapter.exists(path)) {
-				await this.adapter.remove(path);
-			}
-		} catch (err) {
-			console.error(`${PLUGIN_LOG} could not delete sidecar ${path}:`, err);
+			await this.adapter.remove(backupPath);
+		} catch {
+			// A verified stale backup is harmless.
 		}
 	}
 
-	cancelAllPending(): void {
-		this.saveTimers.forEach((id) => window.clearTimeout(id));
-		this.saveTimers.clear();
+	getSession(pdfPath: string): DocumentSession {
+		return this.sessions.pdf(pdfPath);
 	}
+
+	private async save(pdfPath: string): Promise<void> {
+		const session = this.sessions.pdf(pdfPath);
+		const revision = session.beginSave();
+		if (revision === null) return;
+
+		const path = jotPathFor(pdfPath);
+		try {
+			const protectedText = this.protectedOriginals.get(pdfPath);
+			if (protectedText !== undefined) {
+				await this.writeRecoveryCopy(path, protectedText);
+			}
+
+			const payload =
+				this.sessions.strokes.buildPayload(pdfPath) ??
+				{ version: JOT_FORMAT_VERSION, pages: {} };
+			const text = JSON.stringify(payload, null, 2);
+			await transactionalWriteText(this.adapter, path, text, validateSidecarText);
+			this.recentSelfSaves.set(path, Date.now());
+			this.protectedOriginals.delete(pdfPath);
+			const hadError = session.state === 'save-error';
+			session.saveSucceeded(revision);
+			if (hadError) this.callbacks.onSaveRecovered?.(pdfPath);
+			this.retryCounts.delete(pdfPath);
+		} catch (error) {
+			session.saveFailed(error);
+			throw error;
+		}
+	}
+
+	private async saveWithRetry(pdfPath: string): Promise<void> {
+		try {
+			await this.save(pdfPath);
+		} catch (error) {
+			const nextRetry = (this.retryCounts.get(pdfPath) ?? 0) + 1;
+			this.retryCounts.set(pdfPath, nextRetry);
+			const typed = asError(error);
+			this.callbacks.onSaveError?.(pdfPath, typed, nextRetry);
+			if (nextRetry > MAX_AUTO_RETRIES) return;
+
+			const win = activeWindowForTimers();
+			const id = win.setTimeout(() => {
+				this.retryTimers.delete(pdfPath);
+				void this.saveWithRetry(pdfPath);
+			}, RETRY_BASE_MS * nextRetry);
+			this.retryTimers.set(pdfPath, id);
+		}
+	}
+
+	private async writeRecoveryCopy(sidecarPath: string, text: string): Promise<string> {
+		const recoveryPath = `${sidecarPath}.recovery-${Date.now()}.json`;
+		await this.adapter.write(recoveryPath, text);
+		if ((await this.adapter.read(recoveryPath)) !== text) {
+			throw new Error(`Recovery copy verification failed for ${sidecarPath}`);
+		}
+		return recoveryPath;
+	}
+
+	private async writeConflictCopy(sidecarPath: string, text: string): Promise<string> {
+		const conflictPath = `${sidecarPath}.conflict-${Date.now()}.json`;
+		await this.adapter.write(conflictPath, text);
+		if ((await this.adapter.read(conflictPath)) !== text) {
+			throw new Error(`Conflict copy verification failed for ${sidecarPath}`);
+		}
+		return conflictPath;
+	}
+
+	private clearTimer(timers: Map<string, number>, path: string): void {
+		const id = timers.get(path);
+		if (id === undefined) return;
+		activeWindowForTimers().clearTimeout(id);
+		timers.delete(path);
+	}
+}
+
+function validateSidecarText(text: string): void {
+	const parsed = parseJotText(text);
+	if (!parsed || !isSupportedVersion(parsed.version)) {
+		throw new Error('Sidecar transaction validation failed');
+	}
+}
+
+function activeWindowForTimers(): Window {
+	return window;
+}
+
+function asError(error: unknown): Error {
+	return error instanceof Error ? error : new Error(String(error));
 }
