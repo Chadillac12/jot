@@ -69,6 +69,12 @@ export default class JotPlugin extends Plugin {
 			onSaveRecovered: (path) => {
 				new Notice(`Jot: notebook saving recovered for ${path}.`);
 			},
+			onConflictPreserved: (_path, conflictPath) => {
+				new Notice(
+					`Jot: an external notebook edit conflicted with local ink. The external copy was preserved at ${conflictPath}.`,
+					8000,
+				);
+			},
 		});
 
 		this.overlays = new OverlayManager(this.app, this.strokes, (canvas) =>
