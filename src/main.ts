@@ -1,4 +1,4 @@
-import { activeWindow, Notice, Plugin, TFile } from 'obsidian';
+import { activeDocument, Notice, Plugin, TFile } from 'obsidian';
 import type { InkSaveScheduler, InkSurfaceController } from './ink-surface';
 import { DEFAULT_TOOL_STATE, Palette, ToolState } from './palette';
 import { DocumentSessionManager } from './document-session';
@@ -188,7 +188,7 @@ export default class JotPlugin extends Plugin {
 
 		const rootWin =
 			this.app.workspace.getMostRecentLeaf()?.view.containerEl.ownerDocument.defaultView ??
-			activeWindow;
+			activeDocument.defaultView;
 		if (rootWin) {
 			this.registerDomEvent(rootWin, 'resize', () => this.refreshFloatingPaletteButton());
 			this.registerDomEvent(rootWin, 'pagehide', () => {
