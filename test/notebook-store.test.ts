@@ -2,23 +2,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/unbound-method */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('obsidian', () => ({
-	TFile: class TFile {
-		path: string;
-		constructor(path: string) {
-			this.path = path;
-		}
-	},
-}));
-
-import { TFile, type Vault } from 'obsidian';
+import type { TFile, Vault } from 'obsidian';
 import { DocumentSessionManager } from '../src/document-session';
 import { createJotNote, serializeJotNote } from '../src/jot-note-file';
 import { NotebookSessionManager } from '../src/notebook-session';
 import { NotebookStore } from '../src/notebook-store';
 
 function makeVault(path = 'Lecture.jot') {
-	const file = new (TFile as unknown as new (path: string) => TFile)(path);
+	const file = { path, extension: 'jot' } as TFile;
 	const data = new Map<string, string>([[path, serializeJotNote(createJotNote())]]);
 	const vault = {
 		getAbstractFileByPath: vi.fn((lookup: string) => (file.path === lookup ? file : null)),
