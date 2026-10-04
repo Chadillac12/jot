@@ -1,60 +1,107 @@
 # Jot
 
-Handwrite annotations on PDFs in Obsidian with your Apple Pencil. Strokes are stored in a tiny JSON sidecar (`<file>.jot.json`) next to the original file — the original PDF is never modified — so annotations sync via Git or iCloud alongside the rest of your vault.
-
-I built this to annotate musical scores during rehearsal with our vocal band: things like breath marks, "watch out for thise note", etc. 
-
-Status: **early, working**. PDFs only for now.
-
-<img src="docs/pen-right.png" alt="Annotating a pdf with the radial palette open" width="240" />
+Jot adds Apple Pencil handwriting to Obsidian. It supports both PDF annotation and standalone multi-page `.jot` notebooks while keeping ink data inside the vault.
 
 ## Features
 
-- Pressure-sensitive ink with Apple Pencil
-- Pen, highlighter, and eraser; seven configurable colors; four widths
-- Radial palette opens on long-press; remembers your last pen and highlighter settings
-- Per-PDF undo/redo
-- Merge annotations into a flattened PDF (overwrite or save a copy)
-- Cross-device sync via the sidecar JSON — edit on iPad, see it on desktop
+- Pressure-sensitive Apple Pencil ink with coalesced and predicted input samples.
+- Pen, highlighter, eraser, configurable colors, and configurable widths.
+- Blank, ruled, grid, and dot-paper standalone `.jot` notebooks.
+- Multi-page handwritten notebooks with shared state across multiple Obsidian views.
+- Undo/redo for PDF annotations and notebooks.
+- Finger scrolling and zooming while Pencil remains writing-first.
+- Radial palette with configurable activation, including Pencil tap-then-hold and two-finger hold.
+- PDF annotations stored in a versioned `<file>.jot.json` sidecar until explicitly merged.
+- Transactional sidecar persistence with dirty/error/conflict state tracking and retry.
+- PDF merge to a copy or verified overwrite with recovery/rollback protection.
+- Conflict preservation when external/synced edits arrive while local ink is dirty.
 
-<p>
-  <img src="docs/color-right.png" alt="Right-handed color selection" width="240" />
-  <img src="docs/color-left.png" alt="Left-handed color selection" width="240" />
-  <img src="docs/thickness-right.png" alt="Thickness selection" width="240" />
-</p>
+## Creating a handwritten notebook
+
+Open Obsidian's command palette and run:
+
+**Jot: Create handwritten note**
+
+Jot creates an `Untitled Jot.jot` file in the current folder. The file opens as a handwritten notebook and syncs with the rest of the vault.
+
+## Annotating a PDF
+
+1. Open a PDF in Obsidian.
+2. Write directly with Apple Pencil.
+3. Open the radial palette using the activation configured under **Settings → Jot**.
+4. Choose pen, highlighter, eraser, color, or width.
+5. Run **Jot: Merge notes into PDF** when you intentionally want to bake annotations into a PDF.
+6. Run **Jot: Clear annotations on this PDF** to clear sidecar ink; the action is undoable before persistence history is intentionally discarded.
+
+Until merge is requested, Jot does not bake sidecar ink into the source PDF.
+
+## Data integrity model
+
+Jot treats document state and rendering state separately:
+
+- Each open document has explicit clean, dirty, saving, error, and conflict lifecycle state.
+- Dirty local state is never silently replaced by a disk reload.
+- Failed saves remain dirty and are retried.
+- PDF sidecars use validated transactional writes with rollback.
+- Standalone notebooks use one shared document session even when the same file is visible in multiple panes.
+- Notebook saves use an atomic compare-and-swap against the last known persisted text; conflicting external edits are preserved before local state can replace them.
+- Persisted pen strokes store a renderer version and render profile so later settings changes do not reshape previously saved ink.
+- PDF page bindings own and dispose their canvases, observers, and pointer handlers explicitly.
+
+Recovery and conflict files are intentionally retained when Jot cannot prove that destructive cleanup is safe.
 
 ## Installing
 
-1. In Obsidian, open *Settings → Community plugins → Browse*.
-2. Search for **Jot**, install, and enable it.
+For the published community-plugin version:
 
-### Beta builds
+1. Open **Settings → Community plugins → Browse** in Obsidian.
+2. Search for **Jot**.
+3. Install and enable it.
 
-To try unreleased changes, install [BRAT](https://github.com/TfTHacker/obsidian42-brat) and add `https://github.com/bverbeken/jot` as a beta plugin.
+### Beta / iPad test builds with BRAT
 
-## Using it
+Install [BRAT](https://github.com/TfTHacker/obsidian42-brat), then add:
 
-1. Open a PDF in Obsidian.
-2. Long-press anywhere on the page with the Apple Pencil to open the radial palette. Pick a tool, color, or width.
-3. Draw with the Apple Pencil. Rest your palm freely — touch input is ignored once a pen stroke starts.
-4. Two-finger hold dismisses the palette. The palette also auto-dismisses after a brief confirmation animation when you pick a color.
-5. Run the **Merge notes into PDF** command to bake annotations into a flattened PDF. Run **Clear annotations on this PDF** to wipe all strokes (undoable).
+`https://github.com/Chadillac12/jot`
 
-Set your handedness and customize the seven palette colors under *Settings → Jot*.
+BRAT installs the latest prerelease assets: `main.js`, `manifest.json`, and `styles.css`.
+
+For development builds, use a test vault rather than important production notes.
 
 ## Development
 
 ```bash
 npm install
-npm run dev     # watch build into dev-vault/.obsidian/plugins/jot/
-npm run build   # production build at the repo root (for release uploads)
-npm test        # vitest
+npm run dev
+npm run build
+npm test
+npm run lint
 ```
 
-Open `dev-vault/` as a vault in Obsidian to test. The dev vault is gitignored and is not your real notes vault.
+The release workflow performs a clean build, tests, lint, and provenance attestation. Published release versions are immutable; a changed build must use a new version.
 
-### Testing on iPad
+## Architecture
 
-1. Cut a GitHub release (`npm version patch` then `git push origin <tag>` — the release workflow uploads `main.js`, `manifest.json`, `styles.css`).
-2. On the iPad, install **BRAT** into a *separate dev vault* — never your real one.
-3. In BRAT, add this repo as a beta plugin. BRAT pulls the release and installs it.
+The major runtime boundaries are:
+
+```text
+JotPlugin
+ ├─ DocumentSessionManager
+ │   ├─ PDF document lifecycle
+ │   └─ Notebook document lifecycle
+ ├─ SidecarStore
+ │   └─ transactional PDF-sidecar persistence
+ ├─ NotebookSessionManager
+ │   └─ one authoritative notebook model per vault path
+ ├─ NotebookStore
+ │   └─ retry / flush / compare-and-swap notebook persistence
+ ├─ Ink Engine
+ │   ├─ PointerEventHandler
+ │   ├─ StrokeStore
+ │   └─ deterministic stroke renderer
+ └─ Surfaces
+     ├─ disposable PDF page bindings
+     └─ standalone notebook surfaces
+```
+
+Views render and edit document sessions; they are not the authoritative persistence owner.
