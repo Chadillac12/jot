@@ -1,19 +1,19 @@
 /* @vitest-environment happy-dom */
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/unbound-method */
+/* eslint-disable @typescript-eslint/unbound-method */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
-import type { TFile, Vault } from 'obsidian';
+import type { Vault } from 'obsidian';
 import { DocumentSessionManager } from '../src/document-session';
 import { createJotNote, serializeJotNote } from '../src/jot-note-file';
 import { NotebookSessionManager } from '../src/notebook-session';
 import { NotebookStore } from '../src/notebook-store';
 
 function makeVault(path = 'Lecture.jot') {
-	const file = { path, extension: 'jot' } as TFile;
+	const file = { path, extension: 'jot' };
 	const data = new Map<string, string>([[path, serializeJotNote(createJotNote())]]);
 	const vault = {
 		getAbstractFileByPath: vi.fn((lookup: string) => (file.path === lookup ? file : null)),
-		process: vi.fn(async (target: TFile, fn: (current: string) => string) => {
+		process: vi.fn(async (target: { path: string }, fn: (current: string) => string) => {
 			const current = data.get(target.path) ?? '';
 			const next = fn(current);
 			data.set(target.path, next);
@@ -122,7 +122,7 @@ describe('NotebookStore', () => {
 		});
 		const originalProcess = vi.mocked(fs.vault.process).getMockImplementation()!;
 		vi.mocked(fs.vault.process).mockImplementationOnce(
-			async (file: TFile, fn: (current: string) => string) => {
+			async (file, fn) => {
 				await gate;
 				return originalProcess(file, fn);
 			},
@@ -137,7 +137,7 @@ describe('NotebookStore', () => {
 		// is delivered to the view.
 		fs.data.set('New/Lecture.jot', fs.data.get('Old/Lecture.jot')!);
 		fs.data.delete('Old/Lecture.jot');
-		(fs.file as any).path = 'New/Lecture.jot';
+		fs.file.path = 'New/Lecture.jot';
 
 		let renameFinished = false;
 		const rename = store.rename('Old/Lecture.jot', 'New/Lecture.jot').then(() => {
