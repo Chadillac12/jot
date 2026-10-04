@@ -102,6 +102,22 @@ describe('JotNoteSurface', () => {
 		);
 	});
 
+	it('changes paper style without rebuilding or rewiring canvases', () => {
+		const host = document.createElement('div');
+		const wire = vi.fn();
+		const surface = new JotNoteSurface(host, new StrokeStore(), wire);
+
+		surface.render(createJotNote(), 'Lecture.jot');
+		const liveBefore = host.querySelector<HTMLCanvasElement>('canvas.jot-note-live-ink');
+		expect(wire).toHaveBeenCalledTimes(1);
+
+		surface.setPaperStyle('grid');
+
+		expect(host.querySelector('.jot-note-sheet')?.classList.contains('jot-note-paper-grid')).toBe(true);
+		expect(host.querySelector<HTMLCanvasElement>('canvas.jot-note-live-ink')).toBe(liveBefore);
+		expect(wire).toHaveBeenCalledTimes(1);
+	});
+
 	it('renders additional pages with unique ink keys', () => {
 		const host = document.createElement('div');
 		const note = createJotNote();
