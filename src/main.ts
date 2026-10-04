@@ -11,6 +11,7 @@ import { PointerEventHandler } from './pointer-event-handler';
 import { isSidecarPath, pdfPathFromSidecar } from './jot-file';
 import { JOT_NOTE_EXTENSION, JOT_NOTE_VIEW_TYPE, createJotNote, serializeJotNote } from './jot-note-file';
 import { JotNoteView } from './jot-note-view';
+import { NotebookSessionManager } from './notebook-session';
 import { MergeService } from './merge-service';
 import { OverlayManager } from './overlay-manager';
 import { SidecarStore } from './sidecar-store';
@@ -35,6 +36,7 @@ export default class JotPlugin extends Plugin {
 	private history = new UndoHistory();
 	private undoController!: UndoController;
 	private sessions = new DocumentSessionManager();
+	readonly notebookSessions = new NotebookSessionManager(this.sessions);
 	private lastSaveErrorByPath = new Map<string, string>();
 
 	async onload() {
