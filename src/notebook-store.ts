@@ -92,16 +92,29 @@ export class NotebookStore {
 		const prepared = session.prepareSave();
 		if (!prepared) return !session.lifecycle.isDirty;
 
+		let externalConflict: string | null = null;
 		try {
 			const file = this.vault.getAbstractFileByPath(path);
 			if (!file || !('extension' in file)) throw new Error(`Notebook file not found: ${path}`);
-			await this.vault.modify(file as TFile, prepared.text);
+			const baseline = session.rawData;
+			await this.vault.process(file as TFile, (current) => {
+				if (current !== baseline && current !== prepared.text) {
+					externalConflict = current;
+					throw new Error('Notebook changed externally during save');
+				}
+				return prepared.text;
+			});
 			session.completeSave(prepared.token, prepared.text);
 			if (session.lifecycle.isDirty) this.queueSave(path, SAVE_DEBOUNCE_MS);
 			return true;
 		} catch (error) {
 			session.failSave(prepared.token, error);
 			const normalized = error instanceof Error ? error : new Error(String(error));
+			if (externalConflict !== null) {
+				session.recordExternalConflict(externalConflict, normalized);
+				this.onSaveError?.(path, normalized);
+				return false;
+			}
 			this.onSaveError?.(path, normalized);
 			this.queueSave(path, RETRY_DELAY_MS);
 			return false;
