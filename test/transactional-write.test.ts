@@ -108,6 +108,25 @@ describe('transactionalWriteText', () => {
 	});
 });
 
+describe('transaction rollback after committed verification failure', () => {
+	it('removes an unverified brand-new authoritative text file', async () => {
+		const fs = makeFs();
+		const normalRead = vi.mocked(fs.adapter.read).getMockImplementation();
+		vi.mocked(fs.adapter.read).mockImplementation(async (path: string) => {
+			if (path === 'new.txt') return 'corrupt';
+			if (!normalRead) throw new Error('missing read implementation');
+			return normalRead(path);
+		});
+
+		await expect(
+			transactionalWriteText(fs.adapter, 'new.txt', 'expected', () => {}),
+		).rejects.toThrow('Committed write verification failed');
+
+		expect(fs.text['new.txt']).toBeUndefined();
+		expect(Object.keys(fs.text).some((path) => path.includes('.jot-tmp-'))).toBe(false);
+	});
+});
+
 describe('transactionalWriteBinary corruption handling', () => {
 	it('rejects a temporary binary write whose bytes differ from the requested payload', async () => {
 		const fs = makeFs();
