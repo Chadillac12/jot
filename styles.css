@@ -373,6 +373,8 @@
 .jot-note-sheet {
 	position: relative;
 	width: 100%;
+	user-select: none;
+	-webkit-user-select: none;
 	contain: layout paint;
 	overflow: hidden;
 	background-color: #ffffff;
