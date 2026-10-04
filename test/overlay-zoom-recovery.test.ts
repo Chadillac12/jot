@@ -70,7 +70,7 @@ function makeHarness() {
 	};
 	const wire = vi.fn(() => () => {});
 	const manager = new OverlayManager(app as any, new StrokeStore(), wire);
-	return { page, manager, wire };
+	return { page, manager, wire, leaf, container };
 }
 
 beforeEach(() => {
@@ -123,6 +123,18 @@ describe('OverlayManager zoom recovery', () => {
 		expect(page.querySelectorAll('canvas.jot-overlay')).toHaveLength(1);
 		expect(page.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(1);
 		expect(wire).toHaveBeenCalledTimes(1);
+	});
+
+	it('disposes PDF bindings when the same leaf changes to a non-PDF view', () => {
+		const { page, manager, leaf } = makeHarness();
+		manager.attachToActivePdf();
+		expect(page.querySelector('canvas.jot-overlay')).not.toBeNull();
+
+		leaf.view.getViewType = () => 'markdown';
+		manager.pruneClosedObservers();
+
+		expect(page.querySelector('canvas.jot-overlay')).toBeNull();
+		expect(page.querySelector('canvas.jot-live-overlay')).toBeNull();
 	});
 
 	it('resizes both layers safely after PDF zoom changes', () => {
