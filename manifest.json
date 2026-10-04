@@ -1,7 +1,7 @@
 {
 	"id": "jot",
 	"name": "Jot",
-	"version": "1.1.0-ipad.4",
+	"version": "1.1.0-ipad.5",
 	"minAppVersion": "1.4.4",
 	"description": "Handwrite on PDFs and standalone notes with Apple Pencil; ink stays local in your vault.",
 	"author": "Ben Verbeken",
