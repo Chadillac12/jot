@@ -1,5 +1,12 @@
 /* @vitest-environment happy-dom */
-/* eslint-disable @typescript-eslint/no-explicit-any, obsidianmd/no-global-this */
+/* eslint-disable
+	@typescript-eslint/no-explicit-any,
+	@typescript-eslint/no-unsafe-member-access,
+	@typescript-eslint/no-unsafe-argument,
+	@typescript-eslint/unbound-method,
+	obsidianmd/no-global-this,
+	obsidianmd/prefer-active-doc
+*/
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PdfPageBinding } from '../src/pdf-page-binding';
 import { StrokeStore } from '../src/stroke-store';
@@ -16,7 +23,7 @@ class ResizeObserverMock {
 	}
 	unobserve(): void {}
 	fire(): void {
-		this.callback([], this as unknown as ResizeObserver);
+		this.callback([], this);
 	}
 }
 
@@ -34,7 +41,7 @@ class MutationObserverMock {
 		return [];
 	}
 	fire(): void {
-		this.callback([], this as unknown as MutationObserver);
+		this.callback([], this);
 	}
 }
 
@@ -59,7 +66,7 @@ function page(): HTMLElement {
 }
 
 beforeEach(() => {
-	document.body.innerHTML = '';
+	document.body.replaceChildren();
 	ResizeObserverMock.instances = [];
 	MutationObserverMock.instances = [];
 	(globalThis as any).ResizeObserver = ResizeObserverMock;
@@ -76,7 +83,7 @@ beforeEach(() => {
 		closePath: vi.fn(),
 		fill: vi.fn(),
 		stroke: vi.fn(),
-	} as any);
+	} as unknown as CanvasRenderingContext2D);
 	window.requestAnimationFrame = (callback: FrameRequestCallback) => {
 		callback(0);
 		return 1;
@@ -99,7 +106,12 @@ describe('PdfPageBinding', () => {
 
 	it('disposes observers, input handlers, canvases, and Jot-owned classes', () => {
 		const el = page();
-		el.innerHTML = '<div class="textLayer"></div><div class="annotationLayer"></div>';
+		const textLayer = document.createElement('div');
+		textLayer.className = 'textLayer';
+		el.appendChild(textLayer);
+		const annotationLayer = document.createElement('div');
+		annotationLayer.className = 'annotationLayer';
+		el.appendChild(annotationLayer);
 		const disposeInput = vi.fn();
 		const binding = new PdfPageBinding(
 			el,
