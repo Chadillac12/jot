@@ -68,9 +68,10 @@ function makeHarness() {
 			iterateAllLeaves: (fn: (value: unknown) => void) => fn(leaf),
 		},
 	};
-	const wire = vi.fn();
+	const disposeInput = vi.fn();
+	const wire = vi.fn(() => disposeInput);
 	const manager = new OverlayManager(app as any, new StrokeStore(), wire);
-	return { page, manager, wire };
+	return { page, manager, wire, disposeInput };
 }
 
 beforeEach(() => {
@@ -126,7 +127,7 @@ describe('OverlayManager zoom recovery', () => {
 	});
 
 	it('disposes every Jot-owned page resource on plugin teardown', () => {
-		const { page, manager } = makeHarness();
+		const { page, manager, disposeInput } = makeHarness();
 		manager.attachToActivePdf();
 		expect(page.querySelector('canvas.jot-overlay')).not.toBeNull();
 		expect(page.querySelector('canvas.jot-live-overlay')).not.toBeNull();
@@ -137,6 +138,7 @@ describe('OverlayManager zoom recovery', () => {
 		expect(page.querySelector('canvas.jot-overlay')).toBeNull();
 		expect(page.querySelector('canvas.jot-live-overlay')).toBeNull();
 		expect(page.classList.contains('jot-page-anchor')).toBe(false);
+		expect(disposeInput).toHaveBeenCalledTimes(1);
 	});
 
 	it('resizes both layers safely after PDF zoom changes', () => {
