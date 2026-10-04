@@ -237,7 +237,7 @@ export class JotNoteView extends TextFileView {
 		}
 		const pageId = session.addPage();
 		if (!pageId) return;
-		this.requestSave();
+		this.plugin.scheduleNotebookSave(session.path);
 		const pages = this.pagesEl?.querySelectorAll<HTMLElement>('.jot-note-page');
 		pages?.[pages.length - 1]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 	}
