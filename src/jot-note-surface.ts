@@ -148,13 +148,18 @@ export class JotNoteSurface implements InkSurfaceController {
 				return;
 			}
 			if (resizeFrame !== null) return;
-			const frame = win.requestAnimationFrame(() => {
+			let completedSynchronously = false;
+			let frame = 0;
+			frame = win.requestAnimationFrame(() => {
+				completedSynchronously = true;
 				this.frames.delete(frame);
 				resizeFrame = null;
 				applyResize();
 			});
-			resizeFrame = frame;
-			this.frames.add(frame);
+			if (!completedSynchronously) {
+				resizeFrame = frame;
+				this.frames.add(frame);
+			}
 		};
 
 		const observer = new ResizeObserver(scheduleResize);
