@@ -34,6 +34,7 @@ const DEFAULT_TIMER_HOST: TimerHost = {
 export class SidecarStore {
 	private saveTimers = new Map<string, number>();
 	private recentSelfSaves = new Map<string, number>();
+	private inFlightSaves = new Map<string, Promise<boolean>>();
 	private protectedOriginals = new Map<string, string>();
 	private ownedPdfPaths = new Set<string>();
 
@@ -89,6 +90,25 @@ export class SidecarStore {
 	}
 
 	async save(pdfPath: string): Promise<boolean> {
+		const existing = this.inFlightSaves.get(pdfPath);
+		if (existing) {
+			const priorSucceeded = await existing;
+			if (!priorSucceeded) return false;
+			return this.sessions.get(pdfPath).isDirty ? this.save(pdfPath) : true;
+		}
+
+		const operation = this.performSave(pdfPath);
+		this.inFlightSaves.set(pdfPath, operation);
+		try {
+			return await operation;
+		} finally {
+			if (this.inFlightSaves.get(pdfPath) === operation) {
+				this.inFlightSaves.delete(pdfPath);
+			}
+		}
+	}
+
+	private async performSave(pdfPath: string): Promise<boolean> {
 		const session = this.sessions.get(pdfPath);
 		const token = session.beginSave();
 		if (!token) return !session.isDirty;
