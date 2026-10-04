@@ -1,5 +1,7 @@
 import type { PDFPage } from 'pdf-lib';
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('obsidian', () => ({ App: class {}, Modal: class {} }));
 import { drawStrokesOnPdfPage } from '../src/merge';
 import type { Stroke } from '../src/stroke-math';
 
