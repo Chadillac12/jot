@@ -404,7 +404,7 @@ describe('SidecarStore.discard', () => {
 	});
 });
 
-describe('SidecarStore.cancelAllPending', () => {
+describe('SidecarStore.flushAll', () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
 	});
@@ -412,7 +412,7 @@ describe('SidecarStore.cancelAllPending', () => {
 		vi.useRealTimers();
 	});
 
-	it('drops every pending scheduled save without firing them', async () => {
+	it('flushes every dirty scheduled document instead of discarding work', async () => {
 		const fs = makeFs();
 		const strokes = new StrokeStore();
 		strokes.setForKey('a.pdf::1', [
@@ -421,8 +421,11 @@ describe('SidecarStore.cancelAllPending', () => {
 		const store = new SidecarStore(fs.adapter, strokes);
 		store.scheduleSave('a.pdf');
 		store.scheduleSave('b.pdf');
-		store.cancelAllPending();
-		await vi.advanceTimersByTimeAsync(1000);
-		expect(fs.adapter.write).not.toHaveBeenCalled();
+
+		expect(await store.flushAll()).toBe(true);
+		expect(fs.files['a.pdf.jot.json']).toContain('"pages"');
+		expect(fs.files['b.pdf.jot.json']).toContain('"pages"');
+		expect(store.hasPendingSave('a.pdf')).toBe(false);
+		expect(store.hasPendingSave('b.pdf')).toBe(false);
 	});
 });
