@@ -107,7 +107,7 @@ export class PointerEventHandler {
 		this.canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
 		this.canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
 		this.canvas.addEventListener('pointerup', (e) => this.onFinish(e));
-		this.canvas.addEventListener('pointercancel', (e) => this.onFinish(e));
+		this.canvas.addEventListener('pointercancel', (e) => this.onCancel(e));
 	}
 
 	private onPointerDown(e: PointerEvent): void {
@@ -181,6 +181,45 @@ export class PointerEventHandler {
 			return;
 		}
 		this.continueDrawingStroke(e);
+	}
+
+	private onCancel(e: PointerEvent): void {
+		if (e.pointerType === 'touch') {
+			this.twoFingerHold.pointerUp(e.pointerId);
+			return;
+		}
+		if (this.activePointerId !== e.pointerId) return;
+
+		if (e.pointerType === 'mouse') this.longPress.cancel();
+		if (
+			e.pointerType === 'pen' &&
+			this.isPencilSecondTapArmed() &&
+			e.pointerId === this.secondTapPointerId
+		) {
+			this.cancelPencilDoubleTapHold();
+		}
+
+		this.predictedPoints = [];
+		this.cancelLiveFrame();
+		this.deps.overlays.clearLivePage(this.canvas);
+
+		// Erasing mutates the store live for immediate visual feedback. If the
+		// browser cancels the gesture, restore the pre-gesture snapshot so a
+		// Safari/WebKit gesture arbitration event cannot delete ink.
+		if (this.state.isErasing()) {
+			const snapshot = this.state.takeEraserSnapshot();
+			if (snapshot) {
+				this.deps.strokes.setForKey(snapshot.key, [...snapshot.prevStrokes]);
+				this.deps.overlays.redrawPage(this.canvas);
+				this.deps.sidecar.scheduleSave(snapshot.pdfPath);
+			}
+		} else {
+			// A cancelled pen stroke is transient and must never become persisted
+			// ink or an undo entry.
+			this.state.reset();
+		}
+
+		this.releasePointerCapture();
 	}
 
 	private onFinish(e: PointerEvent): void {
