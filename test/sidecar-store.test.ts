@@ -491,6 +491,23 @@ describe('SidecarStore.discard', () => {
 		expect(fs.files['a.pdf.jot.json']).toBeUndefined();
 	});
 
+	it('refuses to discard authoritative data when a dirty flush fails', async () => {
+		vi.useFakeTimers();
+		const fs = makeFs({ 'a.pdf.jot.json': validPayload });
+		const strokes = new StrokeStore();
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.4, y: 0.4, pressure: 0.5 }], color: '#444444', width: 0.005, tool: 'pen' },
+		]);
+		const store = new SidecarStore(fs.adapter, strokes);
+		vi.mocked(fs.adapter.write).mockRejectedValueOnce(new Error('disk full'));
+		store.scheduleSave('a.pdf');
+
+		await expect(store.discard('a.pdf')).rejects.toThrow('failed to save');
+		expect(fs.files['a.pdf.jot.json']).toBe(validPayload);
+		vi.clearAllTimers();
+		vi.useRealTimers();
+	});
+
 	it('is a no-op when the sidecar file does not exist', async () => {
 		const fs = makeFs();
 		const store = new SidecarStore(fs.adapter, new StrokeStore());
