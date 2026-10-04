@@ -18,7 +18,7 @@ export type NotebookSessionEvent = 'load' | 'ink' | 'paper' | 'structure' | 'sta
 export class NotebookSession {
 	readonly strokes = new StrokeStore();
 	readonly history = new UndoHistory();
-	readonly document: DocumentSession;
+	readonly lifecycle: DocumentSession;
 
 	private noteValue: JotNoteFile = createJotNote();
 	private rawDataValue = '';
@@ -31,11 +31,11 @@ export class NotebookSession {
 		path: string,
 		documentSessions: DocumentSessionManager,
 	) {
-		this.document = documentSessions.get(path);
+		this.lifecycle = documentSessions.get(path);
 	}
 
 	get path(): string {
-		return this.document.path;
+		return this.lifecycle.path;
 	}
 
 	get note(): JotNoteFile {
@@ -55,23 +55,23 @@ export class NotebookSession {
 	}
 
 	loadFromText(text: string): NotebookLoadStatus {
-		if (this.document.state !== 'unloaded' && text === this.rawDataValue) return 'unchanged';
-		if (!this.document.canReload()) {
+		if (this.lifecycle.state !== 'unloaded' && text === this.rawDataValue) return 'unchanged';
+		if (!this.lifecycle.canReload()) {
 			if (text === this.rawDataValue) return 'unchanged';
 			this.externalConflictDataValue = text;
-			this.document.markConflict(
+			this.lifecycle.markConflict(
 				new Error('External notebook data changed while local edits were dirty'),
 			);
 			this.notify('state');
 			return 'conflict';
 		}
-		if (!this.document.beginLoad()) return 'conflict';
+		if (!this.lifecycle.beginLoad()) return 'conflict';
 
 		const parsed = parseJotNoteTextResult(text);
 		if (!parsed.ok) {
 			this.rawDataValue = text;
 			this.loadErrorValue = parsed.message;
-			this.document.failLoad(new Error(parsed.message));
+			this.lifecycle.failLoad(new Error(parsed.message));
 			this.notify('load');
 			return 'error';
 		}
@@ -93,36 +93,36 @@ export class NotebookSession {
 	}
 
 	markDirty(): number {
-		const revision = this.document.markDirty();
+		const revision = this.lifecycle.markDirty();
 		this.queueInkNotification();
 		return revision;
 	}
 
 	beginSave(): SaveToken | null {
-		return this.document.beginSave();
+		return this.lifecycle.beginSave();
 	}
 
 	completeSave(token: SaveToken, persistedText: string): void {
 		this.rawDataValue = persistedText;
-		this.document.completeSave(token);
+		this.lifecycle.completeSave(token);
 		this.notify('state');
 	}
 
 	failSave(token: SaveToken, error: unknown): void {
-		this.document.failSave(token, error);
+		this.lifecycle.failSave(token, error);
 		this.notify('state');
 	}
 
 	resolveConflictKeepLocal(): void {
 		this.externalConflictDataValue = null;
-		this.document.resolveConflictKeepLocal();
+		this.lifecycle.resolveConflictKeepLocal();
 		this.notify('state');
 	}
 
 	setPaperStyle(style: JotPaperStyle): void {
 		if (this.loadErrorValue || this.noteValue.paper === style) return;
 		this.noteValue = { ...this.noteValue, paper: style };
-		this.document.markDirty();
+		this.lifecycle.markDirty();
 		this.notify('paper');
 	}
 
@@ -141,7 +141,7 @@ export class NotebookSession {
 				},
 			],
 		};
-		this.document.markDirty();
+		this.lifecycle.markDirty();
 		this.notify('structure');
 		return id;
 	}
@@ -181,7 +181,7 @@ export class NotebookSession {
 			this.strokes.setForKey(documentPageKey(this.path, page.id), [...page.strokes]);
 		}
 		this.history.dropPath(this.path);
-		this.document.completeLoad();
+		this.lifecycle.completeLoad();
 		this.notify('load');
 	}
 }
