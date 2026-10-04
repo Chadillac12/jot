@@ -12,6 +12,7 @@ import { isSidecarPath, pdfPathFromSidecar } from './jot-file';
 import { JOT_NOTE_EXTENSION, JOT_NOTE_VIEW_TYPE, createJotNote, serializeJotNote } from './jot-note-file';
 import { JotNoteView } from './jot-note-view';
 import { NotebookSessionManager, type NotebookSession } from './notebook-session';
+import { NotebookStore } from './notebook-store';
 import { transactionalWriteText } from './transactional-write';
 import { MergeService } from './merge-service';
 import { OverlayManager } from './overlay-manager';
@@ -38,6 +39,7 @@ export default class JotPlugin extends Plugin {
 	private undoController!: UndoController;
 	private sessions = new DocumentSessionManager();
 	readonly notebookSessions = new NotebookSessionManager(this.sessions);
+	private notebookStore!: NotebookStore;
 	private lastSaveErrorByPath = new Map<string, string>();
 	private lastActivePdfPath: string | null = null;
 
@@ -49,6 +51,11 @@ export default class JotPlugin extends Plugin {
 			this.strokes,
 			this.sessions,
 			(pdfPath, error) => this.reportSaveError(pdfPath, error),
+		);
+		this.notebookStore = new NotebookStore(
+			this.app.vault,
+			this.notebookSessions,
+			(path, error) => this.reportNotebookSaveError(path, error),
 		);
 		this.overlays = new OverlayManager(this.app, this.strokes, (canvas) =>
 			this.wirePointerEvents(canvas),
@@ -193,6 +200,7 @@ export default class JotPlugin extends Plugin {
 			this.registerDomEvent(rootWin, 'resize', () => this.refreshFloatingPaletteButton());
 			this.registerDomEvent(rootWin, 'pagehide', () => {
 				void this.sidecar.flushAll();
+				void this.notebookStore.flushAll();
 			});
 		}
 
@@ -210,10 +218,10 @@ export default class JotPlugin extends Plugin {
 
 	onunload() {
 		this.overlays?.disconnectAll();
-		// Do not discard dirty revisions during plugin reload/disable. The promise
-		// is intentionally started before teardown and SidecarStore retains dirty
-		// state/retry information if persistence fails.
+		// Do not discard dirty revisions during plugin reload/disable. Both
+		// persistence domains retain dirty/error state and retry ownership.
 		void this.sidecar?.flushAll();
+		void this.notebookStore?.flushAll();
 		this.palette?.hide();
 		this.floatingPaletteButton?.hide();
 	}
@@ -276,6 +284,7 @@ export default class JotPlugin extends Plugin {
 		try {
 			await transactionalWriteText(this.app.vault.adapter, conflictPath, external);
 			session.resolveConflictKeepLocal();
+			this.notebookStore.scheduleSave(session.path);
 			new Notice(
 				`Jot: simultaneous notebook edits detected. The external copy was preserved at ${conflictPath}.`,
 				8000,
@@ -288,6 +297,25 @@ export default class JotPlugin extends Plugin {
 			);
 			return false;
 		}
+	}
+
+	scheduleNotebookSave(path: string): void {
+		this.notebookStore.scheduleSave(path);
+	}
+
+	async flushNotebook(path: string): Promise<boolean> {
+		return this.notebookStore.flush(path);
+	}
+
+	async renameNotebookSession(oldPath: string, newPath: string): Promise<void> {
+		await this.notebookStore.rename(oldPath, newPath);
+	}
+
+	private reportNotebookSaveError(path: string, error: Error): void {
+		new Notice(
+			`Jot: notebook ${path} could not be saved. The shared session remains dirty and Jot will retry. ${error.message}`,
+			10000,
+		);
 	}
 
 	private reportSaveError(pdfPath: string, error: Error): void {
