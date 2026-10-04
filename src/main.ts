@@ -16,7 +16,7 @@ import { MergeService } from './merge-service';
 import { OverlayManager } from './overlay-manager';
 import { SidecarStore } from './sidecar-store';
 import { StrokeStore } from './stroke-store';
-import { setInkRenderTuning } from './stroke-render';
+import { currentInkRenderProfile, setInkRenderTuning } from './stroke-render';
 import { UndoController } from './undo-controller';
 import { UndoEntry, UndoHistory } from './undo';
 
@@ -290,6 +290,7 @@ export default class JotPlugin extends Plugin {
 			toolState: () => this.toolState,
 			handedness: () => this.settings.handedness,
 			paletteActivation: () => this.settings.paletteActivation,
+			renderProfile: () => currentInkRenderProfile(),
 		}).attach();
 	}
 
