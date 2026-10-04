@@ -75,14 +75,13 @@ export class DocumentSession {
 			this._revision !== this._persistedRevision ||
 			this._state === 'dirty' ||
 			this._state === 'saving' ||
-			this._state === 'load-error' ||
 			this._state === 'save-error' ||
 			this._state === 'conflict'
 		);
 	}
 
 	get canReload(): boolean {
-		return this._state === 'unloaded' || this._state === 'clean';
+		return this._state === 'unloaded' || this._state === 'clean' || this._state === 'load-error';
 	}
 
 	beginLoad(): boolean {
