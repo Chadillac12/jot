@@ -1,6 +1,7 @@
 import { Notice, Plugin, TFile } from 'obsidian';
 import type { InkSaveScheduler, InkSurfaceController } from './ink-surface';
 import { DEFAULT_TOOL_STATE, Palette, ToolState } from './palette';
+import { DocumentSessionManager } from './document-session';
 import { normalizePalettePreferences } from './palette-activation';
 import { DEFAULT_SETTINGS, JotSettings, JotSettingTab } from './settings';
 import { ConfirmClearModal } from './clear';
@@ -33,11 +34,18 @@ export default class JotPlugin extends Plugin {
 	settings: JotSettings = { ...DEFAULT_SETTINGS };
 	private history = new UndoHistory();
 	private undoController!: UndoController;
+	private sessions = new DocumentSessionManager();
+	private lastSaveErrorByPath = new Map<string, string>();
 
 	async onload() {
 		await this.loadSettings();
 		this.applyInkSettings();
-		this.sidecar = new SidecarStore(this.app.vault.adapter, this.strokes);
+		this.sidecar = new SidecarStore(
+			this.app.vault.adapter,
+			this.strokes,
+			this.sessions,
+			(pdfPath, error) => this.reportSaveError(pdfPath, error),
+		);
 		this.overlays = new OverlayManager(this.app, this.strokes, (canvas) =>
 			this.wirePointerEvents(canvas),
 		);
@@ -184,13 +192,17 @@ export default class JotPlugin extends Plugin {
 
 	onunload() {
 		this.overlays?.disconnectAll();
-		this.sidecar?.cancelAllPending();
+		// Do not discard dirty revisions during plugin reload/disable. The promise
+		// is intentionally started before teardown and SidecarStore retains dirty
+		// state/retry information if persistence fails.
+		void this.sidecar?.flushAll();
 		this.palette?.hide();
 		this.floatingPaletteButton?.hide();
 	}
 
 	private async ensureLoaded(pdfPath: string) {
 		const status = await this.sidecar.load(pdfPath);
+		if (status === 'dirty') return;
 		if (status === 'protected') {
 			new Notice(
 				'Jot: the existing annotation sidecar could not be safely loaded. It is protected from overwrite and will be backed up before any new annotations are saved.',
@@ -201,6 +213,10 @@ export default class JotPlugin extends Plugin {
 
 	private async reloadSidecar(pdfPath: string) {
 		const status = await this.sidecar.load(pdfPath);
+		if (status === 'dirty') {
+			await this.resolveExternalSidecarConflict(pdfPath);
+			return;
+		}
 		if (status === 'protected') {
 			new Notice(
 				'Jot: an external annotation sidecar could not be safely loaded. The file was left untouched and current annotations were kept in memory.',
@@ -229,6 +245,17 @@ export default class JotPlugin extends Plugin {
 		new Notice(
 			`Jot: simultaneous annotation edits detected. The external copy was preserved at ${conflictPath}.`,
 			8000,
+		);
+	}
+
+
+	private reportSaveError(pdfPath: string, error: Error): void {
+		const message = error.message || String(error);
+		if (this.lastSaveErrorByPath.get(pdfPath) === message) return;
+		this.lastSaveErrorByPath.set(pdfPath, message);
+		new Notice(
+			`Jot: annotations for ${pdfPath} could not be saved. They remain dirty and Jot will retry. ${message}`,
+			10000,
 		);
 	}
 
