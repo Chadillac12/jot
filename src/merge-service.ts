@@ -1,6 +1,7 @@
 import { App, DataAdapter, Notice } from 'obsidian';
 import { PDFDocument } from 'pdf-lib';
-import { ExportChoiceModal, drawStrokesOnPdfPage } from './merge';
+import { ExportChoiceModal } from './merge';
+import { drawStrokesOnPdfPage } from './pdf-render';
 import type { SidecarLoadStatus, SidecarStore } from './sidecar-store';
 import { transactionalWriteBinary } from './transactional-write';
 import type { StrokeStore } from './stroke-store';
