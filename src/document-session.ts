@@ -116,6 +116,7 @@ export class DocumentSession {
 	}
 
 	beginSave(): number | null {
+		if (this._state === 'saving') return null;
 		if (!this.isDirty && this._state === 'clean') return null;
 		if (this._state === 'loading' || this._state === 'unloaded') return null;
 		this._saveRevision = this._revision;
