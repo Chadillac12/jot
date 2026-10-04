@@ -163,7 +163,9 @@ export class SidecarStore {
 		this.clearTimer(pdfPath);
 		const session = this.sessions.get(pdfPath);
 		if (!session.isDirty) return true;
-		return this.save(pdfPath);
+		const saved = await this.save(pdfPath);
+		if (saved && !session.isDirty) this.clearTimer(pdfPath);
+		return saved;
 	}
 
 	async flushAll(): Promise<boolean> {
