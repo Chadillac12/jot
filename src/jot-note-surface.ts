@@ -18,7 +18,7 @@ const LIVE_CLASS = 'jot-note-live-ink';
 
 export class JotNoteSurface implements InkSurfaceController {
 	private observers: ResizeObserver[] = [];
-	private frames: number[] = [];
+	private frames = new Set<number>();
 
 	constructor(
 		private host: HTMLElement,
@@ -35,6 +35,14 @@ export class JotNoteSurface implements InkSurfaceController {
 		});
 	}
 
+	setPaperStyle(style: JotNoteFile['paper']): void {
+		const classes = ['jot-note-paper-blank', 'jot-note-paper-ruled', 'jot-note-paper-grid', 'jot-note-paper-dot'];
+		for (const sheet of this.host.querySelectorAll<HTMLElement>(`.${SHEET_CLASS}`)) {
+			sheet.classList.remove(...classes);
+			sheet.classList.add(`jot-note-paper-${style}`);
+		}
+	}
+
 	redrawAll(): void {
 		this.host
 			.querySelectorAll<HTMLCanvasElement>(`canvas.${PERSISTENT_CLASS}`)
@@ -48,7 +56,7 @@ export class JotNoteSurface implements InkSurfaceController {
 		if (win) {
 			for (const frame of this.frames) win.cancelAnimationFrame(frame);
 		}
-		this.frames = [];
+		this.frames.clear();
 	}
 
 	redrawPage(canvas: HTMLCanvasElement): void {
@@ -140,11 +148,13 @@ export class JotNoteSurface implements InkSurfaceController {
 				return;
 			}
 			if (resizeFrame !== null) return;
-			resizeFrame = win.requestAnimationFrame(() => {
+			const frame = win.requestAnimationFrame(() => {
+				this.frames.delete(frame);
 				resizeFrame = null;
 				applyResize();
 			});
-			this.frames.push(resizeFrame);
+			resizeFrame = frame;
+			this.frames.add(frame);
 		};
 
 		const observer = new ResizeObserver(scheduleResize);
