@@ -20,7 +20,7 @@ export type DocumentSessionState =
 	| 'save-error'
 	| 'conflict';
 
-export type SessionChange = 'state' | 'ink' | 'structure' | 'rename';
+export type SessionChange = 'state' | 'ink' | 'structure' | 'rename' | 'reload';
 
 export interface SessionSnapshot {
 	path: string;
@@ -201,6 +201,7 @@ export class NotebookDocumentSession extends DocumentSession {
 
 	loadText(data: string): 'loaded' | 'unchanged' | 'conflict' | 'invalid' {
 		if (this.initialized && data === this.rawData) return 'unchanged';
+		const wasInitialized = this.initialized;
 		if (!this.beginLoad()) {
 			if (data !== this.rawData) {
 				this.markConflict('The notebook changed on disk while local edits were unsaved.');
@@ -228,6 +229,7 @@ export class NotebookDocumentSession extends DocumentSession {
 			this.strokes.setForKey(documentPageKey(this.path, page.id), [...page.strokes]);
 		}
 		this.completeLoad();
+		if (wasInitialized) this.emit('reload');
 		return 'loaded';
 	}
 
