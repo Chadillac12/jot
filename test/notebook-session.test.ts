@@ -34,7 +34,7 @@ describe('NotebookSessionManager', () => {
 		const remote = createJotNote();
 		remote.paper = 'grid';
 		expect(session.loadFromText(serializeJotNote(remote))).toBe('conflict');
-		expect(session.document.state).toBe('conflict');
+		expect(session.lifecycle.state).toBe('conflict');
 		expect(session.strokes.forKey('Lecture.jot::page-1')).toHaveLength(1);
 		expect(session.note.paper).toBe('ruled');
 	});
@@ -54,8 +54,8 @@ describe('NotebookSessionManager', () => {
 
 		expect(session.rawData).toBe(persistedText);
 		expect(session.note.paper).toBe('grid');
-		expect(session.document.isDirty).toBe(true);
-		expect(session.document.state).toBe('dirty');
+		expect(session.lifecycle.isDirty).toBe(true);
+		expect(session.lifecycle.state).toBe('dirty');
 	});
 
 	it('can resolve an external conflict by preserving local ownership and resuming save', () => {
@@ -71,7 +71,7 @@ describe('NotebookSessionManager', () => {
 
 		session.resolveConflictKeepLocal();
 		expect(session.externalConflictData).toBeNull();
-		expect(session.document.state).toBe('dirty');
+		expect(session.lifecycle.state).toBe('dirty');
 		expect(session.beginSave()).not.toBeNull();
 	});
 
