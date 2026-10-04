@@ -1,4 +1,4 @@
-import type { DataAdapter } from 'obsidian';
+import type { DataAdapter, TFile, Vault } from 'obsidian';
 
 let transactionCounter = 0;
 
@@ -108,3 +108,51 @@ export async function transactionalWriteBinary(
 		throw error;
 	}
 }
+
+/**
+ * Transactionally replace a vault-tracked binary without renaming the live
+ * TFile out from under Obsidian. A verified durable backup is created first.
+ * If replacement validation or dependent cleanup fails, the original bytes
+ * are restored through Vault.modifyBinary before the error is rethrown.
+ */
+export async function transactionalModifyVaultBinary(
+	vault: Vault,
+	adapter: DataAdapter,
+	file: TFile,
+	bytes: ArrayBuffer,
+	validate: (bytes: ArrayBuffer) => Promise<void>,
+	beforeFinalize?: () => Promise<void>,
+): Promise<void> {
+	const id = transactionId();
+	const backupPath = `${file.path}.jot-backup-${id}`;
+	const original = await vault.readBinary(file);
+	let backupWritten = false;
+
+	try {
+		await adapter.writeBinary(backupPath, original);
+		backupWritten = true;
+		await validate(await adapter.readBinary(backupPath));
+
+		await vault.modifyBinary(file, bytes);
+		await validate(await vault.readBinary(file));
+		await beforeFinalize?.();
+
+		await cleanup(adapter, backupPath);
+	} catch (error) {
+		if (backupWritten) {
+			try {
+				const recovery = await adapter.readBinary(backupPath);
+				await validate(recovery);
+				await vault.modifyBinary(file, recovery);
+				await validate(await vault.readBinary(file));
+			} catch (restoreError) {
+				throw new AggregateError(
+					[error, restoreError],
+					`Vault binary replacement failed and rollback also failed for ${file.path}. Recovery backup remains at ${backupPath}`,
+				);
+			}
+		}
+		throw error;
+	}
+}
+
