@@ -6,11 +6,20 @@ export interface NormalizedPoint {
 	pressure: number;
 }
 
+export const STROKE_RENDER_VERSION = 2;
+
+export interface StrokeRenderProfile {
+	version: typeof STROKE_RENDER_VERSION;
+	smoothing: number;
+	pressureSensitivity: number;
+}
+
 export interface Stroke {
 	points: NormalizedPoint[];
 	color: string;
 	width: number;
 	tool: Tool;
+	render?: StrokeRenderProfile;
 }
 
 export type SegmentEmit = (a: NormalizedPoint, b: NormalizedPoint) => void;
