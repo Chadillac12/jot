@@ -108,6 +108,7 @@ export class PointerEventHandler {
 		this.canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
 		this.canvas.addEventListener('pointerup', (e) => this.onFinish(e));
 		this.canvas.addEventListener('pointercancel', (e) => this.onCancel(e));
+		this.canvas.addEventListener('lostpointercapture', (e) => this.onCancel(e));
 	}
 
 	private onPointerDown(e: PointerEvent): void {
