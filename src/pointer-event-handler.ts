@@ -59,6 +59,7 @@ export interface PointerEventHandlerDeps {
 	handedness: () => Handedness;
 	paletteActivation: () => PaletteActivation;
 	renderProfile: () => StrokeRenderProfile;
+	canEdit?: (documentPath: string) => boolean;
 }
 
 export class PointerEventHandler {
@@ -156,6 +157,10 @@ export class PointerEventHandler {
 			return;
 		}
 		if (e.pointerType !== 'pen' && e.pointerType !== 'mouse') return;
+		if (!this.canEditCurrentDocument()) {
+			e.preventDefault();
+			return;
+		}
 		if (this.deps.palette.isOpen()) return;
 
 		this.cancelLiveFrame();
@@ -201,6 +206,11 @@ export class PointerEventHandler {
 			return;
 		}
 		if (this.activePointerId !== e.pointerId) return;
+		if (!this.canEditCurrentDocument()) {
+			this.onCancel(e);
+			e.preventDefault();
+			return;
+		}
 
 		if (e.pointerType === 'pen') {
 			const moved = Math.hypot(e.clientX - this.penDownX, e.clientY - this.penDownY);
@@ -231,6 +241,10 @@ export class PointerEventHandler {
 			return;
 		}
 		if (this.activePointerId !== e.pointerId) return;
+		if (!this.canEditCurrentDocument()) {
+			this.onCancel(e);
+			return;
+		}
 
 		if (e.pointerType === 'mouse') this.longPress.cancel();
 		if (
@@ -576,6 +590,12 @@ export class PointerEventHandler {
 		const pdfPath = documentPathFromKey(key);
 		if (!pdfPath) return null;
 		return { pdfPath, key, prevStrokes: [...this.deps.strokes.forKey(key)] };
+	}
+
+	private canEditCurrentDocument(): boolean {
+		const key = this.canvas.getAttribute(INK_KEY_ATTR);
+		const path = key ? documentPathFromKey(key) : null;
+		return path === null || (this.deps.canEdit?.(path) ?? true);
 	}
 
 	private openPaletteAt(x: number, y: number): void {
