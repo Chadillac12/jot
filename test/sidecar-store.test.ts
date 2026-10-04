@@ -115,6 +115,92 @@ describe('SidecarStore.load', () => {
 	});
 });
 
+describe('SidecarStore concurrency and failure handling', () => {
+	it('refuses disk reload while local annotations are dirty', async () => {
+		const remote = JSON.stringify({
+			version: JOT_FORMAT_VERSION,
+			pages: {
+				'1': [
+					{ points: [{ x: 0.9, y: 0.9, pressure: 0.5 }], color: '#ff0000', width: 0.005, tool: 'pen' },
+				],
+			},
+		});
+		const fs = makeFs({ 'a.pdf.jot.json': validPayload });
+		const strokes = new StrokeStore();
+		const store = new SidecarStore(fs.adapter, strokes);
+		expect(await store.load('a.pdf')).toBe('loaded');
+
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.1, y: 0.1, pressure: 0.5 }], color: '#0000ff', width: 0.005, tool: 'pen' },
+		]);
+		store.scheduleSave('a.pdf');
+		fs.files['a.pdf.jot.json'] = remote;
+
+		expect(await store.load('a.pdf')).toBe('dirty');
+		expect(strokes.forPage('a.pdf', 1)[0]?.color).toBe('#0000ff');
+	});
+
+	it('keeps a newer edit dirty when it arrives during an in-flight save', async () => {
+		const fs = makeFs();
+		const strokes = new StrokeStore();
+		const store = new SidecarStore(fs.adapter, strokes);
+		let releaseWrite!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			releaseWrite = resolve;
+		});
+		let firstWrite = true;
+		const originalWrite = vi.mocked(fs.adapter.write).getMockImplementation()!;
+		vi.mocked(fs.adapter.write).mockImplementation(async (path: string, data: string) => {
+			if (firstWrite) {
+				firstWrite = false;
+				await gate;
+			}
+			await originalWrite(path, data);
+		});
+
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.1, y: 0.1, pressure: 0.5 }], color: '#111111', width: 0.005, tool: 'pen' },
+		]);
+		store.scheduleSave('a.pdf');
+		const firstFlush = store.flush('a.pdf');
+		await Promise.resolve();
+
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.2, y: 0.2, pressure: 0.5 }], color: '#222222', width: 0.005, tool: 'pen' },
+		]);
+		store.scheduleSave('a.pdf');
+		releaseWrite();
+		expect(await firstFlush).toBe(true);
+		expect(store.hasPendingSave('a.pdf')).toBe(true);
+
+		expect(await store.flush('a.pdf')).toBe(true);
+		expect(fs.files['a.pdf.jot.json']).toContain('#222222');
+		expect(store.hasPendingSave('a.pdf')).toBe(false);
+	});
+
+	it('reports a failed save, keeps the revision dirty, and retries successfully', async () => {
+		vi.useFakeTimers();
+		const fs = makeFs();
+		const strokes = new StrokeStore();
+		const onError = vi.fn();
+		const store = new SidecarStore(fs.adapter, strokes, undefined, onError);
+		vi.mocked(fs.adapter.write).mockRejectedValueOnce(new Error('disk full'));
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.3, y: 0.3, pressure: 0.5 }], color: '#333333', width: 0.005, tool: 'pen' },
+		]);
+
+		store.scheduleSave('a.pdf');
+		await vi.advanceTimersByTimeAsync(750);
+		expect(onError).toHaveBeenCalledTimes(1);
+		expect(store.hasPendingSave('a.pdf')).toBe(true);
+
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(fs.files['a.pdf.jot.json']).toContain('#333333');
+		expect(store.hasPendingSave('a.pdf')).toBe(false);
+		vi.useRealTimers();
+	});
+});
+
 describe('SidecarStore protected originals', () => {
 	it('does not delete an unreadable original when there are no local strokes', async () => {
 		const original = '{not-json';
