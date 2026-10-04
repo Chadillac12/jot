@@ -1,5 +1,4 @@
 /* @vitest-environment happy-dom */
-/* eslint-disable @typescript-eslint/unbound-method */
 import type { DataAdapter } from 'obsidian';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DocumentSessionManager } from '../src/document-session';
