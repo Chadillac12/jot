@@ -298,8 +298,8 @@ export class PointerEventHandler {
 			this.twoFingerHold.cancel();
 			return;
 		}
-		this.twoFingerIndicator = createHoldIndicator(activeDocument, cx, cy, TWO_FINGER_HOLD_MS);
-		activeDocument.body.appendChild(this.twoFingerIndicator);
+		this.twoFingerIndicator = createHoldIndicator(this.canvas.ownerDocument, cx, cy, TWO_FINGER_HOLD_MS);
+		this.canvas.ownerDocument.body.appendChild(this.twoFingerIndicator);
 	}
 
 	private onTwoFingerFire(cx: number, cy: number): void {
@@ -330,7 +330,9 @@ export class PointerEventHandler {
 		this.secondTapX = e.clientX;
 		this.secondTapY = e.clientY;
 		this.showHoldIndicator(e.clientX, e.clientY, PENCIL_SECOND_HOLD_MS);
-		this.secondTapTimer = window.setTimeout(
+		const win = this.canvas.ownerDocument.defaultView;
+		if (!win) return;
+		this.secondTapTimer = win.setTimeout(
 			() => this.onPencilDoubleTapHoldFire(),
 			PENCIL_SECOND_HOLD_MS,
 		);
@@ -367,7 +369,8 @@ export class PointerEventHandler {
 	}
 
 	private clearSecondTapTimer(): void {
-		if (this.secondTapTimer !== null) window.clearTimeout(this.secondTapTimer);
+		const win = this.canvas.ownerDocument.defaultView;
+		if (this.secondTapTimer !== null && win) win.clearTimeout(this.secondTapTimer);
 		this.secondTapTimer = null;
 	}
 
@@ -432,7 +435,9 @@ export class PointerEventHandler {
 
 	private scheduleLiveRender(): void {
 		if (this.liveFrame !== null) return;
-		this.liveFrame = window.requestAnimationFrame(() => {
+		const win = this.canvas.ownerDocument.defaultView;
+		if (!win) return;
+		this.liveFrame = win.requestAnimationFrame(() => {
 			this.liveFrame = null;
 			this.renderLiveStroke();
 		});
@@ -465,7 +470,7 @@ export class PointerEventHandler {
 
 	private cancelLiveFrame(): void {
 		if (this.liveFrame !== null) {
-			window.cancelAnimationFrame(this.liveFrame);
+			this.canvas.ownerDocument.defaultView?.cancelAnimationFrame(this.liveFrame);
 			this.liveFrame = null;
 		}
 	}
@@ -540,13 +545,13 @@ export class PointerEventHandler {
 	}
 
 	private openPaletteAt(x: number, y: number): void {
-		this.deps.palette.show(activeDocument.body, x, y, this.deps.handedness());
+		this.deps.palette.show(this.canvas.ownerDocument.body, x, y, this.deps.handedness());
 	}
 
 	private showHoldIndicator(x: number, y: number, durationMs: number): void {
 		this.removeHoldIndicator();
-		this.holdIndicator = createHoldIndicator(activeDocument, x, y, durationMs);
-		activeDocument.body.appendChild(this.holdIndicator);
+		this.holdIndicator = createHoldIndicator(this.canvas.ownerDocument, x, y, durationMs);
+		this.canvas.ownerDocument.body.appendChild(this.holdIndicator);
 	}
 
 	private removeHoldIndicator(): void {
