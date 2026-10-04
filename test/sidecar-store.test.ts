@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/unbound-method */
 import type { DataAdapter } from 'obsidian';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DocumentSessionManager } from '../src/document-session';
 import { JOT_FORMAT_VERSION } from '../src/jot-file';
 import { SidecarStore } from '../src/sidecar-store';
 import { StrokeStore } from '../src/stroke-store';
@@ -514,6 +515,23 @@ describe('SidecarStore.discard', () => {
 		await store.discard('a.pdf');
 		expect(fs.adapter.remove).not.toHaveBeenCalled();
 	});
+});
+
+describe('SidecarStore persistence-domain isolation', () => {
+	it('never flushes a dirty notebook session through the PDF sidecar adapter', async () => {
+		const fs = makeFs();
+		const sessions = new DocumentSessionManager();
+		const notebook = sessions.get('Lecture.jot');
+		notebook.beginLoad();
+		notebook.completeLoad();
+		notebook.markDirty();
+		const store = new SidecarStore(fs.adapter, new StrokeStore(), sessions);
+
+		expect(await store.flushAll()).toBe(true);
+		expect(fs.files['Lecture.jot.jot.json']).toBeUndefined();
+		expect(notebook.isDirty).toBe(true);
+	});
+
 });
 
 describe('SidecarStore.flushAll', () => {
