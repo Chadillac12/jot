@@ -14,6 +14,7 @@ export interface NotebookStoreCallbacks {
 
 export class NotebookStore {
 	private inFlight = new Map<string, Promise<boolean>>();
+	private renameInFlight = new Map<string, Promise<NotebookDocumentSession | null>>();
 
 	constructor(
 		private adapter: DataAdapter,
@@ -67,6 +68,23 @@ export class NotebookStore {
 	}
 
 	async renameSession(
+		oldPath: string,
+		newPath: string,
+	): Promise<NotebookDocumentSession | null> {
+		const key = `${oldPath}\u0000${newPath}`;
+		const existing = this.renameInFlight.get(key);
+		if (existing) return existing;
+
+		const task = this.runRenameSession(oldPath, newPath);
+		this.renameInFlight.set(key, task);
+		try {
+			return await task;
+		} finally {
+			if (this.renameInFlight.get(key) === task) this.renameInFlight.delete(key);
+		}
+	}
+
+	private async runRenameSession(
 		oldPath: string,
 		newPath: string,
 	): Promise<NotebookDocumentSession | null> {
