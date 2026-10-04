@@ -284,7 +284,7 @@ export class JotNoteView extends TextFileView {
 		if (!win) return;
 		this.retryTimer = win.setTimeout(() => {
 			this.retryTimer = null;
-			if (this.session?.document.isDirty) this.requestSave();
+			if (this.session?.lifecycle.isDirty) this.requestSave();
 		}, NOTE_SAVE_RETRY_MS);
 	}
 
