@@ -451,6 +451,53 @@ describe('SidecarStore.renamePdfPath', () => {
 		expect(fs.files['New/Notes.pdf.jot.json']).toBe(validPayload);
 	});
 
+	it('waits for an in-flight save before moving PDF sidecar ownership', async () => {
+		const fs = makeFs({ 'Old/Notes.pdf.jot.json': validPayload });
+		const sessions = new DocumentSessionManager();
+		const strokes = new StrokeStore();
+		const store = new SidecarStore(fs.adapter, strokes, sessions);
+		expect(await store.load('Old/Notes.pdf')).toBe('loaded');
+
+		let releaseWrite!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			releaseWrite = resolve;
+		});
+		let firstWrite = true;
+		const originalWrite = vi.mocked(fs.adapter.write).getMockImplementation()!;
+		vi.mocked(fs.adapter.write).mockImplementation(async (path: string, data: string) => {
+			if (firstWrite) {
+				firstWrite = false;
+				await gate;
+			}
+			await originalWrite(path, data);
+		});
+
+		strokes.setForKey('Old/Notes.pdf::1', [
+			{ points: [{ x: 0.25, y: 0.25, pressure: 0.5 }], color: '#112233', width: 0.005, tool: 'pen' },
+		]);
+		store.scheduleSave('Old/Notes.pdf');
+		const inFlight = store.flush('Old/Notes.pdf');
+		await Promise.resolve();
+
+		strokes.rekeyDocumentPath('Old/Notes.pdf', 'New/Notes.pdf');
+		let renameFinished = false;
+		const rename = store.renamePdfPath('Old/Notes.pdf', 'New/Notes.pdf').then(() => {
+			renameFinished = true;
+		});
+		await Promise.resolve();
+		expect(renameFinished).toBe(false);
+
+		releaseWrite();
+		expect(await inFlight).toBe(true);
+		await rename;
+		expect(sessions.peek('Old/Notes.pdf')).toBeNull();
+		expect(sessions.get('New/Notes.pdf').path).toBe('New/Notes.pdf');
+		expect(fs.files['Old/Notes.pdf.jot.json']).toBeUndefined();
+
+		await store.flush('New/Notes.pdf');
+		expect(fs.files['New/Notes.pdf.jot.json']).toContain('#112233');
+	});
+
 	it('re-schedules a pending local save under the new PDF path', async () => {
 		const fs = makeFs({ 'Old/Notes.pdf.jot.json': validPayload });
 		const strokes = new StrokeStore();
