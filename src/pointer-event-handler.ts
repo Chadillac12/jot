@@ -510,11 +510,12 @@ export class PointerEventHandler {
 		if (strokes.length === 0) return false;
 		const rect = this.canvas.getBoundingClientRect();
 		const points = pointerSamples(e).map((sample) => normalizedPointFromSample(sample, rect));
+		const aspectRatio = rect.height > 0 ? rect.width / rect.height : 1;
 		const kept: Stroke[] = [];
 		let removed = 0;
 		for (const stroke of strokes) {
 			const intersects = points.some((point) =>
-				strokeIntersects(stroke, point.x, point.y, ERASE_RADIUS),
+				strokeIntersects(stroke, point.x, point.y, ERASE_RADIUS, aspectRatio),
 			);
 			if (intersects) {
 				removed += 1;
