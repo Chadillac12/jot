@@ -20,6 +20,7 @@ interface MergeFs {
 	text: Record<string, string>;
 	binary: Record<string, ArrayBuffer>;
 	adapter: DataAdapter;
+	removeMock: ReturnType<typeof vi.fn<(path: string) => Promise<void>>>;
 	failPdfCommit: () => void;
 }
 
@@ -53,6 +54,10 @@ function makeFs(): MergeFs {
 	const text: Record<string, string> = {};
 	const binary: Record<string, ArrayBuffer> = {};
 	let failCommit = false;
+	const removeMock = vi.fn<(path: string) => Promise<void>>(async (path: string) => {
+		delete text[path];
+		delete binary[path];
+	});
 	const adapter = {
 		exists: vi.fn(async (path: string) => path in text || path in binary),
 		read: vi.fn(async (path: string) => {
@@ -92,16 +97,14 @@ function makeFs(): MergeFs {
 			}
 			throw new Error(`missing ${oldPath}`);
 		}),
-		remove: vi.fn(async (path: string) => {
-			delete text[path];
-			delete binary[path];
-		}),
+		remove: removeMock,
 	} as unknown as DataAdapter;
 
 	return {
 		text,
 		binary,
 		adapter,
+		removeMock,
 		failPdfCommit: () => {
 			failCommit = true;
 		},
@@ -162,10 +165,10 @@ describe('MergeService transactional overwrite', () => {
 
 	it('keeps the sidecar and memory if annotation cleanup fails after PDF commit', async () => {
 		const { fs, sessions, merge } = await harness();
-		const originalRemove = fs.adapter.remove.bind(fs.adapter);
-		vi.mocked(fs.adapter.remove).mockImplementation(async (path: string) => {
+		fs.removeMock.mockImplementation(async (path: string) => {
 			if (path === 'notes.pdf.jot.json') throw new Error('injected sidecar delete failure');
-			await originalRemove(path);
+			delete fs.text[path];
+			delete fs.binary[path];
 		});
 
 		await expect(
