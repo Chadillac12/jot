@@ -21,6 +21,16 @@ export type SidecarLoadStatus =
 	| 'dirty'
 	| 'error';
 
+export interface TimerHost {
+	setTimeout(callback: () => void, delayMs: number): number;
+	clearTimeout(id: number): void;
+}
+
+const DEFAULT_TIMER_HOST: TimerHost = {
+	setTimeout: (callback, delayMs) => globalThis.setTimeout(callback, delayMs) as unknown as number,
+	clearTimeout: (id) => globalThis.clearTimeout(id),
+};
+
 export class SidecarStore {
 	private saveTimers = new Map<string, number>();
 	private recentSelfSaves = new Map<string, number>();
@@ -32,6 +42,7 @@ export class SidecarStore {
 		private strokes: StrokeStore,
 		private sessions: DocumentSessionManager = new DocumentSessionManager(),
 		private onSaveError?: (pdfPath: string, error: Error) => void,
+		private timers: TimerHost = DEFAULT_TIMER_HOST,
 	) {}
 
 	async load(pdfPath: string): Promise<SidecarLoadStatus> {
@@ -243,7 +254,7 @@ export class SidecarStore {
 
 	private queueSave(pdfPath: string, delayMs: number): void {
 		this.clearTimer(pdfPath);
-		const id = window.setTimeout(() => {
+		const id = this.timers.setTimeout(() => {
 			this.saveTimers.delete(pdfPath);
 			void this.save(pdfPath);
 		}, delayMs);
@@ -252,7 +263,7 @@ export class SidecarStore {
 
 	private clearTimer(pdfPath: string): void {
 		const existing = this.saveTimers.get(pdfPath);
-		if (existing !== undefined) window.clearTimeout(existing);
+		if (existing !== undefined) this.timers.clearTimeout(existing);
 		this.saveTimers.delete(pdfPath);
 	}
 }
