@@ -63,6 +63,13 @@ export interface PointerEventHandlerDeps {
 
 export class PointerEventHandler {
 	private state = new PenStrokeState();
+	private attached = false;
+	private stylusBlocker: ((e: TouchEvent) => void) | null = null;
+	private readonly pointerDownListener = (e: PointerEvent) => this.onPointerDown(e);
+	private readonly pointerMoveListener = (e: PointerEvent) => this.onPointerMove(e);
+	private readonly pointerUpListener = (e: PointerEvent) => this.onFinish(e);
+	private readonly pointerCancelListener = (e: PointerEvent) => this.onCancel(e);
+	private readonly lostCaptureListener = (e: PointerEvent) => this.onCancel(e);
 	private activePointerId: number | null = null;
 	private holdIndicator: HTMLElement | null = null;
 	private twoFingerIndicator: HTMLElement | null = null;
@@ -103,13 +110,40 @@ export class PointerEventHandler {
 		);
 	}
 
-	attach(): void {
+	attach(): () => void {
+		if (this.attached) return () => this.detach();
+		this.attached = true;
 		this.blockStylusGesturePreemption();
-		this.canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
-		this.canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
-		this.canvas.addEventListener('pointerup', (e) => this.onFinish(e));
-		this.canvas.addEventListener('pointercancel', (e) => this.onCancel(e));
-		this.canvas.addEventListener('lostpointercapture', (e) => this.onCancel(e));
+		this.canvas.addEventListener('pointerdown', this.pointerDownListener);
+		this.canvas.addEventListener('pointermove', this.pointerMoveListener);
+		this.canvas.addEventListener('pointerup', this.pointerUpListener);
+		this.canvas.addEventListener('pointercancel', this.pointerCancelListener);
+		this.canvas.addEventListener('lostpointercapture', this.lostCaptureListener);
+		return () => this.detach();
+	}
+
+	detach(): void {
+		if (!this.attached) return;
+		this.attached = false;
+		this.canvas.removeEventListener('pointerdown', this.pointerDownListener);
+		this.canvas.removeEventListener('pointermove', this.pointerMoveListener);
+		this.canvas.removeEventListener('pointerup', this.pointerUpListener);
+		this.canvas.removeEventListener('pointercancel', this.pointerCancelListener);
+		this.canvas.removeEventListener('lostpointercapture', this.lostCaptureListener);
+		if (this.stylusBlocker) {
+			this.canvas.removeEventListener('touchstart', this.stylusBlocker);
+			this.canvas.removeEventListener('touchmove', this.stylusBlocker);
+			this.stylusBlocker = null;
+		}
+		this.longPress.cancel();
+		this.twoFingerHold.cancel();
+		this.cancelPencilDoubleTapHold();
+		this.cancelLiveFrame();
+		this.removeHoldIndicator();
+		this.removeTwoFingerIndicator();
+		this.predictedPoints = [];
+		this.state.reset();
+		this.releasePointerCapture();
 	}
 
 	private onPointerDown(e: PointerEvent): void {
@@ -576,7 +610,7 @@ export class PointerEventHandler {
 
 
 	private blockStylusGesturePreemption(): void {
-		const blockStylus = (e: TouchEvent) => {
+		this.stylusBlocker = (e: TouchEvent) => {
 			for (let i = 0; i < e.touches.length; i++) {
 				const t = e.touches.item(i) as Touch & { touchType?: string };
 				if (t?.touchType === 'stylus') {
@@ -585,7 +619,7 @@ export class PointerEventHandler {
 				}
 			}
 		};
-		this.canvas.addEventListener('touchstart', blockStylus, { passive: false });
-		this.canvas.addEventListener('touchmove', blockStylus, { passive: false });
+		this.canvas.addEventListener('touchstart', this.stylusBlocker, { passive: false });
+		this.canvas.addEventListener('touchmove', this.stylusBlocker, { passive: false });
 	}
 }
