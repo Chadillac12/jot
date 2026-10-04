@@ -19,11 +19,12 @@ const LIVE_CLASS = 'jot-note-live-ink';
 export class JotNoteSurface implements InkSurfaceController {
 	private observers: ResizeObserver[] = [];
 	private frames = new Set<number>();
+	private inputDisposers: Array<() => void> = [];
 
 	constructor(
 		private host: HTMLElement,
 		private strokes: StrokeStore,
-		private wireOverlay: (canvas: HTMLCanvasElement) => void,
+		private wireOverlay: (canvas: HTMLCanvasElement) => () => void,
 	) {}
 
 	render(note: JotNoteFile, documentPath: string): void {
@@ -57,6 +58,8 @@ export class JotNoteSurface implements InkSurfaceController {
 			for (const frame of this.frames) win.cancelAnimationFrame(frame);
 		}
 		this.frames.clear();
+		for (const dispose of this.inputDisposers) dispose();
+		this.inputDisposers = [];
 	}
 
 	redrawPage(canvas: HTMLCanvasElement): void {
@@ -129,7 +132,7 @@ export class JotNoteSurface implements InkSurfaceController {
 		const live = this.makeCanvas(doc, LIVE_CLASS, key);
 		sheet.appendChild(persistent);
 		sheet.appendChild(live);
-		this.wireOverlay(live);
+		this.inputDisposers.push(this.wireOverlay(live));
 		this.host.appendChild(wrapper);
 
 		const applyResize = () => {
