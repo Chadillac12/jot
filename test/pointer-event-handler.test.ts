@@ -19,6 +19,7 @@ interface Harness {
 	sidecar: SidecarStore;
 	undo: UndoController;
 	activation: { value: PaletteActivation };
+	dispose: () => void;
 }
 
 function makeContext(): CanvasRenderingContext2D {
@@ -89,7 +90,7 @@ function makeHarness(
 	} as unknown as UndoController;
 	const currentActivation = { value: activation };
 
-	new PointerEventHandler(canvas, makeContext(), {
+	const dispose = new PointerEventHandler(canvas, makeContext(), {
 		palette,
 		strokes,
 		overlays,
@@ -101,7 +102,7 @@ function makeHarness(
 		renderProfile: () => ({ version: 2, smoothing: 0.5, pressureSensitivity: 0.5 }),
 	}).attach();
 
-	return { canvas, palette, strokes, sidecar, undo, activation: currentActivation };
+	return { canvas, palette, strokes, sidecar, undo, activation: currentActivation, dispose };
 }
 
 function pointer(
@@ -142,6 +143,18 @@ describe('PointerEventHandler palette activation', () => {
 		document.body.innerHTML = '';
 		vi.restoreAllMocks();
 		vi.useRealTimers();
+	});
+
+	it('detaches every input listener so disposed page bindings cannot keep writing', () => {
+		const { canvas, strokes, sidecar, dispose } = makeHarness();
+
+		dispose();
+		pointer(canvas, 'pointerdown', 'pen', 1, 20, 20);
+		pointer(canvas, 'pointermove', 'pen', 1, 40, 40);
+		pointer(canvas, 'pointerup', 'pen', 1, 50, 50);
+
+		expect(strokes.forKey('notes.pdf::1')).toHaveLength(0);
+		expect(sidecar.scheduleSave).not.toHaveBeenCalled();
 	});
 
 	it('never arms ordinary Pencil long-press', () => {
