@@ -45,7 +45,7 @@ export class NotebookStore {
 	async flushAll(): Promise<Array<{ path: string; error: Error }>> {
 		const failures: Array<{ path: string; error: Error }> = [];
 		for (const session of this.sessions.all()) {
-			if (!(session instanceof Object) || session.kind !== 'notebook' || !session.isDirty) continue;
+			if (session.kind !== 'notebook' || !session.isDirty) continue;
 			try {
 				await this.save(session as NotebookDocumentSession);
 			} catch (error) {
