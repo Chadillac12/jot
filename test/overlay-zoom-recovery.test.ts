@@ -82,6 +82,11 @@ beforeEach(() => {
 	(HTMLElement.prototype as any).setCssStyles = function (styles: Record<string, string>) {
 		Object.assign((this as HTMLElement).style, styles);
 	};
+	window.requestAnimationFrame = (callback: FrameRequestCallback) => {
+		callback(0);
+		return 1;
+	};
+	window.cancelAnimationFrame = vi.fn();
 	vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
 		setTransform: vi.fn(),
 		clearRect: vi.fn(),
@@ -108,7 +113,7 @@ describe('OverlayManager zoom recovery', () => {
 		expect(wire).toHaveBeenCalledTimes(2);
 	});
 
-	it('recreates the persistent layer without duplicating the live handler', async () => {
+	it('recreates the full disposable binding when the persistent layer is lost', async () => {
 		const { page, manager, wire } = makeHarness();
 		manager.attachToActivePdf();
 		const first = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
@@ -117,7 +122,7 @@ describe('OverlayManager zoom recovery', () => {
 
 		expect(page.querySelectorAll('canvas.jot-overlay')).toHaveLength(1);
 		expect(page.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(1);
-		expect(wire).toHaveBeenCalledTimes(1);
+		expect(wire).toHaveBeenCalledTimes(2);
 	});
 
 	it('resizes both layers safely after PDF zoom changes', () => {
