@@ -16,6 +16,7 @@ export type DocumentSessionState =
 	| 'clean'
 	| 'dirty'
 	| 'saving'
+	| 'load-error'
 	| 'save-error'
 	| 'conflict';
 
@@ -74,6 +75,7 @@ export class DocumentSession {
 			this._revision !== this._persistedRevision ||
 			this._state === 'dirty' ||
 			this._state === 'saving' ||
+			this._state === 'load-error' ||
 			this._state === 'save-error' ||
 			this._state === 'conflict'
 		);
@@ -102,7 +104,7 @@ export class DocumentSession {
 
 	loadFailed(error: unknown): void {
 		this._lastError = errorMessage(error);
-		this._state = 'save-error';
+		this._state = 'load-error';
 		this.emit('state');
 	}
 
