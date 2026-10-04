@@ -42,6 +42,7 @@ export default class JotPlugin extends Plugin {
 	private notebookStore!: NotebookStore;
 	private lastSaveErrorByPath = new Map<string, string>();
 	private lastActivePdfPath: string | null = null;
+	private lockedPdfPaths = new Set<string>();
 
 	async onload() {
 		await this.loadSettings();
@@ -63,6 +64,7 @@ export default class JotPlugin extends Plugin {
 		this.undoController = new UndoController(this.history, this.strokes, this.overlays, {
 			activeDocumentPath: () => this.overlays.getActivePdfFilePath(),
 			onAfterApply: (pdfPath) => this.scheduleSave(pdfPath),
+			canMutate: (pdfPath) => !this.lockedPdfPaths.has(pdfPath),
 		});
 		this.merge = new MergeService(
 			this.app,
@@ -73,6 +75,8 @@ export default class JotPlugin extends Plugin {
 			{
 				ensureLoaded: (pdfPath) => this.ensureLoaded(pdfPath),
 				redrawOverlays: () => this.overlays.redrawOverlaysForActivePdf(),
+				acquireMutationLock: (pdfPath) => this.acquirePdfMutationLock(pdfPath),
+				releaseMutationLock: (pdfPath) => this.lockedPdfPaths.delete(pdfPath),
 			},
 		);
 		this.registerView(
@@ -101,7 +105,7 @@ export default class JotPlugin extends Plugin {
 			name: 'Clear annotations on this PDF',
 			checkCallback: (checking) => {
 				const path = this.overlays.getActivePdfFilePath();
-				if (!path) return false;
+				if (!path || this.lockedPdfPaths.has(path)) return false;
 				if (!this.strokes.hasFor(path)) return false;
 				if (!checking) this.startClearFlow(path);
 				return true;
@@ -318,6 +322,12 @@ export default class JotPlugin extends Plugin {
 		);
 	}
 
+	private acquirePdfMutationLock(pdfPath: string): boolean {
+		if (this.lockedPdfPaths.has(pdfPath)) return false;
+		this.lockedPdfPaths.add(pdfPath);
+		return true;
+	}
+
 	private reportSaveError(pdfPath: string, error: Error): void {
 		const message = error.message || String(error);
 		if (this.lastSaveErrorByPath.get(pdfPath) === message) return;
@@ -358,6 +368,7 @@ export default class JotPlugin extends Plugin {
 			handedness: () => this.settings.handedness,
 			paletteActivation: () => this.settings.paletteActivation,
 			renderProfile: () => currentInkRenderProfile(),
+			canEdit: (documentPath) => !this.lockedPdfPaths.has(documentPath),
 		}).attach();
 	}
 
@@ -446,6 +457,10 @@ export default class JotPlugin extends Plugin {
 	}
 
 	private applyClear(pdfPath: string) {
+		if (this.lockedPdfPaths.has(pdfPath)) {
+			new Notice('Jot: this PDF is busy with a protected operation.');
+			return;
+		}
 		const operations = collectClearOperations(pdfPath, this.strokes.asMap());
 		const totalStrokes = countStrokes(operations);
 		if (totalStrokes === 0) return;
