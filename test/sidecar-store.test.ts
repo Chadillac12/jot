@@ -179,6 +179,44 @@ describe('SidecarStore concurrency and failure handling', () => {
 		expect(store.hasPendingSave('a.pdf')).toBe(false);
 	});
 
+	it('flushAll waits for an in-flight save and persists a later revision before succeeding', async () => {
+		const fs = makeFs();
+		const strokes = new StrokeStore();
+		const store = new SidecarStore(fs.adapter, strokes);
+		let releaseWrite!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			releaseWrite = resolve;
+		});
+		let firstWrite = true;
+		const originalWrite = vi.mocked(fs.adapter.write).getMockImplementation()!;
+		vi.mocked(fs.adapter.write).mockImplementation(async (path: string, data: string) => {
+			if (firstWrite) {
+				firstWrite = false;
+				await gate;
+			}
+			await originalWrite(path, data);
+		});
+
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.1, y: 0.1, pressure: 0.5 }], color: '#111111', width: 0.005, tool: 'pen' },
+		]);
+		store.scheduleSave('a.pdf');
+		const firstSave = store.flush('a.pdf');
+		await Promise.resolve();
+
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.2, y: 0.2, pressure: 0.5 }], color: '#222222', width: 0.005, tool: 'pen' },
+		]);
+		store.scheduleSave('a.pdf');
+		const lifecycleFlush = store.flushAll();
+
+		releaseWrite();
+		expect(await firstSave).toBe(true);
+		expect(await lifecycleFlush).toBe(true);
+		expect(fs.files['a.pdf.jot.json']).toContain('#222222');
+		expect(store.hasPendingSave('a.pdf')).toBe(false);
+	});
+
 	it('reports a failed save, keeps the revision dirty, and retries successfully', async () => {
 		vi.useFakeTimers();
 		const fs = makeFs();
