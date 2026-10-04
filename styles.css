@@ -373,6 +373,7 @@
 .jot-note-sheet {
 	position: relative;
 	width: 100%;
+	contain: layout paint;
 	overflow: hidden;
 	background-color: #ffffff;
 	border: 1px solid rgba(0, 0, 0, 0.16);
@@ -381,6 +382,7 @@
 }
 
 .jot-note-paper-ruled {
+	background-repeat: repeat-y;
 	background-image: linear-gradient(
 		to bottom,
 		transparent calc(100% - 1px),
@@ -390,6 +392,7 @@
 }
 
 .jot-note-paper-grid {
+	background-repeat: repeat;
 	background-image:
 		linear-gradient(rgba(63, 99, 148, 0.14) 1px, transparent 1px),
 		linear-gradient(90deg, rgba(63, 99, 148, 0.14) 1px, transparent 1px);
@@ -397,6 +400,7 @@
 }
 
 .jot-note-paper-dot {
+	background-repeat: repeat;
 	background-image: radial-gradient(circle, rgba(63, 78, 102, 0.32) 1.2px, transparent 1.3px);
 	background-size: var(--jot-paper-x) var(--jot-paper-y);
 }
