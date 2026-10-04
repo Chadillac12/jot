@@ -135,6 +135,7 @@ describe('NotebookStore', () => {
 
 		// Obsidian has already renamed the underlying TFile by the time onRename
 		// is delivered to the view.
+		fs.data.set('New/Lecture.jot', fs.data.get('Old/Lecture.jot')!);
 		fs.data.delete('Old/Lecture.jot');
 		(fs.file as any).path = 'New/Lecture.jot';
 
