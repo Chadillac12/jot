@@ -29,8 +29,20 @@ export class PdfMergeExecutor {
 	): Promise<PdfMergeResult> {
 		await this.sidecar.flush(pdfPath);
 		const result = await this.writeMerged(pdfPath, choice, copyTarget);
-		if (choice === 'overwrite') await this.discardAnnotations(pdfPath);
-		return result;
+		if (choice !== 'overwrite') return result;
+
+		try {
+			await this.discardAnnotations(pdfPath);
+		} catch (error) {
+			await this.rollbackOverwrite(pdfPath, result.transaction.backupPath, error);
+			throw error;
+		}
+
+		const remainingBackup = await this.cleanupCommittedBackup(result.transaction.backupPath);
+		return {
+			...result,
+			transaction: { backupPath: remainingBackup },
+		};
 	}
 
 	async uniqueAnnotatedPath(pdfPath: string): Promise<string> {
@@ -71,8 +83,52 @@ export class PdfMergeExecutor {
 			outPath,
 			buffer,
 			(data) => validatePdf(data, sourcePageCount),
+			{ retainBackup: choice === 'overwrite' },
 		);
 		return { outPath, transaction };
+	}
+
+	private async rollbackOverwrite(
+		pdfPath: string,
+		backupPath: string | null,
+		cleanupError: unknown,
+	): Promise<void> {
+		if (!backupPath || !(await this.adapter.exists(backupPath))) {
+			throw new Error(
+				`PDF overwrite committed but annotation cleanup failed and the original PDF backup is unavailable: ${String(cleanupError)}`,
+			);
+		}
+
+		try {
+			const original = await this.adapter.readBinary(backupPath);
+			const originalDoc = await PDFDocument.load(original);
+			const expectedPages = originalDoc.getPageCount();
+			await transactionalWriteBinary(
+				this.adapter,
+				pdfPath,
+				original,
+				(data) => validatePdf(data, expectedPages),
+			);
+			try {
+				await this.adapter.remove(backupPath);
+			} catch {
+				// The authoritative PDF is restored and verified. A stale backup is safe.
+			}
+		} catch (rollbackError) {
+			throw new Error(
+				`PDF overwrite cleanup failed and rollback also failed. Original backup remains at ${backupPath}. Cleanup error: ${String(cleanupError)}; rollback error: ${String(rollbackError)}`,
+			);
+		}
+	}
+
+	private async cleanupCommittedBackup(backupPath: string | null): Promise<string | null> {
+		if (!backupPath) return null;
+		try {
+			await this.adapter.remove(backupPath);
+			return null;
+		} catch {
+			return backupPath;
+		}
 	}
 
 	private async discardAnnotations(pdfPath: string): Promise<void> {
