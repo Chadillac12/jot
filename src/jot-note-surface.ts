@@ -37,7 +37,7 @@ export class JotNoteSurface implements InkSurfaceController {
 
 	setPaperStyle(style: JotNoteFile['paper']): void {
 		const classes = ['jot-note-paper-blank', 'jot-note-paper-ruled', 'jot-note-paper-grid', 'jot-note-paper-dot'];
-		for (const sheet of this.host.querySelectorAll<HTMLElement>(`.${SHEET_CLASS}`)) {
+		for (const sheet of Array.from(this.host.querySelectorAll<HTMLElement>(`.${SHEET_CLASS}`))) {
 			sheet.classList.remove(...classes);
 			sheet.classList.add(`jot-note-paper-${style}`);
 		}
