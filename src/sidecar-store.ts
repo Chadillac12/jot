@@ -36,6 +36,9 @@ export class SidecarStore {
 	private recentSelfSaves = new Map<string, number>();
 	private inFlightSaves = new Map<string, Promise<boolean>>();
 	private protectedOriginals = new Map<string, string>();
+	// Last disk bytes that this session actually observed or successfully wrote.
+	// undefined means no baseline; null means the sidecar was verified absent.
+	private persistedSidecars = new Map<string, string | null>();
 	private ownedPdfPaths = new Set<string>();
 
 	constructor(
@@ -57,6 +60,7 @@ export class SidecarStore {
 			if (!(await this.adapter.exists(path))) {
 				if (!session.completeLoad(loadToken)) return 'dirty';
 				this.protectedOriginals.delete(pdfPath);
+				this.persistedSidecars.set(pdfPath, null);
 				this.strokes.clearFor(pdfPath);
 				return 'missing';
 			}
@@ -65,6 +69,7 @@ export class SidecarStore {
 			const parsed = parseJotText(text);
 			if (!parsed) {
 				this.protectedOriginals.set(pdfPath, text);
+				this.persistedSidecars.set(pdfPath, text);
 				const error = new Error(`${path} is invalid`);
 				session.failLoad(loadToken, error);
 				console.warn(`${PLUGIN_LOG} ${error.message}; keeping current annotations in memory`);
@@ -72,6 +77,7 @@ export class SidecarStore {
 			}
 			if (!isSupportedVersion(parsed.version)) {
 				this.protectedOriginals.set(pdfPath, text);
+				this.persistedSidecars.set(pdfPath, text);
 				const error = new Error(`${path} has unknown version ${parsed.version}`);
 				session.failLoad(loadToken, error);
 				console.warn(`${PLUGIN_LOG} ${error.message}; keeping current annotations in memory`);
@@ -80,6 +86,7 @@ export class SidecarStore {
 
 			if (!session.completeLoad(loadToken)) return 'dirty';
 			this.protectedOriginals.delete(pdfPath);
+			this.persistedSidecars.set(pdfPath, text);
 			this.strokes.clearFor(pdfPath);
 			this.strokes.populateFromPayload(pdfPath, parsed.pages);
 			return 'loaded';
@@ -122,6 +129,26 @@ export class SidecarStore {
 		const text = JSON.stringify(payload, null, 2);
 
 		try {
+			const currentDiskText = await this.readSidecarText(path);
+			const baseline = this.persistedSidecars.get(pdfPath);
+			if (baseline === undefined) {
+				// A save without a prior load must never silently replace an existing sidecar.
+				if (currentDiskText !== null && currentDiskText !== text) {
+					await this.preserveDiskConflict(path, currentDiskText);
+				}
+				this.persistedSidecars.set(pdfPath, currentDiskText);
+			} else if (currentDiskText !== baseline && currentDiskText !== text) {
+				// Catch sync writes that land inside the modify-event/save race window.
+				if (currentDiskText !== null) {
+					await this.preserveDiskConflict(path, currentDiskText);
+				}
+				session.markConflict(
+					new Error('Sidecar changed externally since the last verified baseline'),
+				);
+				this.persistedSidecars.set(pdfPath, currentDiskText);
+				session.resolveConflictKeepLocal();
+			}
+
 			const protectedText = this.protectedOriginals.get(pdfPath);
 			if (protectedText !== undefined) {
 				const recoveryPath = `${path}.recovery-${Date.now()}.json`;
@@ -138,6 +165,7 @@ export class SidecarStore {
 				},
 			);
 			this.protectedOriginals.delete(pdfPath);
+			this.persistedSidecars.set(pdfPath, text);
 			this.recentSelfSaves.set(path, Date.now());
 			session.completeSave(token);
 
@@ -195,8 +223,8 @@ export class SidecarStore {
 		try {
 			if (!(await this.adapter.exists(sidecarPath))) return null;
 			const remoteText = await this.adapter.read(sidecarPath);
-			const conflictPath = `${sidecarPath}.conflict-${Date.now()}.json`;
-			await transactionalWriteText(this.adapter, conflictPath, remoteText);
+			const conflictPath = await this.preserveDiskConflict(sidecarPath, remoteText);
+			this.persistedSidecars.set(pdfPath, remoteText);
 			session.markConflict();
 			session.resolveConflictKeepLocal();
 			await this.flush(pdfPath);
@@ -223,6 +251,9 @@ export class SidecarStore {
 		const oldSidecar = jotPathFor(oldPdfPath);
 		const newSidecar = jotPathFor(newPdfPath);
 		const protectedText = this.protectedOriginals.get(oldPdfPath);
+		const persistedText = this.persistedSidecars.get(oldPdfPath);
+		this.persistedSidecars.delete(oldPdfPath);
+		if (persistedText !== undefined) this.persistedSidecars.set(newPdfPath, persistedText);
 		if (protectedText !== undefined) {
 			this.protectedOriginals.delete(oldPdfPath);
 			this.protectedOriginals.set(newPdfPath, protectedText);
@@ -244,6 +275,9 @@ export class SidecarStore {
 				}
 				await transactionalWriteText(this.adapter, newSidecar, sourceText);
 				await this.adapter.remove(oldSidecar);
+				this.persistedSidecars.set(newPdfPath, sourceText);
+			} else {
+				this.persistedSidecars.set(newPdfPath, null);
 			}
 			this.recentSelfSaves.delete(oldSidecar);
 		} catch (error) {
@@ -271,15 +305,39 @@ export class SidecarStore {
 		return true;
 	}
 
-	async discard(pdfPath: string): Promise<void> {
+	getPersistedBaseline(pdfPath: string): string | null | undefined {
+		return this.persistedSidecars.get(pdfPath);
+	}
+
+	async discard(pdfPath: string, expectedText?: string | null): Promise<void> {
 		if (!(await this.flush(pdfPath))) {
 			throw new Error(`Cannot discard ${pdfPath} annotations because dirty data failed to save`);
 		}
 		const path = jotPathFor(pdfPath);
+		if (expectedText !== undefined) {
+			const current = await this.readSidecarText(path);
+			if (current !== expectedText) {
+				throw new Error(
+					`Cannot discard ${pdfPath} annotations because the sidecar changed during the protected operation`,
+				);
+			}
+		}
 		this.protectedOriginals.delete(pdfPath);
 		if (await this.adapter.exists(path)) await this.adapter.remove(path);
+		this.persistedSidecars.delete(pdfPath);
 		this.ownedPdfPaths.delete(pdfPath);
 		this.sessions.remove(pdfPath);
+	}
+
+	private async readSidecarText(path: string): Promise<string | null> {
+		return (await this.adapter.exists(path)) ? this.adapter.read(path) : null;
+	}
+
+	private async preserveDiskConflict(path: string, text: string): Promise<string> {
+		const conflictPath = `${path}.conflict-${Date.now()}.json`;
+		await transactionalWriteText(this.adapter, conflictPath, text);
+		console.warn(`${PLUGIN_LOG} preserved competing sidecar at ${conflictPath}`);
+		return conflictPath;
 	}
 
 	private queueSave(pdfPath: string, delayMs: number): void {
