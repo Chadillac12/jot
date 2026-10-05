@@ -79,6 +79,10 @@ describe('NotebookDocumentSession save serialization', () => {
 		]);
 		session.markDirty();
 		const first = session.save(writer);
+		// Let the first serialized save enter the writer and block on firstGate
+		// before the second edit occurs.
+		await Promise.resolve();
+		expect(call).toBe(1);
 
 		session.strokes.setForKey('Lecture.jot::page-1', [
 			{
