@@ -42,6 +42,7 @@ export class SidecarStore {
 	private protectedOriginals = new Map<string, string>();
 	private persistedBaselines = new Map<string, string | null>();
 	private ownedPdfPaths = new Set<string>();
+	private shuttingDown = false;
 
 	constructor(
 		private adapter: DataAdapter,
@@ -401,6 +402,7 @@ export class SidecarStore {
 
 	private queueSave(pdfPath: string, delayMs: number): void {
 		this.clearTimer(pdfPath);
+		if (this.shuttingDown) return;
 		const id = this.timers.setTimeout(() => {
 			this.saveTimers.delete(pdfPath);
 			void this.save(pdfPath);
