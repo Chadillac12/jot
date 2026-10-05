@@ -40,6 +40,7 @@ export class SidecarStore {
 	// undefined means no baseline; null means the sidecar was verified absent.
 	private persistedSidecars = new Map<string, string | null>();
 	private ownedPdfPaths = new Set<string>();
+	private shuttingDown = false;
 
 	constructor(
 		private adapter: DataAdapter,
@@ -223,6 +224,11 @@ export class SidecarStore {
 		return this.sessions.get(pdfPath).isDirty || this.saveTimers.has(pdfPath);
 	}
 
+	beginShutdown(): void {
+		this.shuttingDown = true;
+		for (const path of [...this.saveTimers.keys()]) this.clearTimer(path);
+	}
+
 	async preserveExternalConflictAndFlushLocal(pdfPath: string): Promise<string | null> {
 		const session = this.sessions.get(pdfPath);
 		if (!session.isDirty) return null;
@@ -350,6 +356,7 @@ export class SidecarStore {
 
 	private queueSave(pdfPath: string, delayMs: number): void {
 		this.clearTimer(pdfPath);
+		if (this.shuttingDown) return;
 		const id = this.timers.setTimeout(() => {
 			this.saveTimers.delete(pdfPath);
 			void this.save(pdfPath);
