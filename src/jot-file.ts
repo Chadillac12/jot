@@ -5,6 +5,10 @@ export const JOT_SUFFIX = '.jot.json';
 export const JOT_FORMAT_VERSION = 3;
 export const PAGE_KEY_SEPARATOR = '::';
 
+const MAX_POINTS_PER_STROKE = 100_000;
+const MIN_NORMALIZED_COORDINATE = -1;
+const MAX_NORMALIZED_COORDINATE = 2;
+
 export interface JotFileFormat {
 	version: number;
 	pages: Record<string, Stroke[]>;
@@ -46,10 +50,12 @@ export function parseJotText(text: string): JotFileFormat | null {
 		const parsed: unknown = JSON.parse(text);
 		if (!isRecord(parsed)) return null;
 		if (typeof parsed.version !== 'number' || !isRecord(parsed.pages)) return null;
+		if (Object.keys(parsed.pages).length > 10_000) return null;
 
 		const pages: Record<string, Stroke[]> = {};
 		for (const [pageId, rawStrokes] of Object.entries(parsed.pages)) {
 			if (!/^\d+$/.test(pageId) || !Array.isArray(rawStrokes)) return null;
+			if (rawStrokes.length > 50_000) return null;
 			const strokes: Stroke[] = [];
 			for (const rawStroke of rawStrokes) {
 				const stroke = parseStoredStroke(rawStroke);
@@ -75,11 +81,20 @@ export function isSupportedVersion(version: number): boolean {
  */
 export function parseStoredStroke(value: unknown): Stroke | null {
 	if (!isRecord(value) || !Array.isArray(value.points)) return null;
+	if (value.points.length > MAX_POINTS_PER_STROKE) return null;
 	const points = [];
 	for (const rawPoint of value.points) {
 		if (!isRecord(rawPoint)) return null;
 		const { x, y, pressure } = rawPoint;
 		if (!isFiniteNumber(x) || !isFiniteNumber(y) || !isFiniteNumber(pressure)) return null;
+		if (
+			x < MIN_NORMALIZED_COORDINATE ||
+			x > MAX_NORMALIZED_COORDINATE ||
+			y < MIN_NORMALIZED_COORDINATE ||
+			y > MAX_NORMALIZED_COORDINATE
+		) {
+			return null;
+		}
 		points.push({
 			x,
 			y,
@@ -109,7 +124,11 @@ export function migrateStroke(raw: Partial<Stroke>): Stroke {
 					(point) =>
 						isFiniteNumber(point?.x) &&
 						isFiniteNumber(point?.y) &&
-						isFiniteNumber(point?.pressure),
+						isFiniteNumber(point?.pressure) &&
+						point.x >= MIN_NORMALIZED_COORDINATE &&
+						point.x <= MAX_NORMALIZED_COORDINATE &&
+						point.y >= MIN_NORMALIZED_COORDINATE &&
+						point.y <= MAX_NORMALIZED_COORDINATE,
 				)
 				.map((point) => ({
 					x: point.x,
