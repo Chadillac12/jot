@@ -78,6 +78,20 @@ describe('SidecarStore.load', () => {
 		warn.mockRestore();
 	});
 
+	it('never replaces a structurally valid future-format sidecar with an old transaction backup', async () => {
+		const future = JSON.stringify({ version: 99, pages: { '1': [] } });
+		const fs = makeFs({
+			'a.pdf.jot.json': future,
+			'a.pdf.jot.json.jot-backup-100-1': validPayload,
+		});
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const store = new SidecarStore(fs.adapter, new StrokeStore());
+
+		expect(await store.load('a.pdf')).toBe('protected');
+		expect(fs.files['a.pdf.jot.json']).toBe(future);
+		warn.mockRestore();
+	});
+
 	it('keeps existing in-memory strokes when the file version is unsupported', async () => {
 		const fs = makeFs({
 			'a.pdf.jot.json': JSON.stringify({ version: 99, pages: { '1': [] } }),
