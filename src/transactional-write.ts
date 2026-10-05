@@ -101,6 +101,19 @@ export async function recoverInterruptedTextWrite(
 	return 'unresolved';
 }
 
+async function discardClaimArtifacts(
+	adapter: DataAdapter,
+	dependentPath: string,
+): Promise<string[]> {
+	const slash = dependentPath.lastIndexOf('/');
+	const folder = slash >= 0 ? dependentPath.slice(0, slash) : '';
+	const listing = await adapter.list(folder);
+	return listing.files
+		.filter((candidate) => candidate.startsWith(`${dependentPath}.jot-discard-`))
+		.sort()
+		.reverse();
+}
+
 async function newestValidBinary(
 	adapter: DataAdapter,
 	paths: string[],
@@ -136,6 +149,35 @@ export async function recoverInterruptedVaultBinary(
 	} catch {
 		liveValid = false;
 	}
+	const discardClaims = await discardClaimArtifacts(adapter, dependentPath);
+	if (discardClaims.length > 0) {
+		const newestClaim = discardClaims[0]!;
+		if (liveValid) {
+			// The old sidecar was already atomically claimed, which is the durable
+			// commit marker for destructive merge finalization. Keep the verified
+			// merged PDF even if a newer sidecar has since synced into the live path.
+			for (const artifact of [...backups, ...temps, ...discardClaims]) {
+				await cleanup(adapter, artifact);
+			}
+			return 'finalized';
+		}
+
+		const recovery = await adapter.readBinary(backup);
+		await validate(recovery);
+		await vault.modifyBinary(file, recovery);
+		await validate(await vault.readBinary(file));
+		if (!(await adapter.exists(dependentPath)) && (await adapter.exists(newestClaim))) {
+			await adapter.rename(newestClaim, dependentPath);
+		}
+		for (const artifact of [...backups, ...temps]) await cleanup(adapter, artifact);
+		for (const claim of discardClaims) {
+			if (claim !== newestClaim || (await adapter.exists(dependentPath))) {
+				await cleanup(adapter, claim);
+			}
+		}
+		return 'rolled-back';
+	}
+
 	const dependentStillExists = await adapter.exists(dependentPath);
 	if (!liveValid || dependentStillExists) {
 		const recovery = await adapter.readBinary(backup);
@@ -267,6 +309,12 @@ export async function transactionalWriteBinary(
 	}
 }
 
+export interface VaultBinaryFinalization {
+	recoveryMarkerPath: string | null;
+	rollback: () => Promise<void>;
+	onCommitted: () => void;
+}
+
 /**
  * Transactionally replace a vault-tracked binary without renaming the live
  * TFile out from under Obsidian. A verified durable backup is created first.
@@ -279,12 +327,13 @@ export async function transactionalModifyVaultBinary(
 	file: TFile,
 	bytes: ArrayBuffer,
 	validate: (bytes: ArrayBuffer) => Promise<void>,
-	beforeFinalize?: () => Promise<void>,
+	beforeFinalize?: () => Promise<VaultBinaryFinalization | void>,
 ): Promise<void> {
 	const id = transactionId();
 	const backupPath = `${file.path}.jot-backup-${id}`;
 	const original = await vault.readBinary(file);
 	let backupWritten = false;
+	let finalization: VaultBinaryFinalization | null = null;
 
 	try {
 		await adapter.writeBinary(backupPath, original);
@@ -293,10 +342,23 @@ export async function transactionalModifyVaultBinary(
 
 		await vault.modifyBinary(file, bytes);
 		await validate(await vault.readBinary(file));
-		await beforeFinalize?.();
+		finalization = (await beforeFinalize?.()) ?? null;
 
 		await cleanup(adapter, backupPath);
+		const backupRemains = await adapter.exists(backupPath);
+		finalization?.onCommitted();
+		if (!backupRemains && finalization?.recoveryMarkerPath) {
+			await cleanup(adapter, finalization.recoveryMarkerPath);
+		}
 	} catch (error) {
+		const rollbackErrors: unknown[] = [];
+		if (finalization) {
+			try {
+				await finalization.rollback();
+			} catch (finalizationError) {
+				rollbackErrors.push(finalizationError);
+			}
+		}
 		if (backupWritten) {
 			try {
 				const recovery = await adapter.readBinary(backupPath);
@@ -304,11 +366,14 @@ export async function transactionalModifyVaultBinary(
 				await vault.modifyBinary(file, recovery);
 				await validate(await vault.readBinary(file));
 			} catch (restoreError) {
-				throw new AggregateError(
-					[error, restoreError],
-					`Vault binary replacement failed and rollback also failed for ${file.path}. Recovery backup remains at ${backupPath}`,
-				);
+				rollbackErrors.push(restoreError);
 			}
+		}
+		if (rollbackErrors.length > 0) {
+			throw new AggregateError(
+				[error, ...rollbackErrors],
+				`Vault binary replacement failed and rollback also failed for ${file.path}. Recovery artifacts were retained where possible.`,
+			);
 		}
 		throw error;
 	}
