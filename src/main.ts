@@ -14,7 +14,7 @@ import { JotNoteView } from './jot-note-view';
 import { MergeService } from './merge-service';
 import { NotebookSessionManager, type NotebookDocumentSession } from './notebook-session';
 import { OverlayManager } from './overlay-manager';
-import { SidecarStore } from './sidecar-store';
+import { SidecarStore, type SidecarLoadStatus } from './sidecar-store';
 import { StrokeStore } from './stroke-store';
 import { setInkRenderTuning } from './stroke-render';
 import { UndoController } from './undo-controller';
@@ -72,7 +72,11 @@ export default class JotPlugin extends Plugin {
 			this.sidecar,
 			this.history,
 			{
-				ensureLoaded: (pdfPath) => this.ensureLoaded(pdfPath),
+				prepareForMerge: async (pdfPath) => {
+					if (!(await this.sidecar.flush(pdfPath))) return false;
+					const status = await this.ensureLoaded(pdfPath);
+					return status === 'loaded' || status === 'missing';
+				},
 				redrawOverlays: () => this.overlays.redrawOverlaysForActivePdf(),
 			},
 		);
@@ -218,15 +222,15 @@ export default class JotPlugin extends Plugin {
 		this.floatingPaletteButton?.hide();
 	}
 
-	private async ensureLoaded(pdfPath: string) {
+	private async ensureLoaded(pdfPath: string): Promise<SidecarLoadStatus> {
 		const status = await this.sidecar.load(pdfPath);
-		if (status === 'dirty') return;
 		if (status === 'protected') {
 			new Notice(
 				'Jot: the existing annotation sidecar could not be safely loaded. It is protected from overwrite and will be backed up before any new annotations are saved.',
 				8000,
 			);
 		}
+		return status;
 	}
 
 	private async reloadSidecar(pdfPath: string) {
