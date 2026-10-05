@@ -653,6 +653,20 @@ describe('SidecarStore.discard', () => {
 		expect(fs.files['a.pdf.jot.json']).toBeUndefined();
 	});
 
+	it('can atomically claim a verified sidecar and restore it on transaction rollback', async () => {
+		const fs = makeFs({ 'a.pdf.jot.json': validPayload });
+		const store = new SidecarStore(fs.adapter, new StrokeStore());
+		expect(await store.load('a.pdf')).toBe('loaded');
+
+		const claim = await store.claimDiscard('a.pdf', validPayload);
+		expect(fs.files['a.pdf.jot.json']).toBeUndefined();
+		expect(claim.recoveryMarkerPath).not.toBeNull();
+		expect(claim.recoveryMarkerPath ? fs.files[claim.recoveryMarkerPath] : undefined).toBe(validPayload);
+
+		await claim.rollback();
+		expect(fs.files['a.pdf.jot.json']).toBe(validPayload);
+	});
+
 	it('refuses destructive discard if the sidecar changed after the caller captured its baseline', async () => {
 		const fs = makeFs({ 'a.pdf.jot.json': validPayload });
 		const store = new SidecarStore(fs.adapter, new StrokeStore());
