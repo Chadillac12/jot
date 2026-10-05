@@ -73,7 +73,7 @@ export class SidecarStore {
 			if (!isSupportedVersion(parsed.version)) {
 				this.protectedOriginals.set(pdfPath, text);
 				const error = new Error(`${path} has unknown version ${parsed.version}`);
-				session.failLoad(error);
+				session.failLoad(loadToken, error);
 				console.warn(`${PLUGIN_LOG} ${error.message}; keeping current annotations in memory`);
 				return 'protected';
 			}
