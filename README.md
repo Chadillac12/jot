@@ -1,21 +1,25 @@
 # Jot
 
-Handwrite annotations on PDFs in Obsidian with your Apple Pencil. Strokes are stored in a tiny JSON sidecar (`<file>.jot.json`) next to the original file — the original PDF is never modified — so annotations sync via Git or iCloud alongside the rest of your vault.
+Jot adds Apple Pencil handwriting to Obsidian for both PDFs and standalone `.jot` notebooks.
 
-I built this to annotate musical scores during rehearsal with our vocal band: things like breath marks, "watch out for thise note", etc. 
+PDF annotations are stored beside the PDF in `<file>.jot.json` until you explicitly choose to merge them into a PDF. Standalone handwritten notebooks are normal vault files with the `.jot` extension.
 
-Status: **early, working**. PDFs only for now.
+Status: **early beta**. Back up important notes and use prerelease builds deliberately.
 
-<img src="docs/pen-right.png" alt="Annotating a pdf with the radial palette open" width="240" />
+<img src="docs/pen-right.png" alt="Annotating a PDF with the radial palette open" width="240" />
 
 ## Features
 
-- Pressure-sensitive ink with Apple Pencil
-- Pen, highlighter, and eraser; seven configurable colors; four widths
-- Radial palette opens on long-press; remembers your last pen and highlighter settings
-- Per-PDF undo/redo
-- Merge annotations into a flattened PDF (overwrite or save a copy)
-- Cross-device sync via the sidecar JSON — edit on iPad, see it on desktop
+- Pressure-sensitive Apple Pencil ink with coalesced and predicted input samples
+- Pen, highlighter, and eraser
+- Configurable colors, widths, smoothing, and pressure sensitivity
+- Pencil **quick tap → lift → second nearby tap + hold** opens the radial palette
+- Optional two-finger hold and floating palette button
+- Undo/redo
+- Standalone multi-page `.jot` notebooks with blank, ruled, grid, and dot paper
+- PDF annotations stored in sidecar JSON for vault sync
+- Transactional, verified PDF merge/overwrite
+- Conflict protection and recovery copies for unsafe sidecar changes
 
 <p>
   <img src="docs/color-right.png" alt="Right-handed color selection" width="240" />
@@ -23,38 +27,72 @@ Status: **early, working**. PDFs only for now.
   <img src="docs/thickness-right.png" alt="Thickness selection" width="240" />
 </p>
 
-## Installing
+## Installing beta builds
 
-1. In Obsidian, open *Settings → Community plugins → Browse*.
-2. Search for **Jot**, install, and enable it.
+Jot's current iPad builds are distributed as GitHub prereleases for BRAT.
 
-### Beta builds
+1. Install [BRAT](https://github.com/TfTHacker/obsidian42-brat) in Obsidian.
+2. Add `Chadillac12/jot` as a beta plugin.
+3. Enable **Jot** under Community plugins.
+4. Use **BRAT → Check for updates** when a newer prerelease is published.
 
-To try unreleased changes, install [BRAT](https://github.com/TfTHacker/obsidian42-brat) and add `https://github.com/bverbeken/jot` as a beta plugin.
+For important notes, test a new prerelease on disposable data before relying on it.
 
-## Using it
+## Using Jot on PDFs
 
 1. Open a PDF in Obsidian.
-2. Long-press anywhere on the page with the Apple Pencil to open the radial palette. Pick a tool, color, or width.
-3. Draw with the Apple Pencil. Rest your palm freely — touch input is ignored once a pen stroke starts.
-4. Two-finger hold dismisses the palette. The palette also auto-dismisses after a brief confirmation animation when you pick a color.
-5. Run the **Merge notes into PDF** command to bake annotations into a flattened PDF. Run **Clear annotations on this PDF** to wipe all strokes (undoable).
+2. Write directly with Apple Pencil.
+3. To open the palette with Pencil, make one quick tap, lift, then tap nearby again and hold briefly.
+4. Use the palette to choose pen, highlighter, eraser, color, or width.
+5. Run **Jot: Merge notes into PDF** to bake annotations into the PDF or an annotated copy.
+6. Run **Jot: Clear annotations on this PDF** to remove the sidecar annotations.
 
-Set your handedness and customize the seven palette colors under *Settings → Jot*.
+Normal Pencil contact is writing-only; Jot does not use ordinary Pencil long-press as a palette gesture.
+
+## Creating a handwritten notebook
+
+Run:
+
+**Jot: Create handwritten note**
+
+Jot creates a `.jot` file in the vault and opens it as a handwritten notebook. The notebook supports multiple pages and blank, ruled, grid, or dot paper.
+
+Opening the same notebook in multiple panes shares one authoritative in-memory document session rather than creating independent copies.
+
+## Data integrity
+
+Jot treats handwritten ink as user data:
+
+- dirty documents cannot be silently replaced by a disk reload,
+- failed saves remain dirty and retry,
+- sidecar replacement uses verified temporary and backup files,
+- conflicting external edits are preserved instead of silently overwritten,
+- destructive PDF overwrite uses a verified temporary PDF and rollback backup,
+- persisted pen strokes include a versioned rendering profile so their appearance does not depend on later settings changes.
+
+See [Architecture](docs/ARCHITECTURE.md) and [Hardening verification](docs/HARDENING_VERIFICATION.md) for the current design invariants and verification mapping.
 
 ## Development
 
 ```bash
 npm install
-npm run dev     # watch build into dev-vault/.obsidian/plugins/jot/
-npm run build   # production build at the repo root (for release uploads)
-npm test        # vitest
+npm run dev
+npm run build
+npm test
+npm run lint
 ```
 
-Open `dev-vault/` as a vault in Obsidian to test. The dev vault is gitignored and is not your real notes vault.
+The CI release gate runs build, tests, and lint on Node 20, 22, and 24.
 
-### Testing on iPad
+## Release discipline
 
-1. Cut a GitHub release (`npm version patch` then `git push origin <tag>` — the release workflow uploads `main.js`, `manifest.json`, `styles.css`).
-2. On the iPad, install **BRAT** into a *separate dev vault* — never your real one.
-3. In BRAT, add this repo as a beta plugin. BRAT pulls the release and installs it.
+Published versions are immutable. The release workflow refuses to replace assets on an existing release.
+
+Prerelease flow:
+
+1. update `manifest.json`, `package.json`, `package-lock.json`, and `versions.json`,
+2. verify the exact versioned commit in CI,
+3. create `release/<version>` from that exact SHA,
+4. allow the release workflow to rebuild and publish `main.js`, `manifest.json`, and `styles.css`.
+
+Do not reuse or repoint an existing release version.
