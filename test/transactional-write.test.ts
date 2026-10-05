@@ -1,7 +1,12 @@
 /* eslint-disable @typescript-eslint/unbound-method, obsidianmd/no-tfile-tfolder-cast */
 import type { DataAdapter, TFile, Vault } from 'obsidian';
 import { describe, expect, it, vi } from 'vitest';
-import { transactionalModifyVaultBinary, transactionalWriteBinary, transactionalWriteText } from '../src/transactional-write';
+import {
+	TransactionConflictError,
+	transactionalModifyVaultBinary,
+	transactionalWriteBinary,
+	transactionalWriteText,
+} from '../src/transactional-write';
 
 function makeAdapter(initial: Record<string, string> = {}) {
 	const textFiles: Record<string, string> = { ...initial };
@@ -39,6 +44,21 @@ describe('transactionalWriteText', () => {
 		const fs = makeAdapter({ 'a.json': 'old' });
 		await transactionalWriteText(fs.adapter, 'a.json', 'new');
 		expect(fs.textFiles['a.json']).toBe('new');
+		expect(Object.keys(fs.textFiles).filter((path) => path.includes('jot-'))).toEqual([]);
+	});
+
+	it('restores an externally changed original instead of overwriting past the expected baseline', async () => {
+		const fs = makeAdapter({ 'a.json': 'old' });
+		const originalWrite = vi.mocked(fs.adapter.write).getMockImplementation()!;
+		vi.mocked(fs.adapter.write).mockImplementation(async (path: string, data: string) => {
+			await originalWrite(path, data);
+			if (path.includes('.jot-tmp-')) fs.textFiles['a.json'] = 'remote';
+		});
+
+		await expect(
+			transactionalWriteText(fs.adapter, 'a.json', 'local', undefined, 'old'),
+		).rejects.toBeInstanceOf(TransactionConflictError);
+		expect(fs.textFiles['a.json']).toBe('remote');
 		expect(Object.keys(fs.textFiles).filter((path) => path.includes('jot-'))).toEqual([]);
 	});
 
