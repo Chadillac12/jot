@@ -224,7 +224,7 @@ export class JotNoteView extends TextFileView {
 		const panel = this.contentEl.createDiv({ cls: 'jot-note-load-error' });
 		panel.createEl('h3', { text: 'Jot note has a sync conflict' });
 		panel.createEl('p', {
-			text: 'The file changed on disk while local handwriting was unsaved. Local ink remains in memory and Jot has blocked automatic overwrite.',
+			text: 'The file changed on disk while local handwriting was unsaved. Local ink remains in memory and jot has blocked automatic overwrite.',
 		});
 		new ButtonComponent(panel)
 			.setButtonText('Keep local ink')
