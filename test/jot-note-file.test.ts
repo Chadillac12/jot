@@ -118,6 +118,19 @@ describe('Jot note file format', () => {
 		if (!result.ok) expect(result.reason).toBe('invalid-schema');
 	});
 
+	it('rejects unreasonable page dimensions before allocating a drawing surface', () => {
+		const result = parseJotNoteTextResult(
+			JSON.stringify({
+				version: JOT_NOTE_FORMAT_VERSION,
+				type: 'notebook',
+				paper: 'ruled',
+				pages: [{ id: 'page-1', width: 1e9, height: 2048, strokes: [] }],
+			}),
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.reason).toBe('invalid-schema');
+	});
+
 	it('rejects page ids containing the document-key separator', () => {
 		const result = parseJotNoteTextResult(
 			JSON.stringify({
