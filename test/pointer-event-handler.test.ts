@@ -19,6 +19,7 @@ interface Harness {
 	sidecar: SidecarStore;
 	undo: UndoController;
 	activation: { value: PaletteActivation };
+	editability: { value: boolean };
 	dispose: () => void;
 }
 
@@ -90,6 +91,7 @@ function makeHarness(
 		}),
 	} as unknown as UndoController;
 	const currentActivation = { value: activation };
+	const editability = { value: canEdit };
 
 	const dispose = new PointerEventHandler(canvas, makeContext(), {
 		palette,
@@ -101,10 +103,19 @@ function makeHarness(
 		handedness: () => 'right',
 		paletteActivation: () => currentActivation.value,
 		renderProfile: () => ({ version: 2, smoothing: 0.5, pressureSensitivity: 0.5 }),
-		canEdit: () => canEdit,
+		canEdit: () => editability.value,
 	}).attach();
 
-	return { canvas, palette, strokes, sidecar, undo, activation: currentActivation, dispose };
+	return {
+		canvas,
+		palette,
+		strokes,
+		sidecar,
+		undo,
+		activation: currentActivation,
+		editability,
+		dispose,
+	};
 }
 
 function pointer(
@@ -154,6 +165,18 @@ describe('PointerEventHandler palette activation', () => {
 		pointer(canvas, 'pointermove', 'pen', 1, 40, 40);
 		pointer(canvas, 'pointerup', 'pen', 1, 50, 50);
 
+		expect(strokes.forKey('notes.pdf::1')).toHaveLength(0);
+		expect(sidecar.scheduleSave).not.toHaveBeenCalled();
+	});
+
+	it('cancels an active Pencil gesture safely when an exclusive lock engages mid-stroke', () => {
+		const { canvas, strokes, sidecar, editability } = makeHarness();
+
+		pointer(canvas, 'pointerdown', 'pen', 1, 20, 20);
+		pointer(canvas, 'pointermove', 'pen', 1, 40, 40);
+		editability.value = false;
+
+		expect(() => pointer(canvas, 'pointercancel', 'pen', 1, 45, 45)).not.toThrow();
 		expect(strokes.forKey('notes.pdf::1')).toHaveLength(0);
 		expect(sidecar.scheduleSave).not.toHaveBeenCalled();
 	});
