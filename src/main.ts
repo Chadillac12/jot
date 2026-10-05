@@ -12,7 +12,7 @@ import { isSidecarPath, pdfPathFromSidecar } from './jot-file';
 import { JOT_NOTE_EXTENSION, JOT_NOTE_VIEW_TYPE, createJotNote, serializeJotNote } from './jot-note-file';
 import { JotNoteView } from './jot-note-view';
 import { MergeService } from './merge-service';
-import { NotebookSessionManager, type NotebookDocumentSession } from './notebook-session';
+import { NotebookExternalConflictError, NotebookSessionManager, type NotebookDocumentSession } from './notebook-session';
 import { OverlayManager } from './overlay-manager';
 import { SidecarStore, type SidecarLoadStatus } from './sidecar-store';
 import { StrokeStore } from './stroke-store';
@@ -29,6 +29,7 @@ export default class JotPlugin extends Plugin {
 	private sessions = new DocumentSessionManager();
 	private notebooks = new NotebookSessionManager(this.sessions);
 	private lastActivePdfPath: string | null = null;
+	private notebookRetryTimers = new Map<string, number>();
 	private sidecar!: SidecarStore;
 	private merge!: MergeService;
 	private overlays!: OverlayManager;
@@ -213,10 +214,16 @@ export default class JotPlugin extends Plugin {
 	}
 
 	onunload() {
-		// Obsidian's unload hook is synchronous, so this is a best-effort final
-		// flush. Normal file switches, renames, merges, and notebook closes flush
+		// Obsidian's unload hook is synchronous, so these are best-effort final
+		// flushes. Normal file switches, renames, merges, and notebook closes flush
 		// before the lifecycle transition itself.
 		void this.sidecar?.flushAll();
+		for (const [path, timer] of this.notebookRetryTimers) {
+			window.clearTimeout(timer);
+			const file = this.app.vault.getAbstractFileByPath(path);
+			if (file instanceof TFile) void this.saveNotebookSession(file, this.notebooks.get(path));
+		}
+		this.notebookRetryTimers.clear();
 		this.overlays?.disconnectAll();
 		this.palette?.hide();
 		this.floatingPaletteButton?.hide();
@@ -349,6 +356,45 @@ export default class JotPlugin extends Plugin {
 
 	getNotebookSession(path: string): NotebookDocumentSession {
 		return this.notebooks.get(path);
+	}
+
+	async saveNotebookSession(file: TFile, session: NotebookDocumentSession): Promise<boolean> {
+		const success = await session.save(async (expectedData, nextData) => {
+			await this.app.vault.process(file, (currentData) => {
+				if (currentData !== expectedData && currentData !== nextData) {
+					throw new NotebookExternalConflictError();
+				}
+				return nextData;
+			});
+		});
+
+		if (success) {
+			this.clearNotebookRetry(session.path);
+			return true;
+		}
+
+		if (session.state.state === 'error') this.scheduleNotebookRetry(session.path);
+		return false;
+	}
+
+	private scheduleNotebookRetry(path: string): void {
+		if (this.notebookRetryTimers.has(path)) return;
+		const id = window.setTimeout(() => {
+			this.notebookRetryTimers.delete(path);
+			const file = this.app.vault.getAbstractFileByPath(path);
+			const session = this.notebooks.get(path);
+			if (!(file instanceof TFile) || !session.state.isDirty || session.state.state === 'conflict') {
+				return;
+			}
+			void this.saveNotebookSession(file, session);
+		}, 1500);
+		this.notebookRetryTimers.set(path, id);
+	}
+
+	private clearNotebookRetry(path: string): void {
+		const id = this.notebookRetryTimers.get(path);
+		if (id !== undefined) window.clearTimeout(id);
+		this.notebookRetryTimers.delete(path);
 	}
 
 	renameNotebookSession(oldPath: string, newPath: string): NotebookDocumentSession {
