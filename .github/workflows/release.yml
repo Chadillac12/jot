@@ -40,6 +40,20 @@ jobs:
               shell: bash
               run: |
                   manifest_version="$(node -p "require('./manifest.json').version")"
+                  package_version="$(node -p "require('./package.json').version")"
+                  versions_min_app="$(node -p "require('./versions.json')[require('./manifest.json').version] || ''")"
+                  manifest_min_app="$(node -p "require('./manifest.json').minAppVersion")"
+
+                  if [[ "$package_version" != "$manifest_version" ]]; then
+                    echo "package.json version '$package_version' does not match manifest version '$manifest_version'." >&2
+                    exit 1
+                  fi
+
+                  if [[ "$versions_min_app" != "$manifest_min_app" ]]; then
+                    echo "versions.json entry for '$manifest_version' is missing or does not match minAppVersion '$manifest_min_app'." >&2
+                    exit 1
+                  fi
+
                   if [[ "$GITHUB_REF" == refs/tags/* ]]; then
                     release_version="${GITHUB_REF#refs/tags/}"
                   else
