@@ -14,6 +14,29 @@ function transactionId(): string {
 	return `${Date.now()}-${transactionCounter}`;
 }
 
+export function binaryFingerprint(bytes: ArrayBuffer): string {
+	const view = new Uint8Array(bytes);
+	let h1 = 0x811c9dc5;
+	let h2 = 0x9e3779b9;
+	for (const byte of view) {
+		h1 ^= byte;
+		h1 = Math.imul(h1, 0x01000193);
+		h2 ^= byte + 0x9e3779b9 + (h2 << 6) + (h2 >>> 2);
+		h2 = Math.imul(h2, 0x85ebca6b);
+	}
+	return `${view.byteLength}:${(h1 >>> 0).toString(16)}:${(h2 >>> 0).toString(16)}`;
+}
+
+function binaryEqual(a: ArrayBuffer, b: ArrayBuffer): boolean {
+	if (a.byteLength !== b.byteLength) return false;
+	const av = new Uint8Array(a);
+	const bv = new Uint8Array(b);
+	for (let i = 0; i < av.length; i++) {
+		if (av[i] !== bv[i]) return false;
+	}
+	return true;
+}
+
 async function cleanup(adapter: DataAdapter, path: string): Promise<void> {
 	try {
 		if (await adapter.exists(path)) await adapter.remove(path);
@@ -24,7 +47,7 @@ async function cleanup(adapter: DataAdapter, path: string): Promise<void> {
 }
 
 export type TextRecoveryResult = 'none' | 'cleaned' | 'restored-backup' | 'restored-temp';
-export type BinaryRecoveryResult = 'none' | 'rolled-back' | 'finalized';
+export type BinaryRecoveryResult = 'none' | 'rolled-back' | 'finalized' | 'external-preserved';
 
 async function transactionArtifacts(
 	adapter: DataAdapter,
@@ -104,21 +127,75 @@ export async function recoverInterruptedVaultBinary(
 	if (backups.length === 0) return 'none';
 
 	const backupPath = backups[0]!;
-	const dependentBackups = await transactionArtifacts(adapter, dependentPath, 'jot-backup');
-	if ((await adapter.exists(dependentPath)) || dependentBackups.length > 0) {
-		const recovery = await adapter.readBinary(backupPath);
-		await validate(recovery);
-		await vault.modifyBinary(file, recovery);
-		await validate(await vault.readBinary(file));
+	const id = backupPath.slice(`${file.path}.jot-backup-`.length);
+	const markerPath = `${file.path}.jot-txn-${id}`;
+	const backup = await adapter.readBinary(backupPath);
+	await validate(backup);
+	const current = await vault.readBinary(file);
+	await validate(current);
+
+	// If the tracked file already equals the recovery backup, the overwrite
+	// either never reached the live PDF or was already rolled back.
+	if (binaryEqual(current, backup)) {
 		for (const artifact of backups) await cleanup(adapter, artifact);
+		await cleanup(adapter, markerPath);
 		return 'rolled-back';
 	}
 
-	// The dependent cleanup already completed, so the overwrite transaction
-	// reached its logical commit point. Keep the current verified PDF and only
-	// remove the orphan recovery backup.
-	await validate(await vault.readBinary(file));
+	let replacementFingerprint: string | null = null;
+	if (await adapter.exists(markerPath)) {
+		try {
+			const marker = JSON.parse(await adapter.read(markerPath)) as {
+				version?: unknown;
+				replacementFingerprint?: unknown;
+			};
+			if (marker.version === 1 && typeof marker.replacementFingerprint === 'string') {
+				replacementFingerprint = marker.replacementFingerprint;
+			}
+		} catch {
+			// An unreadable marker cannot prove ownership of the current PDF.
+		}
+	}
+
+	// Never overwrite an unknown current PDF during crash recovery. This covers
+	// legacy pre-marker transactions and a synced PDF that replaced our merged
+	// bytes while Jot was stopped.
+	if (
+		replacementFingerprint === null ||
+		binaryFingerprint(current) !== replacementFingerprint
+	) {
+		for (const artifact of backups) {
+			const artifactId = artifact.slice(`${file.path}.jot-backup-`.length);
+			const recoveryPath = `${file.path}.recovery-${artifactId}.pdf`;
+			if (await adapter.exists(artifact)) {
+				if (await adapter.exists(recoveryPath)) {
+					await cleanup(adapter, artifact);
+				} else {
+					await adapter.rename(artifact, recoveryPath);
+				}
+			}
+			await cleanup(adapter, `${file.path}.jot-txn-${artifactId}`);
+		}
+		return 'external-preserved';
+	}
+
+	const dependentBackups = await transactionArtifacts(adapter, dependentPath, 'jot-backup');
+	if ((await adapter.exists(dependentPath)) || dependentBackups.length > 0) {
+		await vault.modifyBinary(file, backup);
+		const restored = await vault.readBinary(file);
+		if (!binaryEqual(restored, backup)) {
+			throw new Error(`Recovered PDF verification failed for ${file.path}`);
+		}
+		await validate(restored);
+		for (const artifact of backups) await cleanup(adapter, artifact);
+		await cleanup(adapter, markerPath);
+		return 'rolled-back';
+	}
+
+	// Sidecar cleanup reached its commit point, and the current PDF is exactly
+	// the replacement recorded by this transaction.
 	for (const artifact of backups) await cleanup(adapter, artifact);
+	await cleanup(adapter, markerPath);
 	return 'finalized';
 }
 
@@ -171,17 +248,30 @@ export async function transactionalWriteText(
 		if (originalMoved) await cleanup(adapter, backupPath);
 	} catch (error) {
 		await cleanup(adapter, tempPath);
-		if (committed && !originalMoved) await cleanup(adapter, path);
-		if (originalMoved) {
-			try {
-				if (await adapter.exists(path)) await adapter.remove(path);
-				if (await adapter.exists(backupPath)) await adapter.rename(backupPath, path);
-			} catch (restoreError) {
-				throw new AggregateError(
-					[error, restoreError],
-					`Write failed and rollback also failed for ${path}`,
-				);
+		try {
+			if (committed && !originalMoved && (await adapter.exists(path))) {
+				const current = await adapter.read(path);
+				if (current === text) await adapter.remove(path);
 			}
+			if (originalMoved && (await adapter.exists(backupPath))) {
+				if (!(await adapter.exists(path))) {
+					await adapter.rename(backupPath, path);
+				} else {
+					const current = await adapter.read(path);
+					if (current === text) {
+						await adapter.remove(path);
+						await adapter.rename(backupPath, path);
+					} else {
+						const conflictPath = `${path}.conflict-${id}.json`;
+						await adapter.rename(backupPath, conflictPath);
+					}
+				}
+			}
+		} catch (restoreError) {
+			throw new AggregateError(
+				[error, restoreError],
+				`Write failed and rollback also failed for ${path}`,
+			);
 		}
 		throw error;
 	}
@@ -301,35 +391,93 @@ export async function transactionalModifyVaultBinary(
 	bytes: ArrayBuffer,
 	validate: (bytes: ArrayBuffer) => Promise<void>,
 	beforeFinalize?: () => Promise<void>,
+	expectedCurrent?: ArrayBuffer,
 ): Promise<void> {
 	const id = transactionId();
 	const backupPath = `${file.path}.jot-backup-${id}`;
+	const markerPath = `${file.path}.jot-txn-${id}`;
 	const original = await vault.readBinary(file);
+	if (expectedCurrent && !binaryEqual(original, expectedCurrent)) {
+		throw new TransactionConflictError(file.path);
+	}
 	let backupWritten = false;
+	let markerWritten = false;
 
 	try {
 		await adapter.writeBinary(backupPath, original);
 		backupWritten = true;
 		await validate(await adapter.readBinary(backupPath));
 
+		const markerText = JSON.stringify({
+			version: 1,
+			replacementFingerprint: binaryFingerprint(bytes),
+		});
+		await adapter.write(markerPath, markerText);
+		if ((await adapter.read(markerPath)) !== markerText) {
+			throw new Error(`PDF transaction marker verification failed for ${file.path}`);
+		}
+		markerWritten = true;
+
+		const preCommit = await vault.readBinary(file);
+		if (!binaryEqual(preCommit, original)) {
+			throw new TransactionConflictError(file.path);
+		}
+
 		await vault.modifyBinary(file, bytes);
-		await validate(await vault.readBinary(file));
+		const committed = await vault.readBinary(file);
+		if (!binaryEqual(committed, bytes)) {
+			throw new TransactionConflictError(file.path);
+		}
+		await validate(committed);
+
+		const beforeCleanup = await vault.readBinary(file);
+		if (!binaryEqual(beforeCleanup, bytes)) {
+			throw new TransactionConflictError(file.path);
+		}
 		await beforeFinalize?.();
 
 		await cleanup(adapter, backupPath);
+		await cleanup(adapter, markerPath);
 	} catch (error) {
 		if (backupWritten) {
 			try {
-				const recovery = await adapter.readBinary(backupPath);
-				await validate(recovery);
-				await vault.modifyBinary(file, recovery);
-				await validate(await vault.readBinary(file));
+				const current = await vault.readBinary(file);
+				if (binaryEqual(current, bytes)) {
+					const recovery = await adapter.readBinary(backupPath);
+					await validate(recovery);
+					await vault.modifyBinary(file, recovery);
+					const restored = await vault.readBinary(file);
+					if (!binaryEqual(restored, recovery)) {
+						throw new Error(`PDF rollback verification failed for ${file.path}`);
+					}
+					await validate(restored);
+				} else if (!binaryEqual(current, original)) {
+					// The current PDF is neither the pre-merge original nor the
+					// replacement Jot wrote. Preserve that external PDF and move
+					// our original backup out of automatic-recovery namespace.
+					const recoveryPath = `${file.path}.recovery-${id}.pdf`;
+					if (await adapter.exists(backupPath)) {
+						if (await adapter.exists(recoveryPath)) {
+							await cleanup(adapter, backupPath);
+						} else {
+							await adapter.rename(backupPath, recoveryPath);
+						}
+					}
+					await cleanup(adapter, markerPath);
+					throw new AggregateError(
+						[error, new TransactionConflictError(file.path)],
+						`PDF changed externally during merge; external PDF was preserved and the pre-merge backup was saved at ${recoveryPath}`,
+					);
+				}
 			} catch (restoreError) {
+				if (restoreError instanceof AggregateError) throw restoreError;
 				throw new AggregateError(
 					[error, restoreError],
 					`Vault binary replacement failed and rollback also failed for ${file.path}. Recovery backup remains at ${backupPath}`,
 				);
 			}
+		} else if (markerWritten) {
+			await cleanup(adapter, markerPath);
 		}
 		throw error;
 	}
