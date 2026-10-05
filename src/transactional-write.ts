@@ -16,6 +16,140 @@ async function cleanup(adapter: DataAdapter, path: string): Promise<void> {
 	}
 }
 
+export type TransactionRecoveryStatus =
+	| 'none'
+	| 'live'
+	| 'restored-backup'
+	| 'committed-temp'
+	| 'rolled-back'
+	| 'finalized'
+	| 'unresolved';
+
+async function transactionArtifacts(
+	adapter: DataAdapter,
+	path: string,
+): Promise<{ backups: string[]; temps: string[] }> {
+	const slash = path.lastIndexOf('/');
+	const folder = slash >= 0 ? path.slice(0, slash) : '';
+	const listing = await adapter.list(folder);
+	const backups = listing.files
+		.filter((candidate) => candidate.startsWith(`${path}.jot-backup-`))
+		.sort()
+		.reverse();
+	const temps = listing.files
+		.filter((candidate) => candidate.startsWith(`${path}.jot-tmp-`))
+		.sort()
+		.reverse();
+	return { backups, temps };
+}
+
+async function newestValidText(
+	adapter: DataAdapter,
+	paths: string[],
+	validate: (text: string) => boolean,
+): Promise<string | null> {
+	for (const candidate of paths) {
+		try {
+			if (validate(await adapter.read(candidate))) return candidate;
+		} catch {
+			// Try an older transaction artifact.
+		}
+	}
+	return null;
+}
+
+export async function recoverInterruptedTextWrite(
+	adapter: DataAdapter,
+	path: string,
+	validate: (text: string) => boolean,
+): Promise<TransactionRecoveryStatus> {
+	const { backups, temps } = await transactionArtifacts(adapter, path);
+	if (backups.length === 0 && temps.length === 0) return 'none';
+
+	const liveExists = await adapter.exists(path);
+	if (liveExists) {
+		try {
+			if (validate(await adapter.read(path))) {
+				for (const artifact of [...backups, ...temps]) await cleanup(adapter, artifact);
+				return 'live';
+			}
+		} catch {
+			// Fall through to recovery from a known-good backup.
+		}
+	}
+
+	const backup = await newestValidText(adapter, backups, validate);
+	if (backup) {
+		if (liveExists && (await adapter.exists(path))) await adapter.remove(path);
+		await adapter.rename(backup, path);
+		for (const artifact of [...backups, ...temps]) {
+			if (artifact !== backup) await cleanup(adapter, artifact);
+		}
+		return 'restored-backup';
+	}
+
+	if (!liveExists) {
+		const temp = await newestValidText(adapter, temps, validate);
+		if (temp) {
+			await adapter.rename(temp, path);
+			for (const artifact of [...backups, ...temps]) {
+				if (artifact !== temp) await cleanup(adapter, artifact);
+			}
+			return 'committed-temp';
+		}
+	}
+	return 'unresolved';
+}
+
+async function newestValidBinary(
+	adapter: DataAdapter,
+	paths: string[],
+	validate: (bytes: ArrayBuffer) => Promise<void>,
+): Promise<string | null> {
+	for (const candidate of paths) {
+		try {
+			await validate(await adapter.readBinary(candidate));
+			return candidate;
+		} catch {
+			// Try an older transaction artifact.
+		}
+	}
+	return null;
+}
+
+export async function recoverInterruptedVaultBinary(
+	vault: Vault,
+	adapter: DataAdapter,
+	file: TFile,
+	dependentPath: string,
+	validate: (bytes: ArrayBuffer) => Promise<void>,
+): Promise<TransactionRecoveryStatus> {
+	const { backups, temps } = await transactionArtifacts(adapter, file.path);
+	if (backups.length === 0 && temps.length === 0) return 'none';
+
+	const backup = await newestValidBinary(adapter, backups, validate);
+	if (!backup) return 'unresolved';
+
+	let liveValid = true;
+	try {
+		await validate(await vault.readBinary(file));
+	} catch {
+		liveValid = false;
+	}
+	const dependentStillExists = await adapter.exists(dependentPath);
+	if (!liveValid || dependentStillExists) {
+		const recovery = await adapter.readBinary(backup);
+		await validate(recovery);
+		await vault.modifyBinary(file, recovery);
+		await validate(await vault.readBinary(file));
+		for (const artifact of [...backups, ...temps]) await cleanup(adapter, artifact);
+		return 'rolled-back';
+	}
+
+	for (const artifact of [...backups, ...temps]) await cleanup(adapter, artifact);
+	return 'finalized';
+}
+
 export async function transactionalWriteText(
 	adapter: DataAdapter,
 	path: string,
