@@ -136,3 +136,14 @@ describe('StrokeStore.rekeyDocumentPath', () => {
 		expect(store.forKey('other.pdf::1')[0]?.color).toBe('#other');
 	});
 });
+
+
+describe('StrokeStore merge snapshots', () => {
+	it('returns an immutable copy that is not changed by later store mutations', () => {
+		const store = new StrokeStore();
+		store.setForKey('a.pdf::1', [{ points: [{ x: 0.1, y: 0.2, pressure: 0.5 }], color: '#000000', width: 0.005, tool: 'pen', render: { version: 2, smoothing: 0.5, pressureSensitivity: 0.5 } }]);
+		const snapshot = store.snapshotFor('a.pdf');
+		store.forKey('a.pdf::1')[0]!.points[0]!.x = 0.9;
+		expect(snapshot.get(1)?.[0]?.points[0]?.x).toBe(0.1);
+	});
+});
