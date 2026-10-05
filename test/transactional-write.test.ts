@@ -55,6 +55,43 @@ function makeAdapter(initial: Record<string, string> = {}) {
 }
 
 describe('transaction recovery', () => {
+	it('preserves a distinct interrupted text backup when the canonical file is already valid', async () => {
+		const fs = makeAdapter({
+			'a.json': 'current',
+			'a.json.jot-backup-100-1': 'older but distinct',
+		});
+
+		const result = await recoverInterruptedTextWrite(
+			fs.adapter,
+			'a.json',
+			(candidate) => candidate.length > 0,
+		);
+
+		expect(result).toBe('preserved');
+		expect(fs.textFiles['a.json']).toBe('current');
+		expect(
+			Object.keys(fs.textFiles).some((path) =>
+				path.startsWith('a.json.recovery-jot-backup-100-1'),
+			),
+		).toBe(true);
+	});
+
+	it('cleans an interrupted text artifact only when it exactly duplicates the canonical file', async () => {
+		const fs = makeAdapter({
+			'a.json': 'same',
+			'a.json.jot-backup-100-1': 'same',
+		});
+
+		const result = await recoverInterruptedTextWrite(
+			fs.adapter,
+			'a.json',
+			(candidate) => candidate === 'same',
+		);
+
+		expect(result).toBe('cleaned');
+		expect(Object.keys(fs.textFiles)).toEqual(['a.json']);
+	});
+
 	it('restores a verified backup when an interrupted text transaction left the canonical path missing', async () => {
 		const fs = makeAdapter({
 			'a.json.jot-backup-100-1': 'old',
