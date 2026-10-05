@@ -33,6 +33,9 @@ export type JotNoteParseResult =
 
 const DEFAULT_PAGE_WIDTH = 1536;
 const DEFAULT_PAGE_HEIGHT = 2048;
+const MAX_PAGE_DIMENSION = 16_384;
+const MAX_NOTEBOOK_PAGES = 2_000;
+const MAX_STROKES_PER_PAGE = 50_000;
 
 export function createJotNote(): JotNoteFile {
 	return {
@@ -78,7 +81,12 @@ export function parseJotNoteTextResult(text: string): JotNoteParseResult {
 		};
 	}
 
-	if (!isRecord(raw) || raw.type !== 'notebook' || !Array.isArray(raw.pages)) {
+	if (
+		!isRecord(raw) ||
+		raw.type !== 'notebook' ||
+		!Array.isArray(raw.pages) ||
+		raw.pages.length > MAX_NOTEBOOK_PAGES
+	) {
 		return {
 			ok: false,
 			reason: 'invalid-schema',
@@ -134,8 +142,15 @@ function parsePage(value: unknown, index: number): JotNotePage | null {
 	if (id.length > 128 || id.includes('::')) return null;
 	const width = value.width === undefined ? DEFAULT_PAGE_WIDTH : value.width;
 	const height = value.height === undefined ? DEFAULT_PAGE_HEIGHT : value.height;
-	if (!finitePositive(width) || !finitePositive(height)) return null;
-	if (!Array.isArray(value.strokes)) return null;
+	if (
+		!finitePositive(width) ||
+		!finitePositive(height) ||
+		width > MAX_PAGE_DIMENSION ||
+		height > MAX_PAGE_DIMENSION
+	) {
+		return null;
+	}
+	if (!Array.isArray(value.strokes) || value.strokes.length > MAX_STROKES_PER_PAGE) return null;
 
 	const strokes: Stroke[] = [];
 	for (const rawStroke of value.strokes) {
