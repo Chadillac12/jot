@@ -104,7 +104,8 @@ export async function recoverInterruptedVaultBinary(
 	if (backups.length === 0) return 'none';
 
 	const backupPath = backups[0]!;
-	if (await adapter.exists(dependentPath)) {
+	const dependentBackups = await transactionArtifacts(adapter, dependentPath, 'jot-backup');
+	if ((await adapter.exists(dependentPath)) || dependentBackups.length > 0) {
 		const recovery = await adapter.readBinary(backupPath);
 		await validate(recovery);
 		await vault.modifyBinary(file, recovery);
@@ -179,6 +180,61 @@ export async function transactionalWriteText(
 				throw new AggregateError(
 					[error, restoreError],
 					`Write failed and rollback also failed for ${path}`,
+				);
+			}
+		}
+		throw error;
+	}
+}
+
+/**
+ * Remove a text file only if the exact file moved out of the authoritative
+ * path still matches the caller's verified baseline. Renaming first closes the
+ * read-then-remove race: a synced replacement that appears afterward remains
+ * at the canonical path and is never deleted.
+ */
+export async function transactionalRemoveTextExpected(
+	adapter: DataAdapter,
+	path: string,
+	expectedCurrent: string | null,
+): Promise<void> {
+	if (expectedCurrent === null) {
+		if (await adapter.exists(path)) throw new TransactionConflictError(path);
+		return;
+	}
+
+	const id = transactionId();
+	const backupPath = `${path}.jot-backup-${id}`;
+	const conflictPath = `${path}.conflict-${id}.json`;
+	let moved = false;
+
+	try {
+		if (!(await adapter.exists(path))) throw new TransactionConflictError(path);
+		await adapter.rename(path, backupPath);
+		moved = true;
+
+		const movedText = await adapter.read(backupPath);
+		if (movedText !== expectedCurrent) throw new TransactionConflictError(path);
+
+		// The exact baseline is now quarantined. If a synced replacement arrived
+		// after the rename, it lives at path and is left untouched.
+		await adapter.remove(backupPath);
+		moved = false;
+	} catch (error) {
+		if (moved) {
+			try {
+				if (!(await adapter.exists(path))) {
+					await adapter.rename(backupPath, path);
+				} else if (await adapter.exists(backupPath)) {
+					// A newer canonical file appeared while the old one was
+					// quarantined. Preserve both instead of overwriting either.
+					await adapter.rename(backupPath, conflictPath);
+				}
+				moved = false;
+			} catch (restoreError) {
+				throw new AggregateError(
+					[error, restoreError],
+					`Delete conflict for ${path} could not be safely rolled back. Quarantined data may remain at ${backupPath}`,
 				);
 			}
 		}
