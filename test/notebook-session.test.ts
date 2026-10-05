@@ -184,3 +184,30 @@ describe('Notebook conflict resolution', () => {
 		expect(expectedSeen).toBe(external);
 	});
 });
+
+
+describe('Notebook save failure recovery', () => {
+	it('keeps failed notebook writes dirty and allows a later retry to succeed', async () => {
+		const manager = new NotebookSessionManager(new DocumentSessionManager());
+		const session = manager.get('Lecture.jot');
+		session.load(serializeJotNote(createJotNote()));
+		session.markDirty();
+
+		expect(
+			await session.save(async () => {
+				throw new Error('injected notebook write failure');
+			}),
+		).toBe(false);
+		expect(session.state.state).toBe('error');
+		expect(session.state.isDirty).toBe(true);
+
+		let wrote = false;
+		expect(
+			await session.save(async () => {
+				wrote = true;
+			}),
+		).toBe(true);
+		expect(wrote).toBe(true);
+		expect(session.state.state).toBe('clean');
+	});
+});
