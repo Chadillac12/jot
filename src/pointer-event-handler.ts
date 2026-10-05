@@ -17,7 +17,7 @@ import { INK_KEY_ATTR, type InkSaveScheduler, type InkSurfaceController } from '
 import { PenStrokeState } from './pen-stroke-state';
 import { ERASE_RADIUS, strokeIntersects } from './stroke-math';
 import type { NormalizedPoint, Stroke } from './stroke-math';
-import { drawStroke } from './stroke-render';
+import { currentInkRenderProfile, drawStroke } from './stroke-render';
 import type { StrokeStore } from './stroke-store';
 import { TwoFingerHoldDetector } from './two-finger-hold';
 import type { UndoController } from './undo-controller';
@@ -451,7 +451,13 @@ export class PointerEventHandler {
 		this.deps.overlays.clearLivePage(this.canvas);
 		drawStroke(
 			this.ctx,
-			{ points, color: tool.color, width: tool.width, tool: tool.tool },
+			{
+				points,
+				color: tool.color,
+				width: tool.width,
+				tool: tool.tool,
+				render: currentInkRenderProfile(),
+			},
 			surface,
 		);
 	}
@@ -486,6 +492,7 @@ export class PointerEventHandler {
 				color: tool.color,
 				width: tool.width,
 				tool: tool.tool,
+				render: currentInkRenderProfile(),
 			};
 			this.deps.strokes.appendToKey(key, stroke);
 			if (pdfPath) this.deps.sidecar.scheduleSave(pdfPath);
