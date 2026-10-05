@@ -9,7 +9,16 @@ import {
 import { StrokeStore } from './stroke-store';
 import { UndoHistory } from './undo';
 
-export type NotebookSessionChange = 'ink' | 'structure' | 'reload' | 'rename';
+export type NotebookSessionChange = 'ink' | 'structure' | 'reload' | 'rename' | 'save-error' | 'conflict';
+
+export class NotebookExternalConflictError extends Error {
+	constructor() {
+		super('Notebook changed on disk while local handwriting was unsaved.');
+		this.name = 'NotebookExternalConflictError';
+	}
+}
+
+export type NotebookSaveWriter = (expectedData: string, nextData: string) => Promise<void>;
 
 export class NotebookDocumentSession {
 	readonly strokes = new StrokeStore();
@@ -19,6 +28,7 @@ export class NotebookDocumentSession {
 	private loadErrorValue: string | null = null;
 	private persistedDataValue = '';
 	private listeners = new Set<(change: NotebookSessionChange) => void>();
+	private saveChain: Promise<boolean> = Promise.resolve(true);
 
 	constructor(
 		private stateSession: DocumentSession,
@@ -55,6 +65,7 @@ export class NotebookDocumentSession {
 			this.stateSession.markConflict(
 				'Notebook changed on disk while local handwriting was unsaved.',
 			);
+			this.emit('conflict');
 			return 'conflict';
 		}
 
@@ -103,19 +114,42 @@ export class NotebookDocumentSession {
 		this.emit(change);
 	}
 
-	beginSave(): number | null {
-		if (this.loadErrorValue || this.stateSession.state === 'conflict') return null;
-		return this.stateSession.beginSave();
+	async save(writer: NotebookSaveWriter): Promise<boolean> {
+		const previous = this.saveChain;
+		const current = previous.then(
+			() => this.performSave(writer),
+			() => this.performSave(writer),
+		);
+		this.saveChain = current;
+		try {
+			return await current;
+		} finally {
+			if (this.saveChain === current) this.saveChain = Promise.resolve(true);
+		}
 	}
 
-	completeSave(revision: number, data: string): void {
-		this.persistedDataValue = data;
-		this.rawDataValue = data;
-		this.stateSession.completeSave(revision);
-	}
-
-	failSave(error: unknown): void {
-		this.stateSession.failSave(error);
+	private async performSave(writer: NotebookSaveWriter): Promise<boolean> {
+		if (this.loadErrorValue || this.stateSession.state === 'conflict') return false;
+		const revision = this.stateSession.beginSave();
+		if (revision === null) return true;
+		const serialized = this.serialize();
+		const expectedData = this.persistedDataValue;
+		try {
+			await writer(expectedData, serialized);
+			this.persistedDataValue = serialized;
+			this.rawDataValue = serialized;
+			this.stateSession.completeSave(revision);
+			return true;
+		} catch (error) {
+			if (error instanceof NotebookExternalConflictError) {
+				this.stateSession.markConflict(error.message);
+				this.emit('conflict');
+				return false;
+			}
+			this.stateSession.failSave(error);
+			this.emit('save-error');
+			return false;
+		}
 	}
 
 	resolveConflictKeepLocal(): void {
