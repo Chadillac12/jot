@@ -1,9 +1,14 @@
 import { App, DataAdapter, Notice, TFile } from 'obsidian';
 import { PDFDocument } from 'pdf-lib';
 import { ExportChoiceModal } from './merge';
+import { jotPathFor } from './jot-file';
 import { drawStrokesOnPdfPage } from './pdf-render';
 import type { SidecarLoadStatus, SidecarStore } from './sidecar-store';
-import { transactionalModifyVaultBinary, transactionalWriteBinary } from './transactional-write';
+import {
+	recoverInterruptedVaultBinary,
+	transactionalModifyVaultBinary,
+	transactionalWriteBinary,
+} from './transactional-write';
 import type { Stroke } from './stroke-math';
 import type { StrokeStore } from './stroke-store';
 import type { UndoHistory } from './undo';
@@ -28,6 +33,26 @@ export class MergeService {
 		private history: UndoHistory,
 		private callbacks: MergeServiceCallbacks,
 	) {}
+
+	async recoverInterruptedOverwrite(pdfPath: string): Promise<void> {
+		const file = this.app.vault.getAbstractFileByPath(pdfPath);
+		if (!(file instanceof TFile)) return;
+		const outcome = await recoverInterruptedVaultBinary(
+			this.app.vault,
+			this.adapter,
+			file,
+			async (candidate) => {
+				await PDFDocument.load(candidate);
+			},
+			jotPathFor(pdfPath),
+		);
+		if (outcome === 'rolled-back') {
+			new Notice(
+				'Jot: recovered an interrupted PDF overwrite and restored the original PDF before loading its annotations.',
+				8000,
+			);
+		}
+	}
 
 	async start(pdfPath: string): Promise<void> {
 		if (!(await this.sidecar.flush(pdfPath))) {
