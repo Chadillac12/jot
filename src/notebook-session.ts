@@ -1,4 +1,4 @@
-import type { DocumentSession, DocumentSessionManager, SaveToken } from './document-session';
+import type { DocumentSession, DocumentSessionManager, LoadToken, SaveToken } from './document-session';
 import { documentPageKey } from './jot-file';
 import {
 	createJotNote,
@@ -71,17 +71,26 @@ export class NotebookSession {
 			this.notify('state');
 			return 'conflict';
 		}
-		if (!this.lifecycle.beginLoad()) return 'conflict';
+		const loadToken = this.lifecycle.beginLoad();
+		if (!loadToken) return 'conflict';
 
 		const parsed = parseJotNoteTextResult(text);
 		if (!parsed.ok) {
 			this.rawDataValue = text;
 			this.loadErrorValue = parsed.message;
-			this.lifecycle.failLoad(new Error(parsed.message));
+			this.lifecycle.failLoad(loadToken, new Error(parsed.message));
 			this.notify('load');
 			return 'error';
 		}
 
+		if (!this.lifecycle.completeLoad(loadToken)) {
+			this.externalConflictDataValue = text;
+			this.lifecycle.markConflict(
+				new Error('Notebook changed locally while disk data was being loaded'),
+			);
+			this.notify('state');
+			return 'conflict';
+		}
 		this.applyParsed(parsed, text);
 		return 'loaded';
 	}
@@ -209,7 +218,6 @@ export class NotebookSession {
 			this.strokes.setForKey(documentPageKey(this.path, page.id), [...page.strokes]);
 		}
 		this.history.dropPath(this.path);
-		this.lifecycle.completeLoad();
 		this.notify('load');
 	}
 }
