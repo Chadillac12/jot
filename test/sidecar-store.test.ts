@@ -176,6 +176,32 @@ describe('SidecarStore concurrency and failure handling', () => {
 		expect(store.hasPendingSave('a.pdf')).toBe(true);
 	});
 
+	it('preserves an unobserved external disk change before saving local dirty ink', async () => {
+		const fs = makeFs({ 'a.pdf.jot.json': validPayload });
+		const strokes = new StrokeStore();
+		const store = new SidecarStore(fs.adapter, strokes);
+		expect(await store.load('a.pdf')).toBe('loaded');
+
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.2, y: 0.2, pressure: 0.5 }], color: '#0000ff', width: 0.005, tool: 'pen' },
+		]);
+		store.scheduleSave('a.pdf');
+		const remote = JSON.stringify({
+			version: JOT_FORMAT_VERSION,
+			pages: { '1': [{ points: [{ x: 0.8, y: 0.8, pressure: 0.5 }], color: '#ff0000', width: 0.005, tool: 'pen' }] },
+		});
+		fs.files['a.pdf.jot.json'] = remote;
+
+		expect(await store.flush('a.pdf')).toBe(true);
+		const conflictPath = Object.keys(fs.files).find((path) =>
+			path.startsWith('a.pdf.jot.json.conflict-'),
+		);
+		expect(conflictPath).toBeDefined();
+		expect(conflictPath ? fs.files[conflictPath] : undefined).toBe(remote);
+		expect(fs.files['a.pdf.jot.json']).toContain('#0000ff');
+		expect(store.getPersistedBaseline('a.pdf')).toBe(fs.files['a.pdf.jot.json']);
+	});
+
 	it('keeps a newer edit dirty when it arrives during an in-flight save', async () => {
 		const fs = makeFs();
 		const strokes = new StrokeStore();
@@ -610,6 +636,22 @@ describe('SidecarStore.discard', () => {
 		const store = new SidecarStore(fs.adapter, new StrokeStore());
 		await store.discard('a.pdf');
 		expect(fs.files['a.pdf.jot.json']).toBeUndefined();
+	});
+
+	it('refuses destructive discard if the sidecar changed after the caller captured its baseline', async () => {
+		const fs = makeFs({ 'a.pdf.jot.json': validPayload });
+		const store = new SidecarStore(fs.adapter, new StrokeStore());
+		expect(await store.load('a.pdf')).toBe('loaded');
+		const baseline = store.getPersistedBaseline('a.pdf');
+		expect(baseline).toBe(validPayload);
+
+		const remote = JSON.stringify({ version: JOT_FORMAT_VERSION, pages: { '2': [] } });
+		fs.files['a.pdf.jot.json'] = remote;
+
+		await expect(store.discard('a.pdf', baseline)).rejects.toThrow(
+			'changed during the protected operation',
+		);
+		expect(fs.files['a.pdf.jot.json']).toBe(remote);
 	});
 
 	it('refuses to discard authoritative data when a dirty flush fails', async () => {
