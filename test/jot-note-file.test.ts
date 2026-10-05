@@ -26,6 +26,7 @@ describe('Jot note file format', () => {
 			tool: 'pen',
 			color: '#123456',
 			width: 0.0025,
+			render: { version: 2, smoothing: 0.5, pressureSensitivity: 0.5 },
 			points: [
 				{ x: 0.1, y: 0.2, pressure: 0.3 },
 				{ x: 0.4, y: 0.5, pressure: 0.8 },
