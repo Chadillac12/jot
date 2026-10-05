@@ -141,6 +141,54 @@ describe('SidecarStore concurrency and failure handling', () => {
 		expect(strokes.forPage('a.pdf', 1)[0]?.color).toBe('#0000ff');
 	});
 
+	it('keeps local ink when an edit arrives during an in-flight reload', async () => {
+		vi.useFakeTimers();
+		const remote = JSON.stringify({
+			version: JOT_FORMAT_VERSION,
+			pages: {
+				'1': [
+					{ points: [{ x: 0.9, y: 0.9, pressure: 0.5 }], color: '#ff0000', width: 0.005, tool: 'pen' },
+				],
+			},
+		});
+		const fs = makeFs({ 'a.pdf.jot.json': validPayload });
+		const sessions = new DocumentSessionManager();
+		const strokes = new StrokeStore();
+		const store = new SidecarStore(fs.adapter, strokes, sessions);
+		expect(await store.load('a.pdf')).toBe('loaded');
+
+		let releaseRead!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			releaseRead = resolve;
+		});
+		let blockNextRead = true;
+		const originalRead = vi.mocked(fs.adapter.read).getMockImplementation()!;
+		vi.mocked(fs.adapter.read).mockImplementation(async (path: string) => {
+			if (blockNextRead && path === 'a.pdf.jot.json') {
+				blockNextRead = false;
+				await gate;
+			}
+			return originalRead(path);
+		});
+		fs.files['a.pdf.jot.json'] = remote;
+
+		const reload = store.load('a.pdf');
+		await Promise.resolve();
+		await Promise.resolve();
+
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.1, y: 0.1, pressure: 0.5 }], color: '#0000ff', width: 0.005, tool: 'pen' },
+		]);
+		store.scheduleSave('a.pdf');
+		releaseRead();
+
+		expect(await reload).toBe('dirty');
+		expect(strokes.forPage('a.pdf', 1)[0]?.color).toBe('#0000ff');
+		expect(sessions.get('a.pdf').isDirty).toBe(true);
+		vi.clearAllTimers();
+		vi.useRealTimers();
+	});
+
 	it('keeps a newer edit dirty when it arrives during an in-flight save', async () => {
 		const fs = makeFs();
 		const strokes = new StrokeStore();
