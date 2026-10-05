@@ -90,7 +90,7 @@ export class JotNoteView extends TextFileView {
 			return;
 		}
 
-		if (session.state.state === 'conflict') {
+		if (session.state.snapshot().state === 'conflict') {
 			this.renderConflict();
 			return;
 		}
