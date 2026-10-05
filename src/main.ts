@@ -380,7 +380,7 @@ export default class JotPlugin extends Plugin {
 		const success = await session.save(async (expectedData, nextData) => {
 			await this.app.vault.process(file, (currentData) => {
 				if (currentData !== expectedData && currentData !== nextData) {
-					throw new NotebookExternalConflictError();
+					throw new NotebookExternalConflictError(currentData);
 				}
 				return nextData;
 			});
