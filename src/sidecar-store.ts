@@ -1,5 +1,5 @@
 import type { DataAdapter } from 'obsidian';
-import type { DocumentSessionManager } from './document-session';
+import { DocumentSessionManager } from './document-session';
 import { isSupportedVersion, jotPathFor, parseJotText } from './jot-file';
 import type { StrokeStore } from './stroke-store';
 
@@ -30,7 +30,7 @@ export class SidecarStore {
 	constructor(
 		private adapter: DataAdapter,
 		private strokes: StrokeStore,
-		private sessions: DocumentSessionManager,
+		private sessions: DocumentSessionManager = new DocumentSessionManager(),
 		private callbacks: SidecarStoreCallbacks = {},
 	) {}
 
@@ -192,6 +192,11 @@ export class SidecarStore {
 		if (Date.now() - writtenAt >= SELF_SAVE_SUPPRESS_MS) return false;
 		this.recentSelfSaves.delete(path);
 		return true;
+	}
+
+	/** @deprecated Use flushAll(); retained while older callers migrate. */
+	async cancelAllPending(): Promise<boolean> {
+		return this.flushAll();
 	}
 
 	async discard(pdfPath: string): Promise<boolean> {
