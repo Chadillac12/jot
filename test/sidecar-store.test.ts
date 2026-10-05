@@ -542,6 +542,30 @@ describe('SidecarStore.renamePdfPath', () => {
 		expect(fs.files['New/Notes.pdf.jot.json']).toBe(validPayload);
 	});
 
+	it('preserves a synced source replacement that arrives during rename cleanup', async () => {
+		const fs = makeFs({ 'Old/Notes.pdf.jot.json': validPayload });
+		const store = new SidecarStore(fs.adapter, new StrokeStore());
+		const remote = JSON.stringify({ version: JOT_FORMAT_VERSION, pages: { '9': [] } });
+		const originalRename = vi.mocked(fs.adapter.rename).getMockImplementation()!;
+		let injected = false;
+		vi.mocked(fs.adapter.rename).mockImplementation(async (oldPath: string, newPath: string) => {
+			await originalRename(oldPath, newPath);
+			if (
+				!injected &&
+				oldPath === 'Old/Notes.pdf.jot.json' &&
+				newPath.includes('.jot-backup-')
+			) {
+				injected = true;
+				fs.files['Old/Notes.pdf.jot.json'] = remote;
+			}
+		});
+
+		await store.renamePdfPath('Old/Notes.pdf', 'New/Notes.pdf');
+
+		expect(fs.files['New/Notes.pdf.jot.json']).toBe(validPayload);
+		expect(fs.files['Old/Notes.pdf.jot.json']).toBe(remote);
+	});
+
 	it('preserves an unexpected destination sidecar before replacing it', async () => {
 		const existingDestination = JSON.stringify({ version: JOT_FORMAT_VERSION, pages: { '2': [] } });
 		const fs = makeFs({
@@ -742,6 +766,17 @@ describe('SidecarStore.discard', () => {
 		const store = new SidecarStore(fs.adapter, new StrokeStore());
 		await store.discard('a.pdf');
 		expect(fs.files['a.pdf.jot.json']).toBeUndefined();
+	});
+
+	it('refuses to discard a sidecar that changed after its clean baseline was loaded', async () => {
+		const fs = makeFs({ 'a.pdf.jot.json': validPayload });
+		const store = new SidecarStore(fs.adapter, new StrokeStore());
+		expect(await store.load('a.pdf')).toBe('loaded');
+		const remote = JSON.stringify({ version: JOT_FORMAT_VERSION, pages: { '3': [] } });
+		fs.files['a.pdf.jot.json'] = remote;
+
+		await expect(store.discard('a.pdf')).rejects.toThrow('authoritative file changed');
+		expect(fs.files['a.pdf.jot.json']).toBe(remote);
 	});
 
 	it('refuses to discard authoritative data when a dirty flush fails', async () => {
