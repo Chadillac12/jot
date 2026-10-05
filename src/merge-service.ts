@@ -128,7 +128,7 @@ export class MergeService {
 				file,
 				buffer,
 				validatePdf,
-				async () => this.sidecar.discard(pdfPath, expectedSidecar),
+				async () => this.sidecar.claimDiscard(pdfPath, expectedSidecar),
 			);
 		} else {
 			await transactionalWriteBinary(this.adapter, outPath, buffer, validatePdf);
