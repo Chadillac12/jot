@@ -53,7 +53,7 @@ export class MergeService {
 			);
 		} else if (outcome === 'external-preserved') {
 			new Notice(
-				'Jot: found an interrupted PDF overwrite, but the current PDF no longer matched Jot’s recorded replacement. The current PDF was preserved and the pre-merge backup was kept as a recovery copy.',
+				'Jot: found an interrupted PDF overwrite, but the current PDF no longer matched the recorded replacement. The current PDF was preserved and the pre-merge backup was kept as a recovery copy.',
 				10000,
 			);
 		}
