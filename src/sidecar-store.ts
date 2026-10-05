@@ -65,7 +65,7 @@ export class SidecarStore {
 			session.completeLoad();
 			return 'loaded';
 		} catch (error) {
-			session.failSave(error);
+			session.failLoad(error);
 			console.error(`${PLUGIN_LOG} load failed for ${path}:`, error);
 			return 'error';
 		}
