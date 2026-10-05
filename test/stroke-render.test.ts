@@ -5,6 +5,8 @@ import {
 	drawHighlighterPolyline,
 	drawSegment,
 	drawStroke,
+	penOutline,
+	setInkRenderTuning,
 } from '../src/stroke-render';
 
 const point = (x: number, y: number, pressure = 1): NormalizedPoint => ({ x, y, pressure });
@@ -161,5 +163,18 @@ describe('drawStroke', () => {
 			dpr: 2,
 		});
 		expect(ctx.setTransform).toHaveBeenCalledWith(2, 0, 0, 2, 0, 0);
+	});
+});
+
+
+describe('persisted render profiles', () => {
+	it('produce identical outlines even when current global settings change', () => {
+		const points = [point(0, 0, 0.2), point(0.5, 0.7, 0.8), point(1, 1, 0.4)];
+		const profile = { version: 2 as const, smoothing: 0.35, pressureSensitivity: 0.7 };
+		setInkRenderTuning({ smoothing: 0, pressureSensitivity: 0 });
+		const first = penOutline(points, 0.01, { width: 800, height: 600 }, profile);
+		setInkRenderTuning({ smoothing: 1, pressureSensitivity: 1 });
+		const second = penOutline(points, 0.01, { width: 800, height: 600 }, profile);
+		expect(second).toEqual(first);
 	});
 });
