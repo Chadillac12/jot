@@ -241,11 +241,10 @@ export class PointerEventHandler {
 			return;
 		}
 		if (this.activePointerId !== e.pointerId) return;
-		if (!this.canEditCurrentDocument()) {
-			this.onCancel(e);
-			return;
-		}
 
+		// Cancellation is cleanup, not a mutation. It must always be allowed to
+		// unwind an active gesture even if an exclusive operation acquired the
+		// document lock after pointerdown.
 		if (e.pointerType === 'mouse') this.longPress.cancel();
 		if (
 			e.pointerType === 'pen' &&
@@ -284,6 +283,11 @@ export class PointerEventHandler {
 			return;
 		}
 		if (this.activePointerId !== e.pointerId) return;
+		if (!this.canEditCurrentDocument()) {
+			this.onCancel(e);
+			e.preventDefault();
+			return;
+		}
 
 		if (
 			e.pointerType === 'pen' &&
