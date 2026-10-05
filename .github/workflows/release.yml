@@ -58,6 +58,7 @@ jobs:
               with:
                   subject-path: |
                       main.js
+                      manifest.json
                       ${{ steps.styles.outputs.exists == 'true' && 'styles.css' || '' }}
 
             - name: Create release
@@ -69,13 +70,16 @@ jobs:
                   assets=(main.js manifest.json ${{ steps.styles.outputs.exists == 'true' && 'styles.css' || '' }})
 
                   if gh release view "$tag" >/dev/null 2>&1; then
-                    gh release upload "$tag" "${assets[@]}" --clobber
-                  elif [[ "$GITHUB_REF" == refs/heads/release/* ]]; then
+                    echo "Release '$tag' already exists. Released versions are immutable; bump the version instead." >&2
+                    exit 1
+                  fi
+
+                  if [[ "$GITHUB_REF" == refs/heads/release/* ]]; then
                     gh release create "$tag" \
                       --target "$GITHUB_SHA" \
                       --title "$tag" \
                       --prerelease \
-                      --notes "Jot Ink Engine v2 BRAT test build." \
+                      --notes "Jot architecture-hardening BRAT test build." \
                       "${assets[@]}"
                   else
                     gh release create "$tag" --title="$tag" --draft "${assets[@]}"
