@@ -664,7 +664,7 @@ describe('SidecarStore.discard', () => {
 		fs.files['a.pdf.jot.json'] = remote;
 
 		await expect(store.discard('a.pdf', baseline)).rejects.toThrow(
-			'changed during the protected operation',
+			'protected baseline',
 		);
 		expect(fs.files['a.pdf.jot.json']).toBe(remote);
 	});
