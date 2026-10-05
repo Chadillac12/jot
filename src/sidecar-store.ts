@@ -61,10 +61,7 @@ export class SidecarStore {
 			await recoverInterruptedTextWrite(
 				this.adapter,
 				path,
-				(candidate) => {
-					const parsed = parseJotText(candidate);
-					return parsed !== null && isSupportedVersion(parsed.version);
-				},
+				(candidate) => parseJotText(candidate) !== null,
 			);
 			if (!(await this.adapter.exists(path))) {
 				if (!session.completeLoad(loadToken)) return 'dirty';
