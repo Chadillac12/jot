@@ -33,6 +33,7 @@ export type JotNoteParseResult =
 
 const DEFAULT_PAGE_WIDTH = 1536;
 const DEFAULT_PAGE_HEIGHT = 2048;
+const MAX_PAGE_DIMENSION = 100_000;
 
 export function createJotNote(): JotNoteFile {
 	return {
@@ -148,7 +149,12 @@ function parsePage(value: unknown, index: number): JotNotePage | null {
 }
 
 function finitePositive(value: unknown): value is number {
-	return typeof value === 'number' && Number.isFinite(value) && value > 0;
+	return (
+		typeof value === 'number' &&
+		Number.isFinite(value) &&
+		value > 0 &&
+		value <= MAX_PAGE_DIMENSION
+	);
 }
 
 function isPaperStyle(value: unknown): value is JotPaperStyle {
