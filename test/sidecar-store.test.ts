@@ -648,6 +648,43 @@ describe('SidecarStore.isOwnRecentSave', () => {
 	});
 });
 
+describe('SidecarStore guarded discard', () => {
+	it('refuses destructive cleanup if the sidecar changed after the merge baseline was captured', async () => {
+		const fs = makeFs({ 'a.pdf.jot.json': validPayload });
+		const strokes = new StrokeStore();
+		const store = new SidecarStore(fs.adapter, strokes);
+		expect(await store.load('a.pdf')).toBe('loaded');
+		const baseline = store.captureBaseline('a.pdf');
+
+		const remote = JSON.stringify({
+			version: JOT_FORMAT_VERSION,
+			pages: {
+				'1': [
+					{ points: [{ x: 0.7, y: 0.7, pressure: 0.5 }], color: '#ff0000', width: 0.005, tool: 'pen' },
+				],
+			},
+		});
+		fs.files['a.pdf.jot.json'] = remote;
+
+		await expect(store.discardIfBaselineUnchanged('a.pdf', baseline)).rejects.toThrow(
+			'authoritative file changed',
+		);
+		expect(fs.files['a.pdf.jot.json']).toBe(remote);
+	});
+
+	it('removes the sidecar only when it still matches the captured baseline', async () => {
+		const fs = makeFs({ 'a.pdf.jot.json': validPayload });
+		const store = new SidecarStore(fs.adapter, new StrokeStore());
+		expect(await store.load('a.pdf')).toBe('loaded');
+		const baseline = store.captureBaseline('a.pdf');
+
+		await store.discardIfBaselineUnchanged('a.pdf', baseline);
+
+		expect(fs.files['a.pdf.jot.json']).toBeUndefined();
+	});
+
+});
+
 describe('SidecarStore.discard', () => {
 	it('removes the sidecar file when it exists', async () => {
 		const fs = makeFs({ 'a.pdf.jot.json': validPayload });
