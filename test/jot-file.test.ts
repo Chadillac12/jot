@@ -81,6 +81,28 @@ describe('parseJotText', () => {
 		).toBeNull();
 	});
 
+	it('rejects pathological finite coordinates but allows modest out-of-bounds ink', () => {
+		const pathological = {
+			version: JOT_FORMAT_VERSION,
+			pages: {
+				'1': [
+					{ points: [{ x: 17, y: 0.5, pressure: 0.5 }], color: '#000000', width: 0.005, tool: 'pen' },
+				],
+			},
+		};
+		expect(parseJotText(JSON.stringify(pathological))).toBeNull();
+
+		const modest = {
+			...pathological,
+			pages: {
+				'1': [
+					{ points: [{ x: 1.25, y: -0.25, pressure: 0.5 }], color: '#000000', width: 0.005, tool: 'pen' },
+				],
+			},
+		};
+		expect(parseJotText(JSON.stringify(modest))).not.toBeNull();
+	});
+
 	it('returns the parsed payload for a valid sidecar file', () => {
 		const result = parseJotText(JSON.stringify({ version: 2, pages: { '1': [] } }));
 		expect(result).toEqual({ version: 2, pages: { '1': [] } });
