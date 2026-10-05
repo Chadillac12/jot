@@ -234,6 +234,7 @@ export default class JotPlugin extends Plugin {
 	}
 
 	private async ensureLoaded(pdfPath: string) {
+		await this.merge?.recoverInterruptedOverwrite(pdfPath);
 		const status = await this.sidecar.load(pdfPath);
 		if (status === 'dirty') return status;
 		if (status === 'protected') {
