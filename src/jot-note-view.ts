@@ -72,31 +72,32 @@ export class JotNoteView extends TextFileView {
 
 	override async save(clear = false): Promise<void> {
 		const session = this.session;
-		if (!session) {
+		const file = this.file;
+		if (!session || !file) {
 			await super.save(clear);
 			return;
 		}
 		if (session.state.state === 'conflict') {
 			new Notice('Jot: notebook save blocked because an external edit conflicts with unsaved ink.');
+			this.renderConflict();
 			return;
 		}
-		const revision = session.beginSave();
-		if (revision === null) {
-			await super.save(clear);
+
+		const success = await this.plugin.saveNotebookSession(file, session);
+		if (success) {
+			this.data = session.rawData;
+			if (clear) this.clear();
 			return;
 		}
-		const serialized = session.serialize();
-		try {
-			await super.save(clear);
-			session.completeSave(revision, serialized);
-		} catch (error) {
-			session.failSave(error);
-			new Notice(
-				`Jot: notebook save failed. Changes remain dirty and can be retried: ${error instanceof Error ? error.message : String(error)}`,
-				8000,
-			);
-			throw error;
+
+		if (session.state.state === 'conflict') {
+			this.renderConflict();
+			return;
 		}
+		new Notice(
+			'Jot: notebook save failed. Changes remain dirty and jot will retry automatically.',
+			8000,
+		);
 	}
 
 	clear(): void {
@@ -153,6 +154,11 @@ export class JotNoteView extends TextFileView {
 	private onSessionChange(change: NotebookSessionChange): void {
 		if (change === 'ink') {
 			this.surface?.redrawAll();
+			return;
+		}
+		if (change === 'save-error') return;
+		if (change === 'conflict') {
+			this.renderConflict();
 			return;
 		}
 		this.render();
