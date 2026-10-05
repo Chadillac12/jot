@@ -194,6 +194,11 @@ export class SidecarStore {
 		return allSaved;
 	}
 
+	async shutdown(): Promise<boolean> {
+		this.shuttingDown = true;
+		return this.flushAll();
+	}
+
 	hasPendingSave(pdfPath: string): boolean {
 		return this.sessions.get(pdfPath).isDirty || this.saveTimers.has(pdfPath);
 	}
