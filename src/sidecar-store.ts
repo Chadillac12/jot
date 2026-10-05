@@ -7,7 +7,7 @@ import {
 	parseJotText,
 } from './jot-file';
 import type { StrokeStore } from './stroke-store';
-import { transactionalWriteText } from './transactional-write';
+import { recoverInterruptedTextWrite, transactionalWriteText } from './transactional-write';
 
 const SAVE_DEBOUNCE_MS = 750;
 const RETRY_DELAY_MS = 2000;
@@ -57,6 +57,14 @@ export class SidecarStore {
 
 		const path = jotPathFor(pdfPath);
 		try {
+			await recoverInterruptedTextWrite(
+				this.adapter,
+				path,
+				(candidate) => {
+					const parsed = parseJotText(candidate);
+					return parsed !== null && isSupportedVersion(parsed.version);
+				},
+			);
 			if (!(await this.adapter.exists(path))) {
 				if (!session.completeLoad(loadToken)) return 'dirty';
 				this.protectedOriginals.delete(pdfPath);
