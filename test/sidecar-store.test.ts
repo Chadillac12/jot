@@ -10,12 +10,14 @@ interface FileSystem {
 	adapter: DataAdapter;
 	failNextWrite: () => void;
 	failNextCommitRename: () => void;
+	failNextSidecarRename: () => void;
 }
 
 const makeFs = (initial: Record<string, string> = {}): FileSystem => {
 	const files: Record<string, string> = { ...initial };
 	let failWrite = false;
 	let failCommitRename = false;
+	let failSidecarRename = false;
 	const adapter = {
 		exists: vi.fn(async (path: string) => path in files),
 		read: vi.fn(async (path: string) => files[path] ?? ''),
@@ -30,6 +32,10 @@ const makeFs = (initial: Record<string, string> = {}): FileSystem => {
 			delete files[path];
 		}),
 		rename: vi.fn(async (oldPath: string, newPath: string) => {
+			if (failSidecarRename && oldPath.endsWith('.pdf.jot.json')) {
+				failSidecarRename = false;
+				throw new Error('injected sidecar rename failure');
+			}
 			if (failCommitRename && oldPath.endsWith('.jot-tmp')) {
 				failCommitRename = false;
 				throw new Error('injected commit rename failure');
@@ -46,6 +52,9 @@ const makeFs = (initial: Record<string, string> = {}): FileSystem => {
 		},
 		failNextCommitRename: () => {
 			failCommitRename = true;
+		},
+		failNextSidecarRename: () => {
+			failSidecarRename = true;
 		},
 	};
 };
@@ -220,5 +229,28 @@ describe('SidecarStore conflicts and recovery', () => {
 		expect(recovery ? h.fs.files[recovery] : undefined).toBe(original);
 		expect(h.fs.files['a.pdf.jot.json']).toContain('#00ff00');
 		warn.mockRestore();
+	});
+});
+
+
+describe('SidecarStore rename failure containment', () => {
+	it('keeps session identity on the new PDF path and retries persistence after sidecar move failure', async () => {
+		vi.useFakeTimers();
+		try {
+			const h = makeStore(makeFs({ 'Old/a.pdf.jot.json': validPayload }));
+			await h.store.load('Old/a.pdf');
+			h.strokes.rekeyDocumentPath('Old/a.pdf', 'New/a.pdf');
+			h.fs.failNextSidecarRename();
+
+			expect(await h.store.renamePdfPath('Old/a.pdf', 'New/a.pdf')).toBe(false);
+			expect(h.sessions.peek('Old/a.pdf')).toBeNull();
+			expect(h.sessions.get('New/a.pdf').isDirty).toBe(true);
+
+			await vi.advanceTimersByTimeAsync(1500);
+			expect(h.fs.files['New/a.pdf.jot.json']).toBeDefined();
+			expect(h.sessions.get('New/a.pdf').state).toBe('clean');
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
