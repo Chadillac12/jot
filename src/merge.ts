@@ -9,7 +9,14 @@ import {
 } from './stroke-render';
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
-	const h = hex.replace('#', '').padEnd(6, '0').slice(0, 6);
+	const raw = hex.replace('#', '');
+	const h =
+		raw.length === 3
+			? raw
+					.split('')
+					.map((digit) => digit + digit)
+					.join('')
+			: raw.slice(0, 6);
 	return {
 		r: (parseInt(h.slice(0, 2), 16) || 0) / 255,
 		g: (parseInt(h.slice(2, 4), 16) || 0) / 255,
