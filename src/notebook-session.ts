@@ -60,6 +60,16 @@ export class NotebookDocumentSession {
 	}
 
 	load(data: string): 'loaded' | 'protected' | 'conflict' {
+		// A second view commonly receives the same bytes that this shared session
+		// already loaded. Treat that as an idempotent attach, not a disk reload
+		// that clears shared undo history.
+		if (
+			this.stateSession.state !== 'unloaded' &&
+			data === this.persistedDataValue
+		) {
+			return 'loaded';
+		}
+
 		if (this.stateSession.isDirty) {
 			if (data === this.persistedDataValue || data === this.serialize()) return 'loaded';
 			this.stateSession.markConflict(
@@ -196,6 +206,10 @@ export class NotebookSessionManager {
 		existing.rename(newPath);
 		this.notebooks.set(newPath, existing);
 		return existing;
+	}
+
+	all(): NotebookDocumentSession[] {
+		return [...this.notebooks.values()];
 	}
 
 	drop(path: string): void {
