@@ -51,6 +51,11 @@ export class MergeService {
 				'Jot: recovered an interrupted PDF overwrite and restored the original PDF before loading its annotations.',
 				8000,
 			);
+		} else if (outcome === 'external-preserved') {
+			new Notice(
+				'Jot: found an interrupted PDF overwrite, but the current PDF no longer matched Jot’s recorded replacement. The current PDF was preserved and the pre-merge backup was kept as a recovery copy.',
+				10000,
+			);
 		}
 	}
 
@@ -148,6 +153,7 @@ export class MergeService {
 				buffer,
 				validatePdf,
 				async () => this.sidecar.discardIfBaselineUnchanged(pdfPath, sidecarBaseline),
+				bytes,
 			);
 		} else {
 			await transactionalWriteBinary(this.adapter, outPath, buffer, validatePdf);
