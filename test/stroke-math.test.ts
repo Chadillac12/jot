@@ -133,6 +133,9 @@ describe('strokeIntersects', () => {
 	it('returns true when any point lies inside the radius', () => {
 		expect(strokeIntersects(pen([point(0.5, 0.5)]), 0.5, 0.5, 0.1)).toBe(true);
 	});
+	it('detects an eraser hit in the middle of a sparse segment', () => {
+		expect(strokeIntersects(pen([point(0, 0), point(1, 0)]), 0.5, 0.02, 0.05)).toBe(true);
+	});
 	it('returns false when no point is inside the radius', () => {
 		expect(strokeIntersects(pen([point(0, 0)]), 1, 1, 0.1)).toBe(false);
 	});
