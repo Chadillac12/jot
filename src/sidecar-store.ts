@@ -7,7 +7,7 @@ import {
 	parseJotText,
 } from './jot-file';
 import type { StrokeStore } from './stroke-store';
-import { transactionalWriteText } from './transactional-write';
+import { TransactionConflictError, transactionalWriteText } from './transactional-write';
 
 const SAVE_DEBOUNCE_MS = 750;
 const RETRY_DELAY_MS = 2000;
@@ -36,6 +36,7 @@ export class SidecarStore {
 	private recentSelfSaves = new Map<string, number>();
 	private inFlightSaves = new Map<string, Promise<boolean>>();
 	private protectedOriginals = new Map<string, string>();
+	private persistedBaselines = new Map<string, string | null>();
 	private ownedPdfPaths = new Set<string>();
 
 	constructor(
@@ -56,6 +57,7 @@ export class SidecarStore {
 		try {
 			if (!(await this.adapter.exists(path))) {
 				if (!this.loadStillOwnsRevision(session, loadRevision)) return 'dirty';
+				this.persistedBaselines.set(pdfPath, null);
 				this.protectedOriginals.delete(pdfPath);
 				this.strokes.clearFor(pdfPath);
 				session.completeLoad();
@@ -65,6 +67,7 @@ export class SidecarStore {
 			const text = await this.adapter.read(path);
 			const parsed = parseJotText(text);
 			if (!parsed) {
+				this.persistedBaselines.set(pdfPath, text);
 				this.protectedOriginals.set(pdfPath, text);
 				const error = new Error(`${path} is invalid`);
 				session.failLoad(error);
@@ -72,6 +75,7 @@ export class SidecarStore {
 				return 'protected';
 			}
 			if (!isSupportedVersion(parsed.version)) {
+				this.persistedBaselines.set(pdfPath, text);
 				this.protectedOriginals.set(pdfPath, text);
 				const error = new Error(`${path} has unknown version ${parsed.version}`);
 				session.failLoad(error);
@@ -83,6 +87,7 @@ export class SidecarStore {
 			// the session while this load was in flight. A stale load must never
 			// replace that newer in-memory revision.
 			if (!this.loadStillOwnsRevision(session, loadRevision)) return 'dirty';
+			this.persistedBaselines.set(pdfPath, text);
 			this.protectedOriginals.delete(pdfPath);
 			this.strokes.clearFor(pdfPath);
 			this.strokes.populateFromPayload(pdfPath, parsed.pages);
@@ -133,15 +138,7 @@ export class SidecarStore {
 				await transactionalWriteText(this.adapter, recoveryPath, protectedText);
 			}
 
-			await transactionalWriteText(
-				this.adapter,
-				path,
-				text,
-				(candidate) => {
-					const parsed = parseJotText(candidate);
-					return parsed !== null && isSupportedVersion(parsed.version);
-				},
-			);
+			await this.writeWithBaselineProtection(pdfPath, path, text);
 			this.protectedOriginals.delete(pdfPath);
 			this.recentSelfSaves.set(path, Date.now());
 			session.completeSave(token);
@@ -202,6 +199,7 @@ export class SidecarStore {
 			const remoteText = await this.adapter.read(sidecarPath);
 			const conflictPath = `${sidecarPath}.conflict-${Date.now()}.json`;
 			await transactionalWriteText(this.adapter, conflictPath, remoteText);
+			this.persistedBaselines.set(pdfPath, remoteText);
 			session.markConflict();
 			session.resolveConflictKeepLocal();
 			await this.flush(pdfPath);
@@ -228,6 +226,10 @@ export class SidecarStore {
 		const oldSidecar = jotPathFor(oldPdfPath);
 		const newSidecar = jotPathFor(newPdfPath);
 		const protectedText = this.protectedOriginals.get(oldPdfPath);
+		const hadBaseline = this.persistedBaselines.has(oldPdfPath);
+		const previousBaseline = this.persistedBaselines.get(oldPdfPath) ?? null;
+		this.persistedBaselines.delete(oldPdfPath);
+		if (hadBaseline) this.persistedBaselines.set(newPdfPath, previousBaseline);
 		if (protectedText !== undefined) {
 			this.protectedOriginals.delete(oldPdfPath);
 			this.protectedOriginals.set(newPdfPath, protectedText);
@@ -242,13 +244,22 @@ export class SidecarStore {
 		try {
 			if (await this.adapter.exists(oldSidecar)) {
 				const sourceText = await this.adapter.read(oldSidecar);
+				let expectedDestination: string | null = null;
 				if (await this.adapter.exists(newSidecar)) {
 					const destinationText = await this.adapter.read(newSidecar);
+					expectedDestination = destinationText;
 					const conflictPath = `${newSidecar}.conflict-${Date.now()}.json`;
 					await transactionalWriteText(this.adapter, conflictPath, destinationText);
 				}
-				await transactionalWriteText(this.adapter, newSidecar, sourceText);
+				await transactionalWriteText(
+					this.adapter,
+					newSidecar,
+					sourceText,
+					undefined,
+					expectedDestination,
+				);
 				await this.adapter.remove(oldSidecar);
+				this.persistedBaselines.set(newPdfPath, sourceText);
 			}
 			this.recentSelfSaves.delete(oldSidecar);
 		} catch (error) {
@@ -282,9 +293,65 @@ export class SidecarStore {
 		}
 		const path = jotPathFor(pdfPath);
 		this.protectedOriginals.delete(pdfPath);
+		this.persistedBaselines.delete(pdfPath);
 		if (await this.adapter.exists(path)) await this.adapter.remove(path);
 		this.ownedPdfPaths.delete(pdfPath);
 		this.sessions.remove(pdfPath);
+	}
+
+	private async writeWithBaselineProtection(
+		pdfPath: string,
+		path: string,
+		text: string,
+	): Promise<void> {
+		let expected = this.persistedBaselines.has(pdfPath)
+			? this.persistedBaselines.get(pdfPath)!
+			: await this.readTextOrNull(path);
+
+		if (!this.persistedBaselines.has(pdfPath)) {
+			// A save without a prior load should still be conservative. Treat the
+			// current disk contents as the baseline rather than assuming ownership.
+			this.persistedBaselines.set(pdfPath, expected);
+		}
+
+		const validate = (candidate: string): boolean => {
+			const parsed = parseJotText(candidate);
+			return parsed !== null && isSupportedVersion(parsed.version);
+		};
+
+		for (let attempt = 0; attempt < 3; attempt++) {
+			try {
+				await transactionalWriteText(this.adapter, path, text, validate, expected);
+				this.persistedBaselines.set(pdfPath, text);
+				return;
+			} catch (error) {
+				if (!(error instanceof TransactionConflictError)) throw error;
+
+				const remoteText = await this.readTextOrNull(path);
+				if (remoteText === text) {
+					this.persistedBaselines.set(pdfPath, text);
+					return;
+				}
+
+				if (remoteText !== null && remoteText !== expected) {
+					const conflictPath = `${path}.conflict-${Date.now()}-${attempt + 1}.json`;
+					await transactionalWriteText(this.adapter, conflictPath, remoteText);
+					console.warn(
+						`${PLUGIN_LOG} simultaneous sidecar edit preserved at ${conflictPath}`,
+					);
+				}
+
+				expected = remoteText;
+				this.persistedBaselines.set(pdfPath, remoteText);
+			}
+		}
+
+		throw new Error(`Sidecar ${path} kept changing during save; local ink remains dirty`);
+	}
+
+	private async readTextOrNull(path: string): Promise<string | null> {
+		if (!(await this.adapter.exists(path))) return null;
+		return this.adapter.read(path);
 	}
 
 	private loadStillOwnsRevision(
