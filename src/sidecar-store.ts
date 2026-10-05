@@ -49,11 +49,13 @@ export class SidecarStore {
 	async load(pdfPath: string): Promise<SidecarLoadStatus> {
 		this.ownedPdfPaths.add(pdfPath);
 		const session = this.sessions.get(pdfPath);
+		const loadRevision = session.currentRevision;
 		if (!session.beginLoad()) return 'dirty';
 
 		const path = jotPathFor(pdfPath);
 		try {
 			if (!(await this.adapter.exists(path))) {
+				if (!this.loadStillOwnsRevision(session, loadRevision)) return 'dirty';
 				this.protectedOriginals.delete(pdfPath);
 				this.strokes.clearFor(pdfPath);
 				session.completeLoad();
@@ -77,6 +79,10 @@ export class SidecarStore {
 				return 'protected';
 			}
 
+			// Disk I/O above is asynchronous. Local Pencil input may have dirtied
+			// the session while this load was in flight. A stale load must never
+			// replace that newer in-memory revision.
+			if (!this.loadStillOwnsRevision(session, loadRevision)) return 'dirty';
 			this.protectedOriginals.delete(pdfPath);
 			this.strokes.clearFor(pdfPath);
 			this.strokes.populateFromPayload(pdfPath, parsed.pages);
@@ -279,6 +285,17 @@ export class SidecarStore {
 		if (await this.adapter.exists(path)) await this.adapter.remove(path);
 		this.ownedPdfPaths.delete(pdfPath);
 		this.sessions.remove(pdfPath);
+	}
+
+	private loadStillOwnsRevision(
+		session: ReturnType<DocumentSessionManager['get']>,
+		loadRevision: number,
+	): boolean {
+		return (
+			session.state === 'loading' &&
+			session.currentRevision === loadRevision &&
+			!session.isDirty
+		);
 	}
 
 	private queueSave(pdfPath: string, delayMs: number): void {
