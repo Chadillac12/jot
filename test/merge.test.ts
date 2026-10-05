@@ -1,7 +1,7 @@
 import type { PDFPage } from 'pdf-lib';
 import { describe, expect, it, vi } from 'vitest';
 
-import { snapshotStrokesForPdf } from '../src/merge-service';
+import { snapshotStrokesForPdf } from '../src/merge-snapshot';
 import { drawStrokesOnPdfPage } from '../src/pdf-render';
 import type { Stroke } from '../src/stroke-math';
 import { StrokeStore } from '../src/stroke-store';
