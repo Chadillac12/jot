@@ -156,7 +156,7 @@ export class MergeService {
 				bytes,
 			);
 		} else {
-			await transactionalWriteBinary(this.adapter, outPath, buffer, validatePdf);
+			await transactionalWriteBinary(this.adapter, outPath, buffer, validatePdf, undefined, null);
 		}
 		return outPath;
 	}
