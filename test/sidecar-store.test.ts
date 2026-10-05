@@ -265,6 +265,37 @@ describe('SidecarStore concurrency and failure handling', () => {
 		expect(store.hasPendingSave('a.pdf')).toBe(false);
 	});
 
+	it('preserves a synced sidecar change that arrives without a modify event before commit', async () => {
+		const fs = makeFs({ 'a.pdf.jot.json': validPayload });
+		const strokes = new StrokeStore();
+		const store = new SidecarStore(fs.adapter, strokes);
+		expect(await store.load('a.pdf')).toBe('loaded');
+
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.2, y: 0.2, pressure: 0.5 }], color: '#0000ff', width: 0.005, tool: 'pen' },
+		]);
+		store.scheduleSave('a.pdf');
+
+		const remote = JSON.stringify({
+			version: JOT_FORMAT_VERSION,
+			pages: {
+				'1': [
+					{ points: [{ x: 0.8, y: 0.8, pressure: 0.5 }], color: '#ff0000', width: 0.005, tool: 'pen' },
+				],
+			},
+		});
+		fs.files['a.pdf.jot.json'] = remote;
+
+		expect(await store.flush('a.pdf')).toBe(true);
+		expect(fs.files['a.pdf.jot.json']).toContain('#0000ff');
+		const conflictPath = Object.keys(fs.files).find((path) =>
+			path.startsWith('a.pdf.jot.json.conflict-'),
+		);
+		expect(conflictPath).toBeDefined();
+		expect(conflictPath ? fs.files[conflictPath] : undefined).toBe(remote);
+		expect(store.hasPendingSave('a.pdf')).toBe(false);
+	});
+
 	it('reports a failed save, keeps the revision dirty, and retries successfully', async () => {
 		vi.useFakeTimers();
 		const fs = makeFs();
