@@ -3,6 +3,8 @@ import type { DataAdapter, TFile, Vault } from 'obsidian';
 import { describe, expect, it, vi } from 'vitest';
 import {
 	TransactionConflictError,
+	recoverInterruptedTextWrite,
+	recoverInterruptedVaultBinary,
 	transactionalModifyVaultBinary,
 	transactionalWriteBinary,
 	transactionalWriteText,
@@ -25,6 +27,17 @@ function makeAdapter(initial: Record<string, string> = {}) {
 			delete textFiles[path];
 			binaryFiles.delete(path);
 		}),
+		list: vi.fn(async (folder: string) => {
+			const prefix = folder ? folder + '/' : '';
+			const files = [
+				...Object.keys(textFiles),
+				...binaryFiles.keys(),
+			].filter((path) => {
+				if (!path.startsWith(prefix)) return false;
+				return !path.slice(prefix.length).includes('/');
+			});
+			return { files, folders: [] };
+		}),
 		rename: vi.fn(async (oldPath: string, newPath: string) => {
 			if (oldPath in textFiles) {
 				textFiles[newPath] = textFiles[oldPath]!;
@@ -38,6 +51,79 @@ function makeAdapter(initial: Record<string, string> = {}) {
 	} as unknown as DataAdapter;
 	return { adapter, textFiles, binaryFiles };
 }
+
+describe('transaction recovery', () => {
+	it('restores a verified backup when an interrupted text transaction left the canonical path missing', async () => {
+		const fs = makeAdapter({
+			'a.json.jot-backup-100-1': 'old',
+			'a.json.jot-tmp-100-1': 'new',
+		});
+
+		const result = await recoverInterruptedTextWrite(
+			fs.adapter,
+			'a.json',
+			(candidate) => candidate === 'old' || candidate === 'new',
+		);
+
+		expect(result).toBe('restored-backup');
+		expect(fs.textFiles['a.json']).toBe('old');
+		expect(Object.keys(fs.textFiles).filter((path) => path.includes('jot-'))).toEqual([]);
+	});
+
+	it('rolls back an interrupted PDF overwrite when its annotation sidecar still exists', async () => {
+		const fs = makeAdapter({ 'a.pdf.jot.json': '{"version":3,"pages":{}}' });
+		fs.binaryFiles.set('a.pdf.jot-backup-100-1', new Uint8Array([1, 2, 3]).buffer);
+		const file = { path: 'a.pdf' } as TFile;
+		let current = new Uint8Array([4, 5, 6]).buffer;
+		const vault = {
+			readBinary: vi.fn(async () => current.slice(0)),
+			modifyBinary: vi.fn(async (_file: TFile, data: ArrayBuffer) => {
+				current = data.slice(0);
+			}),
+		} as unknown as Vault;
+
+		const result = await recoverInterruptedVaultBinary(
+			vault,
+			fs.adapter,
+			file,
+			async (candidate) => {
+				if (candidate.byteLength === 0) throw new Error('invalid');
+			},
+			'a.pdf.jot.json',
+		);
+
+		expect(result).toBe('rolled-back');
+		expect([...new Uint8Array(current)]).toEqual([1, 2, 3]);
+		expect(fs.binaryFiles.has('a.pdf.jot-backup-100-1')).toBe(false);
+	});
+
+	it('finalizes an interrupted PDF overwrite when sidecar cleanup already completed', async () => {
+		const fs = makeAdapter();
+		fs.binaryFiles.set('a.pdf.jot-backup-100-1', new Uint8Array([1, 2, 3]).buffer);
+		const file = { path: 'a.pdf' } as TFile;
+		let current = new Uint8Array([4, 5, 6]).buffer;
+		const vault = {
+			readBinary: vi.fn(async () => current.slice(0)),
+			modifyBinary: vi.fn(async (_file: TFile, data: ArrayBuffer) => {
+				current = data.slice(0);
+			}),
+		} as unknown as Vault;
+
+		const result = await recoverInterruptedVaultBinary(
+			vault,
+			fs.adapter,
+			file,
+			async (candidate) => {
+				if (candidate.byteLength === 0) throw new Error('invalid');
+			},
+			'a.pdf.jot.json',
+		);
+
+		expect(result).toBe('finalized');
+		expect([...new Uint8Array(current)]).toEqual([4, 5, 6]);
+		expect(fs.binaryFiles.has('a.pdf.jot-backup-100-1')).toBe(false);
+	});
+});
 
 describe('transactionalWriteText', () => {
 	it('commits a verified replacement and removes temporary artifacts', async () => {
