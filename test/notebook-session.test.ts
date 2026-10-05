@@ -56,9 +56,9 @@ describe('NotebookDocumentSession save serialization', () => {
 		const initial = serializeJotNote(createJotNote());
 		expect(session.load(initial)).toBe('loaded');
 
-		let releaseFirst: (() => void) | null = null;
+		let releaseFirst: () => void = () => {};
 		const firstGate = new Promise<void>((resolve) => {
-			releaseFirst = resolve;
+			releaseFirst = () => resolve();
 		});
 		const writes: string[] = [];
 		let call = 0;
@@ -92,7 +92,7 @@ describe('NotebookDocumentSession save serialization', () => {
 		session.markDirty();
 		const second = session.save(writer);
 
-		releaseFirst?.();
+		releaseFirst();
 		expect(await first).toBe(true);
 		expect(await second).toBe(true);
 		expect(writes).toHaveLength(2);
