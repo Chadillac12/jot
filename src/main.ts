@@ -207,6 +207,11 @@ export default class JotPlugin extends Plugin {
 			activeDocument.defaultView;
 		if (rootWin) {
 			this.registerDomEvent(rootWin, 'resize', () => this.refreshFloatingPaletteButton());
+			this.registerDomEvent(rootWin.document, 'visibilitychange', () => {
+				if (rootWin.document.visibilityState !== 'hidden') return;
+				void this.sidecar.flushAll();
+				void this.notebookStore.flushAll();
+			});
 			this.registerDomEvent(rootWin, 'pagehide', () => {
 				void this.sidecar.flushAll();
 				void this.notebookStore.flushAll();
@@ -227,8 +232,10 @@ export default class JotPlugin extends Plugin {
 
 	onunload() {
 		this.overlays?.disconnectAll();
-		// Do not discard dirty revisions during plugin reload/disable. Both
-		// persistence domains retain dirty/error state and retry ownership.
+		// The host does not await plugin teardown. Disable future retry timers,
+		// then make one best-effort flush while preserving dirty/error ownership.
+		this.sidecar?.beginShutdown();
+		this.notebookStore?.beginShutdown();
 		void this.sidecar?.flushAll();
 		void this.notebookStore?.flushAll();
 		this.palette?.hide();
