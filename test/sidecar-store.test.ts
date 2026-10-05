@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/unbound-method */
 import type { DataAdapter } from 'obsidian';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DocumentSessionManager } from '../src/document-session';
@@ -130,11 +129,11 @@ describe('SidecarStore lifecycle persistence', () => {
 		expect(h.store.hasPendingSave('a.pdf')).toBe(false);
 	});
 
-	it('the legacy cancelAllPending shim now flushes rather than loses data', async () => {
+	it('flushAll persists pending edits instead of losing them', async () => {
 		const h = makeStore();
 		h.strokes.setForKey('a.pdf::1', [stroke('#fedcba')]);
 		h.store.scheduleSave('a.pdf');
-		expect(await h.store.cancelAllPending()).toBe(true);
+		expect(await h.store.flushAll()).toBe(true);
 		expect(h.fs.files['a.pdf.jot.json']).toContain('#fedcba');
 	});
 
