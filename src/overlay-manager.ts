@@ -1,31 +1,28 @@
 import { App, TFile, WorkspaceLeaf } from 'obsidian';
-import {
-	applyBackingStoreSize,
-	devicePixelRatioFor,
-	readCanvasSurface,
-	safeBackingStoreDpr,
-} from './canvas-surface';
 import { INK_KEY_ATTR } from './ink-surface';
 import { pageKey } from './jot-file';
-import { drawStroke } from './stroke-render';
+import {
+	PDF_OVERLAY_CLASS,
+	PdfPageBinding,
+} from './pdf-page-binding';
 import type { Stroke } from './stroke-math';
 import type { StrokeStore } from './stroke-store';
 
-const OVERLAY_CLASS = 'jot-overlay';
-const LIVE_OVERLAY_CLASS = 'jot-live-overlay';
-const PAGE_ANCHOR_CLASS = 'jot-page-anchor';
-const PASSTHROUGH_CLASS = 'jot-passthrough';
-const PAGE_OBSERVED_ATTR = 'data-jot-observed';
-
 export const OVERLAY_KEY_ATTR = INK_KEY_ATTR;
 
+interface LeafBinding {
+	containerObserver: MutationObserver;
+	pages: Map<HTMLElement, PdfPageBinding>;
+	container: HTMLElement;
+}
+
 export class OverlayManager {
-	private containerObservers = new Map<WorkspaceLeaf, MutationObserver>();
+	private leaves = new Map<WorkspaceLeaf, LeafBinding>();
 
 	constructor(
 		private app: App,
 		private strokes: StrokeStore,
-		private wireOverlay: (canvas: HTMLCanvasElement) => void,
+		private wireOverlay: (canvas: HTMLCanvasElement) => (() => void) | void,
 	) {}
 
 	attachToActivePdf(): void {
@@ -35,99 +32,73 @@ export class OverlayManager {
 		if (!filePath) return;
 		const container = leaf.view.containerEl;
 
-		this.upgradePages(container, filePath);
-		if (this.containerObservers.has(leaf)) return;
-		const observer = new MutationObserver(() => {
-			const currentPath = this.filePathForLeaf(leaf);
-			if (!currentPath) return;
-			this.upgradePages(container, currentPath);
-		});
-		observer.observe(container, { childList: true, subtree: true });
-		this.containerObservers.set(leaf, observer);
+		let binding = this.leaves.get(leaf);
+		if (!binding) {
+			const pages = new Map<HTMLElement, PdfPageBinding>();
+			const observer = new MutationObserver(() => {
+				const currentPath = this.filePathForLeaf(leaf);
+				if (!currentPath) return;
+				this.syncPages(container, currentPath, pages);
+			});
+			observer.observe(container, { childList: true, subtree: true });
+			binding = { containerObserver: observer, pages, container };
+			this.leaves.set(leaf, binding);
+		}
+		this.syncPages(container, filePath, binding.pages);
 	}
 
 	pruneClosedObservers(): void {
-		if (this.containerObservers.size === 0) return;
+		if (this.leaves.size === 0) return;
 		const live = new Set<WorkspaceLeaf>();
 		this.app.workspace.iterateAllLeaves((leaf) => live.add(leaf));
-		for (const [leaf, observer] of this.containerObservers) {
-			if (!live.has(leaf)) {
-				observer.disconnect();
-				this.containerObservers.delete(leaf);
-			}
+		for (const [leaf, binding] of this.leaves) {
+			if (!live.has(leaf)) this.disposeLeaf(leaf, binding);
 		}
 	}
 
 	disconnectAll(): void {
-		this.containerObservers.forEach((observer) => observer.disconnect());
-		this.containerObservers.clear();
+		for (const [leaf, binding] of this.leaves) this.disposeLeaf(leaf, binding);
+		this.leaves.clear();
 	}
 
-	/**
-	 * Redraw only persisted strokes. Pointer handlers are wired to the separate
-	 * live canvas, so passing either layer here resolves to the persistent layer.
-	 */
 	redrawPage(canvas: HTMLCanvasElement): void {
-		const target = this.persistentCanvasFor(canvas);
-		if (!target) return;
-		const ctx = target.getContext('2d');
-		if (!ctx) return;
-		const surface = readCanvasSurface(target);
-		ctx.setTransform(surface.dpr, 0, 0, surface.dpr, 0, 0);
-		ctx.clearRect(0, 0, surface.width, surface.height);
-		const key = target.getAttribute(OVERLAY_KEY_ATTR);
-		if (!key) return;
-		for (const stroke of this.strokes.forKey(key)) {
-			drawStroke(ctx, stroke, surface);
-		}
+		this.bindingForCanvas(canvas)?.redraw();
 	}
 
 	appendPersistedStroke(canvas: HTMLCanvasElement, stroke: Stroke): void {
-		const target = this.persistentCanvasFor(canvas);
-		if (!target) return;
-		const ctx = target.getContext('2d');
-		if (!ctx) return;
-		drawStroke(ctx, stroke, readCanvasSurface(target));
+		this.bindingForCanvas(canvas)?.appendStroke(stroke);
 	}
 
 	clearLivePage(canvas: HTMLCanvasElement): void {
-		const target = this.liveCanvasFor(canvas);
-		if (!target) return;
-		const ctx = target.getContext('2d');
-		if (!ctx) return;
-		const surface = readCanvasSurface(target);
-		ctx.setTransform(surface.dpr, 0, 0, surface.dpr, 0, 0);
-		ctx.clearRect(0, 0, surface.width, surface.height);
+		this.bindingForCanvas(canvas)?.clearLive();
 	}
 
 	redrawOverlaysForActivePdf(): void {
 		const leaf = this.getActivePdfLeaf();
 		if (!leaf) return;
-		this.canvasesIn(leaf).forEach((canvas) => this.redrawPage(canvas));
+		for (const binding of this.leaves.get(leaf)?.pages.values() ?? []) binding.redraw();
 	}
 
 	redrawOverlaysForPdf(pdfPath: string): void {
-		this.app.workspace.iterateAllLeaves((leaf) => {
-			if (this.filePathForLeaf(leaf) !== pdfPath) return;
-			this.canvasesIn(leaf).forEach((canvas) => this.redrawPage(canvas));
-		});
+		for (const [leaf, binding] of this.leaves) {
+			if (this.filePathForLeaf(leaf) !== pdfPath) continue;
+			for (const page of binding.pages.values()) page.redraw();
+		}
 	}
 
 	overlayForKey(key: string): HTMLCanvasElement | null {
-		const leaf = this.getActivePdfLeaf();
-		if (!leaf) return null;
-		const escaped = key.replace(/["\\]/g, '\\$&');
-		return leaf.view.containerEl.querySelector<HTMLCanvasElement>(
-			`canvas.${OVERLAY_CLASS}[${OVERLAY_KEY_ATTR}="${escaped}"]`,
-		);
+		for (const binding of this.leaves.values()) {
+			for (const page of binding.pages.values()) {
+				if (page.key === key) return page.persistentCanvas();
+			}
+		}
+		return null;
 	}
 
 	getActivePdfLeaf(): WorkspaceLeaf | null {
 		const leaf = this.app.workspace.getMostRecentLeaf();
 		if (!leaf) return null;
-		const viewType = leaf.view.getViewType?.();
-		if (viewType !== 'pdf') return null;
-		return leaf;
+		return leaf.view.getViewType?.() === 'pdf' ? leaf : null;
 	}
 
 	getActivePdfFilePath(): string | null {
@@ -135,108 +106,55 @@ export class OverlayManager {
 		return leaf ? this.filePathForLeaf(leaf) : null;
 	}
 
+	private syncPages(
+		container: HTMLElement,
+		filePath: string,
+		bindings: Map<HTMLElement, PdfPageBinding>,
+	): void {
+		const currentPages = new Set(
+			Array.from(container.querySelectorAll<HTMLElement>('.page')),
+		);
+		for (const [page, binding] of bindings) {
+			if (!currentPages.has(page) || !page.isConnected) {
+				binding.dispose();
+				bindings.delete(page);
+			}
+		}
+
+		for (const page of currentPages) {
+			const attr = page.getAttribute('data-page-number');
+			const pageNumber = attr && /^\d+$/.test(attr) ? Number(attr) : NaN;
+			if (!Number.isFinite(pageNumber)) continue;
+			const key = pageKey(filePath, pageNumber);
+			const existing = bindings.get(page);
+			if (existing) {
+				existing.refreshKey(key);
+				continue;
+			}
+			const created = new PdfPageBinding(page, key, this.strokes, this.wireOverlay);
+			created.mount();
+			bindings.set(page, created);
+		}
+	}
+
+	private bindingForCanvas(canvas: HTMLCanvasElement): PdfPageBinding | null {
+		for (const leaf of this.leaves.values()) {
+			for (const binding of leaf.pages.values()) {
+				if (binding.contains(canvas)) return binding;
+			}
+		}
+		return null;
+	}
+
+	private disposeLeaf(leaf: WorkspaceLeaf, binding: LeafBinding): void {
+		binding.containerObserver.disconnect();
+		for (const page of binding.pages.values()) page.dispose();
+		binding.pages.clear();
+		this.leaves.delete(leaf);
+	}
+
 	private filePathForLeaf(leaf: WorkspaceLeaf): string | null {
 		const file = (leaf.view as { file?: TFile }).file;
 		return file?.path ?? null;
-	}
-
-	private canvasesIn(leaf: WorkspaceLeaf): NodeListOf<HTMLCanvasElement> {
-		return leaf.view.containerEl.querySelectorAll<HTMLCanvasElement>(
-			`canvas.${OVERLAY_CLASS}`,
-		);
-	}
-
-	private upgradePages(container: HTMLElement, filePath: string): void {
-		container
-			.querySelectorAll<HTMLElement>('.page')
-			.forEach((page) => this.ensureOverlayOnPage(page, filePath));
-	}
-
-	private ensureOverlayOnPage(page: HTMLElement, filePath: string): void {
-		const pageNumberAttr = page.getAttribute('data-page-number');
-		const pageNumber = pageNumberAttr ? parseInt(pageNumberAttr, 10) : NaN;
-		if (Number.isNaN(pageNumber)) return;
-		const key = pageKey(filePath, pageNumber);
-		page.classList.add(PAGE_ANCHOR_CLASS);
-
-		let persistent = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
-		if (persistent && persistent.getAttribute(OVERLAY_KEY_ATTR) !== key) {
-			persistent.remove();
-			persistent = null;
-		}
-		if (!persistent) {
-			persistent = activeDocument.createElement('canvas');
-			persistent.className = OVERLAY_CLASS;
-			persistent.setAttribute(OVERLAY_KEY_ATTR, key);
-			page.appendChild(persistent);
-		}
-
-		let live = page.querySelector<HTMLCanvasElement>(`canvas.${LIVE_OVERLAY_CLASS}`);
-		if (live && live.getAttribute(OVERLAY_KEY_ATTR) !== key) {
-			live.remove();
-			live = null;
-		}
-		if (!live) {
-			live = activeDocument.createElement('canvas');
-			live.className = LIVE_OVERLAY_CLASS;
-			live.setAttribute(OVERLAY_KEY_ATTR, key);
-			page.appendChild(live);
-			this.wireOverlay(live);
-		}
-
-		this.sizeOverlayToPage(persistent, page);
-		this.sizeOverlayToPage(live, page);
-		this.disableTextLayerInteraction(page);
-		this.redrawPage(persistent);
-
-		if (page.getAttribute(PAGE_OBSERVED_ATTR) === '1') return;
-		page.setAttribute(PAGE_OBSERVED_ATTR, '1');
-
-		new MutationObserver(() => {
-			this.disableTextLayerInteraction(page);
-			const hasPersistent = page.querySelector(`canvas.${OVERLAY_CLASS}`);
-			const hasLive = page.querySelector(`canvas.${LIVE_OVERLAY_CLASS}`);
-			if (!hasPersistent || !hasLive) this.ensureOverlayOnPage(page, filePath);
-		}).observe(page, { childList: true, subtree: true });
-
-		new ResizeObserver(() => {
-			const currentPersistent = page.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`);
-			const currentLive = page.querySelector<HTMLCanvasElement>(`canvas.${LIVE_OVERLAY_CLASS}`);
-			if (currentPersistent) {
-				this.sizeOverlayToPage(currentPersistent, page);
-				this.redrawPage(currentPersistent);
-			}
-			if (currentLive) {
-				this.sizeOverlayToPage(currentLive, page);
-				this.clearLivePage(currentLive);
-			}
-		}).observe(page);
-	}
-
-	private persistentCanvasFor(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
-		if (canvas.classList.contains(OVERLAY_CLASS)) return canvas;
-		return canvas.parentElement?.querySelector<HTMLCanvasElement>(`canvas.${OVERLAY_CLASS}`) ?? null;
-	}
-
-	private liveCanvasFor(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
-		if (canvas.classList.contains(LIVE_OVERLAY_CLASS)) return canvas;
-		return canvas.parentElement?.querySelector<HTMLCanvasElement>(`canvas.${LIVE_OVERLAY_CLASS}`) ?? null;
-	}
-
-	private sizeOverlayToPage(overlay: HTMLCanvasElement, page: HTMLElement): void {
-		const rect = page.getBoundingClientRect();
-		if (rect.width === 0 || rect.height === 0) return;
-		const requestedDpr = devicePixelRatioFor(window);
-		const effectiveDpr = safeBackingStoreDpr(rect.width, rect.height, requestedDpr);
-		applyBackingStoreSize(overlay, rect.width, rect.height, effectiveDpr);
-		overlay.setCssStyles({
-			width: `${rect.width}px`,
-			height: `${rect.height}px`,
-		});
-	}
-
-	private disableTextLayerInteraction(page: HTMLElement): void {
-		page.querySelector<HTMLElement>('.textLayer')?.classList.add(PASSTHROUGH_CLASS);
-		page.querySelector<HTMLElement>('.annotationLayer')?.classList.add(PASSTHROUGH_CLASS);
 	}
 }
