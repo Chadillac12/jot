@@ -18,6 +18,7 @@ export class NotebookStore {
 	private saveTimers = new Map<string, number>();
 	private inFlightSaves = new Map<string, Promise<boolean>>();
 	private ownedPaths = new Set<string>();
+	private shuttingDown = false;
 
 	constructor(
 		private vault: Vault,
@@ -72,6 +73,11 @@ export class NotebookStore {
 		return allSaved;
 	}
 
+	beginShutdown(): void {
+		this.shuttingDown = true;
+		for (const path of [...this.saveTimers.keys()]) this.clearTimer(path);
+	}
+
 	async rename(oldPath: string, newPath: string): Promise<void> {
 		if (oldPath === newPath) return;
 		const inFlight = this.inFlightSaves.get(oldPath);
@@ -124,6 +130,7 @@ export class NotebookStore {
 
 	private queueSave(path: string, delayMs: number): void {
 		this.clearTimer(path);
+		if (this.shuttingDown) return;
 		const id = this.timers.setTimeout(() => {
 			this.saveTimers.delete(path);
 			void this.save(path);
