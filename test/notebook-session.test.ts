@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DocumentSessionManager } from '../src/document-session';
 import { createJotNote, serializeJotNote } from '../src/jot-note-file';
-import { NotebookSessionManager } from '../src/notebook-session';
+import { NotebookExternalConflictError, NotebookSessionManager } from '../src/notebook-session';
 
 describe('NotebookSessionManager', () => {
 	it('returns one authoritative notebook model for every view of a path', () => {
@@ -119,5 +119,68 @@ describe('NotebookDocumentSession save serialization', () => {
 
 		expect(session.load(initial)).toBe('loaded');
 		expect(session.history.canUndo('Lecture.jot')).toBe(true);
+	});
+});
+
+
+describe('Notebook conflict resolution', () => {
+	it('keep-local adopts the exact conflicting external bytes as the next save baseline', async () => {
+		const manager = new NotebookSessionManager(new DocumentSessionManager());
+		const session = manager.get('Lecture.jot');
+		const initial = serializeJotNote(createJotNote());
+		expect(session.load(initial)).toBe('loaded');
+
+		session.strokes.setForKey('Lecture.jot::page-1', [
+			{
+				points: [{ x: 0.3, y: 0.4, pressure: 0.5 }],
+				color: '#333333',
+				width: 0.005,
+				tool: 'pen',
+				render: { version: 2, smoothing: 0.5, pressureSensitivity: 0.5 },
+			},
+		]);
+		session.markDirty();
+
+		const externalNote = createJotNote();
+		externalNote.paper = 'grid';
+		const external = serializeJotNote(externalNote);
+		expect(session.load(external)).toBe('conflict');
+
+		session.resolveConflictKeepLocal();
+		session.markDirty();
+
+		let expectedSeen = '';
+		const saved = await session.save(async (expected, next) => {
+			expectedSeen = expected;
+			expect(next).toContain('#333333');
+		});
+		expect(saved).toBe(true);
+		expect(expectedSeen).toBe(external);
+		expect(session.state.state).toBe('clean');
+	});
+
+	it('writer-detected external conflict is retained for later keep-local resolution', async () => {
+		const manager = new NotebookSessionManager(new DocumentSessionManager());
+		const session = manager.get('Lecture.jot');
+		const initial = serializeJotNote(createJotNote());
+		session.load(initial);
+		session.markDirty();
+		const external = JSON.stringify({ changed: true });
+
+		expect(
+			await session.save(async () => {
+				throw new NotebookExternalConflictError(external);
+			}),
+		).toBe(false);
+		expect(session.state.state).toBe('conflict');
+
+		session.resolveConflictKeepLocal();
+		let expectedSeen = '';
+		expect(
+			await session.save(async (expected) => {
+				expectedSeen = expected;
+			}),
+		).toBe(true);
+		expect(expectedSeen).toBe(external);
 	});
 });
