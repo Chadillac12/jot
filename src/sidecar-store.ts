@@ -7,7 +7,11 @@ import {
 	parseJotText,
 } from './jot-file';
 import type { StrokeStore } from './stroke-store';
-import { recoverInterruptedTextWrite, transactionalWriteText } from './transactional-write';
+import {
+	recoverInterruptedTextWrite,
+	transactionalWriteText,
+	type VaultBinaryFinalization,
+} from './transactional-write';
 
 const SAVE_DEBOUNCE_MS = 750;
 const RETRY_DELAY_MS = 2000;
@@ -325,35 +329,68 @@ export class SidecarStore {
 		return this.persistedSidecars.get(pdfPath);
 	}
 
-	async discard(pdfPath: string, expectedText?: string | null): Promise<void> {
+	async claimDiscard(
+		pdfPath: string,
+		expectedText: string | null,
+	): Promise<VaultBinaryFinalization> {
 		if (!(await this.flush(pdfPath))) {
 			throw new Error(`Cannot discard ${pdfPath} annotations because dirty data failed to save`);
 		}
 		const path = jotPathFor(pdfPath);
-		if (expectedText !== undefined) {
-			const exists = await this.adapter.exists(path);
-			if ((expectedText === null && exists) || (expectedText !== null && !exists)) {
+		const exists = await this.adapter.exists(path);
+		if ((expectedText === null && exists) || (expectedText !== null && !exists)) {
+			throw new Error(
+				`Cannot discard ${pdfPath} annotations because the sidecar changed during the protected operation`,
+			);
+		}
+
+		let claimedPath: string | null = null;
+		if (expectedText !== null) {
+			claimedPath = `${path}.jot-discard-${Date.now()}-${this.sessions.get(pdfPath).currentRevision}`;
+			await this.adapter.rename(path, claimedPath);
+			const claimedText = await this.adapter.read(claimedPath);
+			if (claimedText !== expectedText) {
+				if (!(await this.adapter.exists(path))) {
+					await this.adapter.rename(claimedPath, path);
+				}
 				throw new Error(
-					`Cannot discard ${pdfPath} annotations because the sidecar changed during the protected operation`,
+					`Cannot discard ${pdfPath} annotations because the claimed sidecar did not match the protected baseline`,
 				);
 			}
-			if (expectedText !== null) {
-				const claimedPath = `${path}.jot-discard-${Date.now()}`;
-				await this.adapter.rename(path, claimedPath);
-				const claimedText = await this.adapter.read(claimedPath);
-				if (claimedText !== expectedText) {
-					if (!(await this.adapter.exists(path))) {
-						await this.adapter.rename(claimedPath, path);
-					}
-					throw new Error(
-						`Cannot discard ${pdfPath} annotations because the claimed sidecar did not match the protected baseline`,
-					);
-				}
-				await this.adapter.remove(claimedPath);
-			}
-		} else if (await this.adapter.exists(path)) {
-			await this.adapter.remove(path);
 		}
+
+		const rollback = async (): Promise<void> => {
+			if (!claimedPath || !(await this.adapter.exists(claimedPath))) return;
+			if (!(await this.adapter.exists(path))) {
+				await this.adapter.rename(claimedPath, path);
+				return;
+			}
+			const conflictPath = `${path}.conflict-${Date.now()}.json`;
+			await this.adapter.rename(claimedPath, conflictPath);
+		};
+		const onCommitted = (): void => {
+			this.protectedOriginals.delete(pdfPath);
+			this.persistedSidecars.delete(pdfPath);
+			this.ownedPdfPaths.delete(pdfPath);
+			this.sessions.remove(pdfPath);
+		};
+		return { recoveryMarkerPath: claimedPath, rollback, onCommitted };
+	}
+
+	async discard(pdfPath: string, expectedText?: string | null): Promise<void> {
+		if (expectedText !== undefined) {
+			const claim = await this.claimDiscard(pdfPath, expectedText);
+			claim.onCommitted();
+			if (claim.recoveryMarkerPath && (await this.adapter.exists(claim.recoveryMarkerPath))) {
+				await this.adapter.remove(claim.recoveryMarkerPath);
+			}
+			return;
+		}
+		if (!(await this.flush(pdfPath))) {
+			throw new Error(`Cannot discard ${pdfPath} annotations because dirty data failed to save`);
+		}
+		const path = jotPathFor(pdfPath);
+		if (await this.adapter.exists(path)) await this.adapter.remove(path);
 		this.protectedOriginals.delete(pdfPath);
 		this.persistedSidecars.delete(pdfPath);
 		this.ownedPdfPaths.delete(pdfPath);
