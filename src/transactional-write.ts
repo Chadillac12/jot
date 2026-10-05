@@ -155,11 +155,12 @@ export async function transactionalWriteText(
 	path: string,
 	text: string,
 	validate: (text: string) => boolean = (candidate) => candidate === text,
+	expectedOriginal?: string | null,
 ): Promise<void> {
 	const id = transactionId();
 	const tempPath = `${path}.jot-tmp-${id}`;
 	const backupPath = `${path}.jot-backup-${id}`;
-	const hadOriginal = await adapter.exists(path);
+	let hadOriginal = await adapter.exists(path);
 	let originalMoved = false;
 	let committed = false;
 
@@ -168,9 +169,26 @@ export async function transactionalWriteText(
 		const tempText = await adapter.read(tempPath);
 		if (!validate(tempText)) throw new Error(`Temporary write validation failed for ${path}`);
 
+		if (expectedOriginal !== undefined) {
+			hadOriginal = await adapter.exists(path);
+			const current = hadOriginal ? await adapter.read(path) : null;
+			if (current !== expectedOriginal) {
+				throw new Error(`Concurrent text write detected before commit for ${path}`);
+			}
+		}
+
 		if (hadOriginal) {
 			await adapter.rename(path, backupPath);
 			originalMoved = true;
+			if (expectedOriginal !== undefined && expectedOriginal !== null) {
+				const claimed = await adapter.read(backupPath);
+				if (claimed !== expectedOriginal) {
+					throw new Error(`Concurrent text write detected while claiming ${path}`);
+				}
+			}
+		}
+		if (await adapter.exists(path)) {
+			throw new Error(`Concurrent text write detected after claim for ${path}`);
 		}
 		await adapter.rename(tempPath, path);
 		committed = true;
@@ -184,8 +202,14 @@ export async function transactionalWriteText(
 		if (committed && !originalMoved) await cleanup(adapter, path);
 		if (originalMoved) {
 			try {
-				if (await adapter.exists(path)) await adapter.remove(path);
-				if (await adapter.exists(backupPath)) await adapter.rename(backupPath, path);
+				if (!committed && (await adapter.exists(path))) {
+					// A live path appearing after the claim belongs to an external
+					// writer. Never restore our older baseline over those newer bytes.
+					await cleanup(adapter, backupPath);
+				} else {
+					if (await adapter.exists(path)) await adapter.remove(path);
+					if (await adapter.exists(backupPath)) await adapter.rename(backupPath, path);
+				}
 			} catch (restoreError) {
 				throw new AggregateError(
 					[error, restoreError],
