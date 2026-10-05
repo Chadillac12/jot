@@ -205,9 +205,13 @@ export default class JotPlugin extends Plugin {
 			activeDocument.defaultView;
 		if (rootWin) {
 			this.registerDomEvent(rootWin, 'resize', () => this.refreshFloatingPaletteButton());
+			this.registerDomEvent(rootWin.document, 'visibilitychange', () => {
+				if (rootWin.document.visibilityState === 'hidden') {
+					void this.flushPersistence();
+				}
+			});
 			this.registerDomEvent(rootWin, 'pagehide', () => {
-				void this.sidecar.flushAll();
-				void this.notebookStore.flushAll();
+				void this.flushPersistence();
 			});
 		}
 
@@ -225,12 +229,22 @@ export default class JotPlugin extends Plugin {
 
 	onunload() {
 		this.overlays?.disconnectAll();
-		// Do not discard dirty revisions during plugin reload/disable. Both
-		// persistence domains retain dirty/error state and retry ownership.
-		void this.sidecar?.flushAll();
-		void this.notebookStore?.flushAll();
+		// Final persistence attempts are allowed to finish, but shutdown mode
+		// prevents failed writes from leaving timers owned by an unloaded plugin.
+		void Promise.all([
+			this.sidecar?.shutdown() ?? Promise.resolve(true),
+			this.notebookStore?.shutdown() ?? Promise.resolve(true),
+		]);
 		this.palette?.hide();
 		this.floatingPaletteButton?.hide();
+	}
+
+	private async flushPersistence(): Promise<boolean> {
+		const [sidecarsSaved, notebooksSaved] = await Promise.all([
+			this.sidecar.flushAll(),
+			this.notebookStore.flushAll(),
+		]);
+		return sidecarsSaved && notebooksSaved;
 	}
 
 	private async ensureLoaded(pdfPath: string) {
