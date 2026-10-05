@@ -697,6 +697,28 @@ describe('SidecarStore persistence-domain isolation', () => {
 
 });
 
+describe('SidecarStore shutdown', () => {
+	it('keeps failed data dirty without scheduling retry timers after shutdown begins', async () => {
+		vi.useFakeTimers();
+		const fs = makeFs();
+		const strokes = new StrokeStore();
+		const store = new SidecarStore(fs.adapter, strokes);
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.2, y: 0.2, pressure: 0.5 }], color: '#123456', width: 0.005, tool: 'pen' },
+		]);
+		store.scheduleSave('a.pdf');
+		store.beginShutdown();
+		vi.mocked(fs.adapter.write).mockRejectedValueOnce(new Error('suspended'));
+
+		expect(await store.flushAll()).toBe(false);
+		const writesAfterFlush = vi.mocked(fs.adapter.write).mock.calls.length;
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(vi.mocked(fs.adapter.write).mock.calls.length).toBe(writesAfterFlush);
+		expect(store.hasPendingSave('a.pdf')).toBe(true);
+		vi.useRealTimers();
+	});
+});
+
 describe('SidecarStore.flushAll', () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
