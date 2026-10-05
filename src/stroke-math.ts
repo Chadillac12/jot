@@ -6,11 +6,24 @@ export interface NormalizedPoint {
 	pressure: number;
 }
 
+export interface StrokeRenderProfile {
+	version: 2;
+	smoothing: number;
+	pressureSensitivity: number;
+}
+
+export const DEFAULT_STROKE_RENDER_PROFILE: StrokeRenderProfile = {
+	version: 2,
+	smoothing: 0.5,
+	pressureSensitivity: 0.5,
+};
+
 export interface Stroke {
 	points: NormalizedPoint[];
 	color: string;
 	width: number;
 	tool: Tool;
+	render?: StrokeRenderProfile;
 }
 
 export type SegmentEmit = (a: NormalizedPoint, b: NormalizedPoint) => void;
@@ -86,9 +99,35 @@ export function forEachSmoothSegment(points: NormalizedPoint[], emit: SegmentEmi
 
 export function strokeIntersects(stroke: Stroke, x: number, y: number, radius: number): boolean {
 	const radiusSquared = radius * radius;
-	return stroke.points.some((point) => {
-		const dx = point.x - x;
-		const dy = point.y - y;
-		return dx * dx + dy * dy < radiusSquared;
-	});
+	if (stroke.points.some((point) => distanceSquared(point.x, point.y, x, y) < radiusSquared)) {
+		return true;
+	}
+	for (let i = 1; i < stroke.points.length; i++) {
+		const a = stroke.points[i - 1]!;
+		const b = stroke.points[i]!;
+		if (distanceToSegmentSquared(x, y, a.x, a.y, b.x, b.y) < radiusSquared) return true;
+	}
+	return false;
+}
+
+function distanceSquared(ax: number, ay: number, bx: number, by: number): number {
+	const dx = ax - bx;
+	const dy = ay - by;
+	return dx * dx + dy * dy;
+}
+
+function distanceToSegmentSquared(
+	px: number,
+	py: number,
+	ax: number,
+	ay: number,
+	bx: number,
+	by: number,
+): number {
+	const vx = bx - ax;
+	const vy = by - ay;
+	const lengthSquared = vx * vx + vy * vy;
+	if (lengthSquared === 0) return distanceSquared(px, py, ax, ay);
+	const t = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / lengthSquared));
+	return distanceSquared(px, py, ax + t * vx, ay + t * vy);
 }
