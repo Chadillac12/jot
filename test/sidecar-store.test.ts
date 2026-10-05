@@ -464,6 +464,36 @@ describe('SidecarStore.scheduleSave', () => {
 		expect(store.hasPendingSave('a.pdf')).toBe(true);
 	});
 
+	it('returns unresolved when the external copy is preserved but local conflict flush fails', async () => {
+		vi.useFakeTimers();
+		const remotePayload = JSON.stringify({
+			version: JOT_FORMAT_VERSION,
+			pages: { '1': [{ points: [{ x: 0.9, y: 0.9, pressure: 0.5 }], color: '#f00', width: 0.005, tool: 'pen' }] },
+		});
+		const fs = makeFs({ 'a.pdf.jot.json': remotePayload });
+		const strokes = new StrokeStore();
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.1, y: 0.1, pressure: 0.5 }], color: '#00f', width: 0.005, tool: 'pen' },
+		]);
+		const originalWrite = vi.mocked(fs.adapter.write).getMockImplementation()!;
+		vi.mocked(fs.adapter.write).mockImplementation(async (path: string, data: string) => {
+			if (path.startsWith('a.pdf.jot.json.jot-tmp-')) throw new Error('disk full');
+			await originalWrite(path, data);
+		});
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const store = new SidecarStore(fs.adapter, strokes);
+		store.scheduleSave('a.pdf');
+
+		const conflictPath = await store.preserveExternalConflictAndFlushLocal('a.pdf');
+
+		expect(conflictPath).toBeNull();
+		expect(Object.keys(fs.files).some((path) => path.startsWith('a.pdf.jot.json.conflict-'))).toBe(true);
+		expect(store.hasPendingSave('a.pdf')).toBe(true);
+		error.mockRestore();
+		vi.clearAllTimers();
+		vi.useRealTimers();
+	});
+
 	it('preserves an external sidecar before flushing conflicting local ink', async () => {
 		const remotePayload = JSON.stringify({
 			version: JOT_FORMAT_VERSION,
@@ -669,6 +699,27 @@ describe('SidecarStore guarded discard', () => {
 		await expect(store.discardIfBaselineUnchanged('a.pdf', baseline)).rejects.toThrow(
 			'authoritative file changed',
 		);
+		expect(fs.files['a.pdf.jot.json']).toBe(remote);
+	});
+
+	it('preserves a synced replacement that arrives after the verified baseline is quarantined', async () => {
+		const fs = makeFs({ 'a.pdf.jot.json': validPayload });
+		const store = new SidecarStore(fs.adapter, new StrokeStore());
+		expect(await store.load('a.pdf')).toBe('loaded');
+		const baseline = store.captureBaseline('a.pdf');
+		const remote = JSON.stringify({ version: JOT_FORMAT_VERSION, pages: { '2': [] } });
+		const originalRename = vi.mocked(fs.adapter.rename).getMockImplementation()!;
+		let injected = false;
+		vi.mocked(fs.adapter.rename).mockImplementation(async (oldPath: string, newPath: string) => {
+			await originalRename(oldPath, newPath);
+			if (!injected && oldPath === 'a.pdf.jot.json' && newPath.includes('.jot-backup-')) {
+				injected = true;
+				fs.files['a.pdf.jot.json'] = remote;
+			}
+		});
+
+		await store.discardIfBaselineUnchanged('a.pdf', baseline);
+
 		expect(fs.files['a.pdf.jot.json']).toBe(remote);
 	});
 
