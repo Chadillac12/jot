@@ -213,31 +213,28 @@ export class SidecarStore {
 
 	private async performSave(pdfPath: string): Promise<boolean> {
 		const session = this.sessions.get(pdfPath);
+		const wasError = session.state === 'error';
 		const saveRevision = session.beginSave();
 		if (saveRevision === null) return true;
 
 		const path = jotPathFor(pdfPath);
 		const payload = this.strokes.buildPayload(pdfPath);
 		try {
+			const protectedText = this.protectedOriginals.get(pdfPath);
+			if (protectedText !== undefined) {
+				const recoveryPath = `${path}.recovery-${Date.now()}.json`;
+				await this.atomicWriteText(recoveryPath, protectedText, false);
+			}
 			if (!payload) {
-				if (this.protectedOriginals.has(pdfPath)) {
-					session.completeSave(saveRevision);
-					return true;
-				}
 				if (await this.adapter.exists(path)) await this.transactionalDelete(path);
+				this.protectedOriginals.delete(pdfPath);
 			} else {
-				const protectedText = this.protectedOriginals.get(pdfPath);
-				if (protectedText !== undefined) {
-					const recoveryPath = `${path}.recovery-${Date.now()}.json`;
-					await this.atomicWriteText(recoveryPath, protectedText, false);
-				}
 				const text = JSON.stringify(payload, null, 2);
 				await this.atomicWriteText(path, text, true);
 				this.protectedOriginals.delete(pdfPath);
 				this.recentSelfSaves.set(path, Date.now());
 			}
 
-			const wasError = session.state === 'error';
 			session.completeSave(saveRevision);
 			if (wasError) this.callbacks.onSaveRecovered?.(pdfPath);
 			if (session.isDirty) this.scheduleRetry(pdfPath);
@@ -263,8 +260,8 @@ export class SidecarStore {
 	private async atomicWriteText(path: string, text: string, validateSidecar: boolean): Promise<void> {
 		const tmpPath = `${path}.jot-tmp`;
 		const backupPath = `${path}.jot-backup`;
+		await this.recoverStaleBackup(path, backupPath);
 		await this.safeRemove(tmpPath);
-		await this.safeRemove(backupPath);
 		await this.adapter.write(tmpPath, text);
 
 		const verifyTmp = await this.adapter.read(tmpPath);
@@ -290,6 +287,16 @@ export class SidecarStore {
 			}
 			throw error;
 		}
+	}
+
+	private async recoverStaleBackup(path: string, backupPath: string): Promise<void> {
+		if (!(await this.adapter.exists(backupPath))) return;
+		if (!(await this.adapter.exists(path))) {
+			await this.adapter.rename(backupPath, path);
+			return;
+		}
+		const recoveryPath = `${path}.recovery-${Date.now()}.json`;
+		await this.adapter.rename(backupPath, recoveryPath);
 	}
 
 	private async transactionalDelete(path: string): Promise<void> {
