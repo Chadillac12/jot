@@ -1,4 +1,4 @@
-import type { DocumentSession, DocumentSessionManager, LoadToken, SaveToken } from './document-session';
+import type { DocumentSession, DocumentSessionManager, SaveToken } from './document-session';
 import { documentPageKey } from './jot-file';
 import {
 	createJotNote,
