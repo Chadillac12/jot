@@ -4,12 +4,33 @@ import { ExportChoiceModal } from './merge';
 import { drawStrokesOnPdfPage } from './pdf-render';
 import type { SidecarLoadStatus, SidecarStore } from './sidecar-store';
 import { transactionalModifyVaultBinary, transactionalWriteBinary } from './transactional-write';
+import type { Stroke } from './stroke-math';
 import type { StrokeStore } from './stroke-store';
 import type { UndoHistory } from './undo';
 
 const PLUGIN_LOG = '[jot]';
 
 type MergeChoice = 'overwrite' | 'copy';
+
+export type MergeStrokeSnapshot = Record<string, Stroke[]>;
+
+export function snapshotStrokesForPdf(
+	strokes: StrokeStore,
+	pdfPath: string,
+): MergeStrokeSnapshot {
+	const payload = strokes.buildPayload(pdfPath);
+	if (!payload) return {};
+	return Object.fromEntries(
+		Object.entries(payload.pages).map(([pageId, pageStrokes]) => [
+			pageId,
+			pageStrokes.map((stroke) => ({
+				...stroke,
+				points: stroke.points.map((point) => ({ ...point })),
+				render: stroke.render ? { ...stroke.render } : undefined,
+			})),
+		]),
+	);
+}
 
 export interface MergeServiceCallbacks {
 	ensureLoaded: (pdfPath: string) => Promise<SidecarLoadStatus>;
@@ -62,7 +83,18 @@ export class MergeService {
 			if (loadStatus === 'protected' || loadStatus === 'error' || loadStatus === 'dirty') {
 				throw new Error('annotation source is not in a verified clean state');
 			}
-			const outPath = await this.writeMerged(pdfPath, choice, copyTarget);
+			const expectedSidecar = this.sidecar.getPersistedBaseline(pdfPath);
+			if (expectedSidecar === undefined) {
+				throw new Error('annotation sidecar has no verified persistence baseline');
+			}
+			const strokeSnapshot = snapshotStrokesForPdf(this.strokes, pdfPath);
+			const outPath = await this.writeMerged(
+				pdfPath,
+				choice,
+				copyTarget,
+				strokeSnapshot,
+				expectedSidecar,
+			);
 			if (choice === 'overwrite') this.clearAnnotationState(pdfPath);
 			new Notice(`Jot: notes merged into ${outPath}`);
 		} catch (err) {
@@ -77,6 +109,8 @@ export class MergeService {
 		pdfPath: string,
 		choice: MergeChoice,
 		copyTarget: string,
+		strokeSnapshot: MergeStrokeSnapshot,
+		expectedSidecar: string | null,
 	): Promise<string> {
 		const bytes = await this.adapter.readBinary(pdfPath);
 		const pdfDoc = await PDFDocument.load(bytes);
@@ -84,9 +118,9 @@ export class MergeService {
 		for (let i = 0; i < pages.length; i++) {
 			const page = pages[i];
 			if (!page) continue;
-			const strokes = this.strokes.forPage(pdfPath, i + 1);
-			if (strokes.length === 0) continue;
-			drawStrokesOnPdfPage(page, strokes);
+			const pageStrokes = strokeSnapshot[String(i + 1)] ?? [];
+			if (pageStrokes.length === 0) continue;
+			drawStrokesOnPdfPage(page, pageStrokes);
 		}
 		const out = await pdfDoc.save();
 		const buffer = new ArrayBuffer(out.byteLength);
@@ -111,7 +145,7 @@ export class MergeService {
 				file,
 				buffer,
 				validatePdf,
-				async () => this.sidecar.discard(pdfPath),
+				async () => this.sidecar.discard(pdfPath, expectedSidecar),
 			);
 		} else {
 			await transactionalWriteBinary(this.adapter, outPath, buffer, validatePdf);
