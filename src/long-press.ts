@@ -8,6 +8,11 @@ export interface LongPressCallbacks {
 	onCancel?: () => void;
 }
 
+export interface TimerHost {
+	setTimeout(handler: () => void, timeout: number): number;
+	clearTimeout(id: number): void;
+}
+
 export class LongPressDetector {
 	private downX = 0;
 	private downY = 0;
@@ -16,13 +21,14 @@ export class LongPressDetector {
 	constructor(
 		private options: LongPressOptions,
 		private callbacks: LongPressCallbacks,
+		private timers: TimerHost = window,
 	) {}
 
 	start(x: number, y: number): void {
 		this.cancel();
 		this.downX = x;
 		this.downY = y;
-		this.timerId = window.setTimeout(() => {
+		this.timerId = this.timers.setTimeout(() => {
 			this.timerId = null;
 			this.callbacks.onFire();
 		}, this.options.durationMs);
@@ -37,7 +43,7 @@ export class LongPressDetector {
 
 	cancel(): void {
 		if (this.timerId === null) return;
-		window.clearTimeout(this.timerId);
+		this.timers.clearTimeout(this.timerId);
 		this.timerId = null;
 		this.callbacks.onCancel?.();
 	}
