@@ -43,6 +43,7 @@ export default class JotPlugin extends Plugin {
 	private lastSaveErrorByPath = new Map<string, string>();
 	private lastActivePdfPath: string | null = null;
 	private lockedPdfPaths = new Set<string>();
+	private deferredSidecarReloads = new Set<string>();
 
 	async onload() {
 		await this.loadSettings();
@@ -79,7 +80,7 @@ export default class JotPlugin extends Plugin {
 				ensureLoaded: (pdfPath) => this.ensureLoaded(pdfPath),
 				redrawOverlays: () => this.overlays.redrawOverlaysForActivePdf(),
 				acquireMutationLock: (pdfPath) => this.acquirePdfMutationLock(pdfPath),
-				releaseMutationLock: (pdfPath) => this.lockedPdfPaths.delete(pdfPath),
+				releaseMutationLock: (pdfPath) => this.releasePdfMutationLock(pdfPath),
 			},
 		);
 		this.registerView(
@@ -186,6 +187,10 @@ export default class JotPlugin extends Plugin {
 				if (this.sidecar.isOwnRecentSave(file.path)) return;
 				const pdfPath = pdfPathFromSidecar(file.path);
 				if (!pdfPath) return;
+				if (this.lockedPdfPaths.has(pdfPath)) {
+					this.deferredSidecarReloads.add(pdfPath);
+					return;
+				}
 				if (this.sidecar.hasPendingSave(pdfPath)) {
 					void this.resolveExternalSidecarConflict(pdfPath);
 					return;
@@ -344,6 +349,12 @@ export default class JotPlugin extends Plugin {
 		if (this.lockedPdfPaths.has(pdfPath)) return false;
 		this.lockedPdfPaths.add(pdfPath);
 		return true;
+	}
+
+	private releasePdfMutationLock(pdfPath: string): void {
+		this.lockedPdfPaths.delete(pdfPath);
+		if (!this.deferredSidecarReloads.delete(pdfPath)) return;
+		void this.reloadSidecar(pdfPath);
 	}
 
 	private reportSaveError(pdfPath: string, error: Error): void {
