@@ -7,6 +7,11 @@ export type DocumentSessionState =
 	| 'conflict'
 	| 'error';
 
+export interface LoadToken {
+	path: string;
+	revision: number;
+}
+
 export interface SaveToken {
 	path: string;
 	revision: number;
@@ -50,26 +55,35 @@ export class DocumentSession {
 	canReload(): boolean {
 		return (
 			!this.isDirty &&
+			this.currentState !== 'loading' &&
 			this.currentState !== 'saving' &&
 			this.currentState !== 'conflict'
 		);
 	}
 
-	beginLoad(): boolean {
-		if (!this.canReload()) return false;
+	beginLoad(): LoadToken | null {
+		if (!this.canReload()) return null;
 		this.currentState = 'loading';
+		this.lastError = null;
+		return { path: this.currentPath, revision: this.revision };
+	}
+
+	completeLoad(token: LoadToken): boolean {
+		if (
+			token.path !== this.currentPath ||
+			token.revision !== this.revision ||
+			this.currentState !== 'loading'
+		) {
+			return false;
+		}
+		this.persistedRevision = this.revision;
+		this.currentState = 'clean';
 		this.lastError = null;
 		return true;
 	}
 
-	completeLoad(): void {
-		this.revision = 0;
-		this.persistedRevision = 0;
-		this.currentState = 'clean';
-		this.lastError = null;
-	}
-
-	failLoad(error: unknown): void {
+	failLoad(token: LoadToken, error: unknown): void {
+		if (token.path !== this.currentPath) return;
 		this.currentState = this.isDirty ? 'dirty' : 'error';
 		this.lastError = toError(error);
 	}
