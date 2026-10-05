@@ -49,14 +49,15 @@ export class SidecarStore {
 	async load(pdfPath: string): Promise<SidecarLoadStatus> {
 		this.ownedPdfPaths.add(pdfPath);
 		const session = this.sessions.get(pdfPath);
-		if (!session.beginLoad()) return 'dirty';
+		const loadToken = session.beginLoad();
+		if (!loadToken) return 'dirty';
 
 		const path = jotPathFor(pdfPath);
 		try {
 			if (!(await this.adapter.exists(path))) {
+				if (!session.completeLoad(loadToken)) return 'dirty';
 				this.protectedOriginals.delete(pdfPath);
 				this.strokes.clearFor(pdfPath);
-				session.completeLoad();
 				return 'missing';
 			}
 
@@ -65,7 +66,7 @@ export class SidecarStore {
 			if (!parsed) {
 				this.protectedOriginals.set(pdfPath, text);
 				const error = new Error(`${path} is invalid`);
-				session.failLoad(error);
+				session.failLoad(loadToken, error);
 				console.warn(`${PLUGIN_LOG} ${error.message}; keeping current annotations in memory`);
 				return 'protected';
 			}
@@ -77,13 +78,13 @@ export class SidecarStore {
 				return 'protected';
 			}
 
+			if (!session.completeLoad(loadToken)) return 'dirty';
 			this.protectedOriginals.delete(pdfPath);
 			this.strokes.clearFor(pdfPath);
 			this.strokes.populateFromPayload(pdfPath, parsed.pages);
-			session.completeLoad();
 			return 'loaded';
 		} catch (error) {
-			session.failLoad(error);
+			session.failLoad(loadToken, error);
 			console.error(`${PLUGIN_LOG} load failed for ${path}:`, error);
 			return 'error';
 		}
