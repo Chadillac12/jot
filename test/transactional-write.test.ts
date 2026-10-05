@@ -82,6 +82,22 @@ describe('transactionalWriteText', () => {
 		expect(fs.textFiles['new.json']).toBeUndefined();
 	});
 
+	it('preserves an external write that appears after the transaction claims the baseline', async () => {
+		const fs = makeAdapter({ 'a.json': 'old' });
+		const originalRename = vi.mocked(fs.adapter.rename).getMockImplementation()!;
+		let renameCount = 0;
+		vi.mocked(fs.adapter.rename).mockImplementation(async (oldPath: string, newPath: string) => {
+			renameCount += 1;
+			await originalRename(oldPath, newPath);
+			if (renameCount === 1) fs.textFiles['a.json'] = 'remote';
+		});
+
+		await expect(
+			transactionalWriteText(fs.adapter, 'a.json', 'local', undefined, 'old'),
+		).rejects.toThrow('Concurrent text write detected after claim');
+		expect(fs.textFiles['a.json']).toBe('remote');
+	});
+
 	it('never replaces the original when temporary validation fails', async () => {
 		const fs = makeAdapter({ 'a.json': 'old' });
 		await expect(
