@@ -40,11 +40,12 @@ export class DocumentSession {
 	}
 
 	get isDirty(): boolean {
-		return this.revisionValue !== this.persistedRevisionValue ||
+		return (
+			this.revisionValue !== this.persistedRevisionValue ||
 			this.stateValue === 'dirty' ||
 			this.stateValue === 'saving' ||
-			this.stateValue === 'error' ||
-			this.stateValue === 'conflict';
+			this.stateValue === 'conflict'
+		);
 	}
 
 	get canReloadFromDisk(): boolean {
@@ -83,6 +84,11 @@ export class DocumentSession {
 		this.lastErrorValue = null;
 		this.stateValue =
 			this.persistedRevisionValue === this.revisionValue ? 'clean' : 'dirty';
+	}
+
+	failLoad(error: unknown): void {
+		this.lastErrorValue = error instanceof Error ? error.message : String(error);
+		this.stateValue = 'error';
 	}
 
 	failSave(error: unknown): void {
