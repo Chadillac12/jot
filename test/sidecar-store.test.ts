@@ -22,6 +22,7 @@ const makeFs = (initial: Record<string, string> = {}): FileSystem => {
 		remove: vi.fn(async (path: string) => {
 			delete files[path];
 		}),
+		list: vi.fn(async () => ({ files: Object.keys(files), folders: [] })),
 		rename: vi.fn(async (oldPath: string, newPath: string) => {
 			files[newPath] = files[oldPath] ?? '';
 			delete files[oldPath];
