@@ -189,6 +189,32 @@ export class SidecarStore {
 		return this.sessions.get(pdfPath).isDirty || this.saveTimers.has(pdfPath);
 	}
 
+	captureBaseline(pdfPath: string): string | null {
+		if (!this.persistedBaselines.has(pdfPath)) {
+			throw new Error(`No verified sidecar baseline is available for ${pdfPath}`);
+		}
+		return this.persistedBaselines.get(pdfPath)!;
+	}
+
+	async discardIfBaselineUnchanged(
+		pdfPath: string,
+		expectedBaseline: string | null,
+	): Promise<void> {
+		const session = this.sessions.get(pdfPath);
+		if (session.isDirty) {
+			throw new Error(`Cannot discard ${pdfPath} annotations while local ink is dirty`);
+		}
+		const path = jotPathFor(pdfPath);
+		const current = await this.readTextOrNull(path);
+		if (current !== expectedBaseline) throw new TransactionConflictError(path);
+
+		this.protectedOriginals.delete(pdfPath);
+		this.persistedBaselines.delete(pdfPath);
+		if (current !== null) await this.adapter.remove(path);
+		this.ownedPdfPaths.delete(pdfPath);
+		this.sessions.remove(pdfPath);
+	}
+
 	async preserveExternalConflictAndFlushLocal(pdfPath: string): Promise<string | null> {
 		const session = this.sessions.get(pdfPath);
 		if (!session.isDirty) return null;
