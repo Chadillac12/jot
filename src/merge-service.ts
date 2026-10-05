@@ -4,6 +4,7 @@ import { ExportChoiceModal } from './merge';
 import { drawStrokesOnPdfPage } from './pdf-render';
 import type { SidecarLoadStatus, SidecarStore } from './sidecar-store';
 import { transactionalModifyVaultBinary, transactionalWriteBinary } from './transactional-write';
+import type { Stroke } from './stroke-math';
 import type { StrokeStore } from './stroke-store';
 import type { UndoHistory } from './undo';
 
@@ -62,7 +63,15 @@ export class MergeService {
 			if (loadStatus === 'protected' || loadStatus === 'error' || loadStatus === 'dirty') {
 				throw new Error('annotation source is not in a verified clean state');
 			}
-			const outPath = await this.writeMerged(pdfPath, choice, copyTarget);
+			const strokeSnapshot = this.strokes.snapshotFor(pdfPath);
+			const sidecarBaseline = this.sidecar.captureBaseline(pdfPath);
+			const outPath = await this.writeMerged(
+				pdfPath,
+				choice,
+				copyTarget,
+				strokeSnapshot,
+				sidecarBaseline,
+			);
 			if (choice === 'overwrite') this.clearAnnotationState(pdfPath);
 			new Notice(`Jot: notes merged into ${outPath}`);
 		} catch (err) {
@@ -77,6 +86,8 @@ export class MergeService {
 		pdfPath: string,
 		choice: MergeChoice,
 		copyTarget: string,
+		strokeSnapshot: Map<number, Stroke[]>,
+		sidecarBaseline: string | null,
 	): Promise<string> {
 		const bytes = await this.adapter.readBinary(pdfPath);
 		const pdfDoc = await PDFDocument.load(bytes);
@@ -84,7 +95,7 @@ export class MergeService {
 		for (let i = 0; i < pages.length; i++) {
 			const page = pages[i];
 			if (!page) continue;
-			const strokes = this.strokes.forPage(pdfPath, i + 1);
+			const strokes = strokeSnapshot.get(i + 1) ?? [];
 			if (strokes.length === 0) continue;
 			drawStrokesOnPdfPage(page, strokes);
 		}
@@ -111,7 +122,7 @@ export class MergeService {
 				file,
 				buffer,
 				validatePdf,
-				async () => this.sidecar.discard(pdfPath),
+				async () => this.sidecar.discardIfBaselineUnchanged(pdfPath, sidecarBaseline),
 			);
 		} else {
 			await transactionalWriteBinary(this.adapter, outPath, buffer, validatePdf);
