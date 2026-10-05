@@ -9,6 +9,11 @@ export interface TwoFingerHoldCallbacks {
 	onDisarm: () => void;
 }
 
+export interface TwoFingerTimerHost {
+	setTimeout(handler: () => void, timeout: number): number;
+	clearTimeout(id: number): void;
+}
+
 interface TrackedTouch {
 	x: number;
 	y: number;
@@ -25,6 +30,7 @@ export class TwoFingerHoldDetector {
 	constructor(
 		private options: TwoFingerHoldOptions,
 		private callbacks: TwoFingerHoldCallbacks,
+		private timers: TwoFingerTimerHost = window,
 	) {}
 
 	pointerDown(id: number, x: number, y: number): void {
@@ -51,7 +57,7 @@ export class TwoFingerHoldDetector {
 
 	cancel(): void {
 		if (this.timerId === null) return;
-		window.clearTimeout(this.timerId);
+		this.timers.clearTimeout(this.timerId);
 		this.timerId = null;
 		this.callbacks.onDisarm();
 	}
@@ -61,7 +67,7 @@ export class TwoFingerHoldDetector {
 	}
 
 	private arm(): void {
-		this.timerId = window.setTimeout(() => {
+		this.timerId = this.timers.setTimeout(() => {
 			this.timerId = null;
 			if (this.touches.size !== REQUIRED_TOUCH_COUNT) return;
 			const fireCenter = this.centroid();
