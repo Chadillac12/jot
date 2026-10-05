@@ -4,7 +4,7 @@ import { DocumentSession, DocumentSessionManager } from '../src/document-session
 describe('DocumentSession state machine', () => {
 	it('blocks reload while dirty', () => {
 		const session = new DocumentSession('a.pdf');
-		expect(session.beginLoad()).toBe(true);
+		expect(session.beginLoad()).not.toBeNull();
 		session.completeLoad();
 		session.markDirty();
 		expect(session.state).toBe('dirty');
@@ -12,10 +12,23 @@ describe('DocumentSession state machine', () => {
 		expect(session.beginLoad()).toBe(false);
 	});
 
+	it('rejects a load completion when a new edit arrives after the load began', () => {
+		const session = new DocumentSession('a.pdf');
+		const initial = session.beginLoad()!;
+		expect(session.completeLoad(initial)).toBe(true);
+
+		const reload = session.beginLoad()!;
+		session.markDirty();
+
+		expect(session.completeLoad(reload)).toBe(false);
+		expect(session.isDirty).toBe(true);
+		expect(session.state).toBe('dirty');
+	});
+
 	it('tracks an edit that arrives during an in-flight save', () => {
 		const session = new DocumentSession('a.pdf');
-		session.beginLoad();
-		session.completeLoad();
+		const load = session.beginLoad()!;
+		session.completeLoad(load);
 		session.markDirty();
 		const token = session.beginSave();
 		expect(token).not.toBeNull();
@@ -27,8 +40,8 @@ describe('DocumentSession state machine', () => {
 
 	it('permits only one in-flight save per document', () => {
 		const session = new DocumentSession('a.pdf');
-		session.beginLoad();
-		session.completeLoad();
+		const load = session.beginLoad()!;
+		session.completeLoad(load);
 		session.markDirty();
 		const first = session.beginSave();
 		expect(first).not.toBeNull();
@@ -38,8 +51,8 @@ describe('DocumentSession state machine', () => {
 
 	it('keeps a failed revision dirty and retryable', () => {
 		const session = new DocumentSession('a.pdf');
-		session.beginLoad();
-		session.completeLoad();
+		const load = session.beginLoad()!;
+		session.completeLoad(load);
 		session.markDirty();
 		const token = session.beginSave()!;
 		session.failSave(token, new Error('disk full'));
@@ -51,8 +64,8 @@ describe('DocumentSession state machine', () => {
 
 	it('prevents save while an external conflict is unresolved', () => {
 		const session = new DocumentSession('a.pdf');
-		session.beginLoad();
-		session.completeLoad();
+		const load = session.beginLoad()!;
+		session.completeLoad(load);
 		session.markDirty();
 		session.markConflict(new Error('external edit'));
 		expect(session.state).toBe('conflict');
