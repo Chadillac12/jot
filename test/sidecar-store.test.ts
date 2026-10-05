@@ -743,6 +743,26 @@ describe('SidecarStore.flushAll', () => {
 		vi.useRealTimers();
 	});
 
+	it('does not schedule retries after shutdown if the final sidecar flush fails', async () => {
+		const fs = makeFs();
+		const strokes = new StrokeStore();
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.2, y: 0.2, pressure: 0.5 }], color: '#333333', width: 0.005, tool: 'pen' },
+		]);
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+		vi.mocked(fs.adapter.write).mockRejectedValue(new Error('disk full'));
+		const store = new SidecarStore(fs.adapter, strokes);
+		store.scheduleSave('a.pdf');
+
+		expect(await store.shutdown()).toBe(false);
+		const writesAfterShutdown = vi.mocked(fs.adapter.write).mock.calls.length;
+		await vi.advanceTimersByTimeAsync(5000);
+
+		expect(vi.mocked(fs.adapter.write).mock.calls.length).toBe(writesAfterShutdown);
+		expect(store.hasPendingSave('a.pdf')).toBe(true);
+		error.mockRestore();
+	});
+
 	it('flushes every dirty scheduled document instead of discarding work', async () => {
 		const fs = makeFs();
 		const strokes = new StrokeStore();
