@@ -23,6 +23,104 @@ async function cleanup(adapter: DataAdapter, path: string): Promise<void> {
 	}
 }
 
+export type TextRecoveryResult = 'none' | 'cleaned' | 'restored-backup' | 'restored-temp';
+export type BinaryRecoveryResult = 'none' | 'rolled-back' | 'finalized';
+
+async function transactionArtifacts(
+	adapter: DataAdapter,
+	path: string,
+	kind: 'jot-backup' | 'jot-tmp',
+): Promise<string[]> {
+	const list = (adapter as DataAdapter & {
+		list?: (path: string) => Promise<{ files: string[]; folders: string[] }>;
+	}).list;
+	if (typeof list !== 'function') return [];
+
+	const slash = path.lastIndexOf('/');
+	const parent = slash >= 0 ? path.slice(0, slash) : '';
+	const prefix = `${path}.${kind}-`;
+	const listing = await list.call(adapter, parent);
+	return listing.files
+		.map((candidate) => {
+			if (candidate.startsWith(prefix)) return candidate;
+			if (!candidate.includes('/')) {
+				const normalized = parent ? `${parent}/${candidate}` : candidate;
+				return normalized.startsWith(prefix) ? normalized : '';
+			}
+			return '';
+		})
+		.filter((candidate): candidate is string => candidate.length > 0)
+		.sort()
+		.reverse();
+}
+
+export async function recoverInterruptedTextWrite(
+	adapter: DataAdapter,
+	path: string,
+	validate: (text: string) => boolean,
+): Promise<TextRecoveryResult> {
+	const backups = await transactionArtifacts(adapter, path, 'jot-backup');
+	const temps = await transactionArtifacts(adapter, path, 'jot-tmp');
+	if (backups.length === 0 && temps.length === 0) return 'none';
+
+	if (await adapter.exists(path)) {
+		const current = await adapter.read(path);
+		if (!validate(current)) return 'none';
+		for (const artifact of [...backups, ...temps]) await cleanup(adapter, artifact);
+		return 'cleaned';
+	}
+
+	for (const [kind, candidates] of [
+		['restored-backup', backups],
+		['restored-temp', temps],
+	] as const) {
+		for (const candidate of candidates) {
+			try {
+				const text = await adapter.read(candidate);
+				if (!validate(text)) continue;
+				if (await adapter.exists(path)) return 'none';
+				await adapter.rename(candidate, path);
+				for (const artifact of [...backups, ...temps]) {
+					if (artifact !== candidate) await cleanup(adapter, artifact);
+				}
+				return kind;
+			} catch {
+				// Try the next validated recovery candidate.
+			}
+		}
+	}
+
+	return 'none';
+}
+
+export async function recoverInterruptedVaultBinary(
+	vault: Vault,
+	adapter: DataAdapter,
+	file: TFile,
+	validate: (bytes: ArrayBuffer) => Promise<void>,
+	dependentPath: string,
+): Promise<BinaryRecoveryResult> {
+	const backups = await transactionArtifacts(adapter, file.path, 'jot-backup');
+	if (backups.length === 0) return 'none';
+
+	const backupPath = backups[0]!;
+	if (await adapter.exists(dependentPath)) {
+		const recovery = await adapter.readBinary(backupPath);
+		await validate(recovery);
+		await vault.modifyBinary(file, recovery);
+		await validate(await vault.readBinary(file));
+		for (const artifact of backups) await cleanup(adapter, artifact);
+		return 'rolled-back';
+	}
+
+	// The dependent cleanup already completed, so the overwrite transaction
+	// reached its logical commit point. Keep the current verified PDF and only
+	// remove the orphan recovery backup.
+	await validate(await vault.readBinary(file));
+	for (const artifact of backups) await cleanup(adapter, artifact);
+	return 'finalized';
+}
+
 export async function transactionalWriteText(
 	adapter: DataAdapter,
 	path: string,
