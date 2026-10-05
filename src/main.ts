@@ -218,12 +218,13 @@ export default class JotPlugin extends Plugin {
 		// flushes. Normal file switches, renames, merges, and notebook closes flush
 		// before the lifecycle transition itself.
 		void this.sidecar?.flushAll();
-		for (const [path, timer] of this.notebookRetryTimers) {
-			window.clearTimeout(timer);
-			const file = this.app.vault.getAbstractFileByPath(path);
-			if (file instanceof TFile) void this.saveNotebookSession(file, this.notebooks.get(path));
-		}
+		for (const timer of this.notebookRetryTimers.values()) window.clearTimeout(timer);
 		this.notebookRetryTimers.clear();
+		for (const session of this.notebooks.all()) {
+			if (!session.state.isDirty || session.state.state === 'conflict') continue;
+			const file = this.app.vault.getAbstractFileByPath(session.path);
+			if (file instanceof TFile) void this.saveNotebookSession(file, session);
+		}
 		this.overlays?.disconnectAll();
 		this.palette?.hide();
 		this.floatingPaletteButton?.hide();
@@ -398,7 +399,14 @@ export default class JotPlugin extends Plugin {
 	}
 
 	renameNotebookSession(oldPath: string, newPath: string): NotebookDocumentSession {
-		return this.notebooks.rename(oldPath, newPath);
+		const retryTimer = this.notebookRetryTimers.get(oldPath);
+		if (retryTimer !== undefined) {
+			window.clearTimeout(retryTimer);
+			this.notebookRetryTimers.delete(oldPath);
+		}
+		const session = this.notebooks.rename(oldPath, newPath);
+		if (retryTimer !== undefined && session.state.isDirty) this.scheduleNotebookRetry(newPath);
+		return session;
 	}
 
 	private activeJotNoteView(): JotNoteView | null {
