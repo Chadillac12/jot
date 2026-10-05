@@ -252,6 +252,40 @@ describe('transaction recovery', () => {
 		expect(fs.textFiles['new.json']).toBe('candidate');
 	});
 
+	it('finalizes a claimed merge even when a newer sidecar appears before restart', async () => {
+		const fs = makeAdapter({
+			'a.pdf.jot.json': 'newer synced annotations',
+			'a.pdf.jot.json.jot-discard-103-1': 'old claimed annotations',
+		});
+		const original = new Uint8Array([1, 2, 3]).buffer;
+		const replacement = new Uint8Array([4, 5, 6]).buffer;
+		fs.binaryFiles.set('a.pdf.jot-backup-103-1', original);
+		let current = replacement.slice(0);
+		const file = { path: 'a.pdf' } as TFile;
+		const vault = {
+			readBinary: vi.fn(async () => current.slice(0)),
+			modifyBinary: vi.fn(async (_file: TFile, data: ArrayBuffer) => {
+				current = data.slice(0);
+			}),
+		} as unknown as Vault;
+
+		const status = await recoverInterruptedVaultBinary(
+			vault,
+			fs.adapter,
+			file,
+			'a.pdf.jot.json',
+			async (bytes) => {
+				if (bytes.byteLength !== 3) throw new Error('invalid');
+			},
+		);
+
+		expect(status).toBe('finalized');
+		expect([...new Uint8Array(current)]).toEqual([4, 5, 6]);
+		expect(fs.textFiles['a.pdf.jot.json']).toBe('newer synced annotations');
+		expect(fs.textFiles['a.pdf.jot.json.jot-discard-103-1']).toBeUndefined();
+		expect(fs.binaryFiles.has('a.pdf.jot-backup-103-1')).toBe(false);
+	});
+
 	it('rolls back an interrupted tracked PDF overwrite when its sidecar still exists', async () => {
 		const fs = makeAdapter({ 'a.pdf.jot.json': '{"version":3,"pages":{}}' });
 		const original = new Uint8Array([1, 2, 3]).buffer;
