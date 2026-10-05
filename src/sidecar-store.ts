@@ -162,22 +162,52 @@ export class SidecarStore {
 			this.protectedOriginals.set(newPdfPath, protectedText);
 		}
 
+		// The PDF path has already changed in the vault. Session identity must
+		// follow that rename even if sidecar migration later fails.
+		const session = this.sessions.rename(oldPdfPath, newPdfPath);
+		let displacedDestination: string | null = null;
+		let displacedConflictPath: string | null = null;
+
 		try {
 			if (await this.adapter.exists(oldSidecar)) {
 				if (await this.adapter.exists(newSidecar)) {
-					const destinationText = await this.adapter.read(newSidecar);
-					const conflictPath = `${newSidecar}.conflict-${Date.now()}.json`;
-					await this.atomicWriteText(conflictPath, destinationText, false);
+					displacedDestination = await this.adapter.read(newSidecar);
+					displacedConflictPath = `${newSidecar}.conflict-${Date.now()}.json`;
+					await this.atomicWriteText(displacedConflictPath, displacedDestination, false);
 					await this.adapter.remove(newSidecar);
 				}
 				await this.adapter.rename(oldSidecar, newSidecar);
 			}
 			this.recentSelfSaves.delete(oldSidecar);
-			this.sessions.rename(oldPdfPath, newPdfPath);
 			return true;
 		} catch (error) {
-			this.sessions.get(oldPdfPath).failSave(error);
-			this.callbacks.onSaveError?.(oldPdfPath, error);
+			// Restore any displaced destination if the actual migration failed.
+			if (
+				displacedDestination !== null &&
+				!(await this.adapter.exists(newSidecar))
+			) {
+				try {
+					await this.atomicWriteText(newSidecar, displacedDestination, false);
+				} catch (restoreError) {
+					console.error(
+						`${PLUGIN_LOG} could not restore displaced destination sidecar ${newSidecar}:`,
+						restoreError,
+					);
+				}
+			}
+			if (displacedConflictPath) {
+				console.warn(
+					`${PLUGIN_LOG} preserved destination sidecar at ${displacedConflictPath}`,
+				);
+			}
+
+			// The document itself has moved, so keep the new session dirty and
+			// retry writing a correct sidecar at the new path. The old sidecar is
+			// left in place as recovery evidence if its rename failed.
+			session.markDirty();
+			session.failSave(error);
+			this.callbacks.onSaveError?.(newPdfPath, error);
+			this.scheduleRetry(newPdfPath);
 			console.error(
 				`${PLUGIN_LOG} could not move sidecar from ${oldSidecar} to ${newSidecar}:`,
 				error,
