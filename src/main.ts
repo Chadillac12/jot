@@ -244,6 +244,11 @@ export default class JotPlugin extends Plugin {
 	private async reloadSidecar(pdfPath: string) {
 		const status = await this.sidecar.load(pdfPath);
 		if (status === 'dirty') return;
+		if (status === 'loaded' || status === 'missing') {
+			// An external disk update establishes a new history boundary. Undoing
+			// across it could resurrect stale pre-sync annotations.
+			this.history.dropPath(pdfPath);
+		}
 		if (status === 'protected') {
 			new Notice(
 				'Jot: an external annotation sidecar could not be safely loaded. The file was left untouched and current annotations were kept in memory.',
