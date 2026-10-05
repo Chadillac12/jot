@@ -4,6 +4,7 @@ import type { Stroke, StrokeRenderProfile } from './stroke-math';
 export const JOT_SUFFIX = '.jot.json';
 export const JOT_FORMAT_VERSION = 3;
 export const PAGE_KEY_SEPARATOR = '::';
+const MAX_ABS_NORMALIZED_COORDINATE = 16;
 
 export interface JotFileFormat {
 	version: number;
@@ -79,7 +80,15 @@ export function parseStoredStroke(value: unknown): Stroke | null {
 	for (const rawPoint of value.points) {
 		if (!isRecord(rawPoint)) return null;
 		const { x, y, pressure } = rawPoint;
-		if (!isFiniteNumber(x) || !isFiniteNumber(y) || !isFiniteNumber(pressure)) return null;
+		if (
+			!isFiniteNumber(x) ||
+			!isFiniteNumber(y) ||
+			!isFiniteNumber(pressure) ||
+			Math.abs(x) > MAX_ABS_NORMALIZED_COORDINATE ||
+			Math.abs(y) > MAX_ABS_NORMALIZED_COORDINATE
+		) {
+			return null;
+		}
 		points.push({
 			x,
 			y,
@@ -109,7 +118,9 @@ export function migrateStroke(raw: Partial<Stroke>): Stroke {
 					(point) =>
 						isFiniteNumber(point?.x) &&
 						isFiniteNumber(point?.y) &&
-						isFiniteNumber(point?.pressure),
+						isFiniteNumber(point?.pressure) &&
+						Math.abs(point.x) <= MAX_ABS_NORMALIZED_COORDINATE &&
+						Math.abs(point.y) <= MAX_ABS_NORMALIZED_COORDINATE,
 				)
 				.map((point) => ({
 					x: point.x,
