@@ -68,9 +68,10 @@ function makeHarness() {
 			iterateAllLeaves: (fn: (value: unknown) => void) => fn(leaf),
 		},
 	};
-	const wire = vi.fn();
+	const disposeInput = vi.fn();
+	const wire = vi.fn(() => disposeInput);
 	const manager = new OverlayManager(app as any, new StrokeStore(), wire);
-	return { page, manager, wire };
+	return { page, manager, wire, disposeInput };
 }
 
 beforeEach(() => {
@@ -79,6 +80,11 @@ beforeEach(() => {
 	(globalThis as any).activeDocument = document;
 	(globalThis as any).ResizeObserver = ResizeObserverMock;
 	(globalThis as any).window.devicePixelRatio = 2;
+	window.requestAnimationFrame = (callback: FrameRequestCallback) => {
+		callback(0);
+		return 1;
+	};
+	window.cancelAnimationFrame = vi.fn();
 	(HTMLElement.prototype as any).setCssStyles = function (styles: Record<string, string>) {
 		Object.assign((this as HTMLElement).style, styles);
 	};
@@ -118,6 +124,19 @@ describe('OverlayManager zoom recovery', () => {
 		expect(page.querySelectorAll('canvas.jot-overlay')).toHaveLength(1);
 		expect(page.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(1);
 		expect(wire).toHaveBeenCalledTimes(1);
+	});
+
+	it('disposes page observers, canvases, and input handlers on disconnect', () => {
+		const { page, manager, disposeInput } = makeHarness();
+		manager.attachToActivePdf();
+		expect(page.querySelector('canvas.jot-live-overlay')).not.toBeNull();
+
+		manager.disconnectAll();
+
+		expect(disposeInput).toHaveBeenCalledTimes(1);
+		expect(page.querySelector('canvas.jot-live-overlay')).toBeNull();
+		expect(page.querySelector('canvas.jot-overlay')).toBeNull();
+		expect(page.classList.contains('jot-page-anchor')).toBe(false);
 	});
 
 	it('resizes both layers safely after PDF zoom changes', () => {
