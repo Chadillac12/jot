@@ -10,6 +10,7 @@ import type { StrokeStore } from './stroke-store';
 import {
 	TransactionConflictError,
 	recoverInterruptedTextWrite,
+	transactionalRemoveTextExpected,
 	transactionalWriteText,
 } from './transactional-write';
 
@@ -219,12 +220,10 @@ export class SidecarStore {
 			throw new Error(`Cannot discard ${pdfPath} annotations while local ink is dirty`);
 		}
 		const path = jotPathFor(pdfPath);
-		const current = await this.readTextOrNull(path);
-		if (current !== expectedBaseline) throw new TransactionConflictError(path);
+		await transactionalRemoveTextExpected(this.adapter, path, expectedBaseline);
 
 		this.protectedOriginals.delete(pdfPath);
 		this.persistedBaselines.delete(pdfPath);
-		if (current !== null) await this.adapter.remove(path);
 		this.ownedPdfPaths.delete(pdfPath);
 		this.sessions.remove(pdfPath);
 	}
@@ -242,7 +241,12 @@ export class SidecarStore {
 			this.persistedBaselines.set(pdfPath, remoteText);
 			session.markConflict();
 			session.resolveConflictKeepLocal();
-			await this.flush(pdfPath);
+			if (!(await this.flush(pdfPath))) {
+				console.error(
+					`${PLUGIN_LOG} external conflict was preserved at ${conflictPath}, but local ink still failed to flush for ${sidecarPath}`,
+				);
+				return null;
+			}
 			return conflictPath;
 		} catch (error) {
 			session.markConflict(error);
