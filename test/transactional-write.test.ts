@@ -6,6 +6,7 @@ import {
 	recoverInterruptedTextWrite,
 	recoverInterruptedVaultBinary,
 	transactionalModifyVaultBinary,
+	transactionalRemoveTextExpected,
 	transactionalWriteBinary,
 	transactionalWriteText,
 } from '../src/transactional-write';
@@ -97,6 +98,34 @@ describe('transaction recovery', () => {
 		expect(fs.binaryFiles.has('a.pdf.jot-backup-100-1')).toBe(false);
 	});
 
+	it('rolls back an interrupted PDF overwrite when the sidecar is quarantined mid-delete', async () => {
+		const fs = makeAdapter({
+			'a.pdf.jot.json.jot-backup-100-2': '{"version":3,"pages":{"1":[]}}',
+		});
+		fs.binaryFiles.set('a.pdf.jot-backup-100-1', new Uint8Array([1, 2, 3]).buffer);
+		const file = { path: 'a.pdf' } as TFile;
+		let current = new Uint8Array([4, 5, 6]).buffer;
+		const vault = {
+			readBinary: vi.fn(async () => current.slice(0)),
+			modifyBinary: vi.fn(async (_file: TFile, data: ArrayBuffer) => {
+				current = data.slice(0);
+			}),
+		} as unknown as Vault;
+
+		const result = await recoverInterruptedVaultBinary(
+			vault,
+			fs.adapter,
+			file,
+			async (candidate) => {
+				if (candidate.byteLength === 0) throw new Error('invalid');
+			},
+			'a.pdf.jot.json',
+		);
+
+		expect(result).toBe('rolled-back');
+		expect([...new Uint8Array(current)]).toEqual([1, 2, 3]);
+	});
+
 	it('finalizes an interrupted PDF overwrite when sidecar cleanup already completed', async () => {
 		const fs = makeAdapter();
 		fs.binaryFiles.set('a.pdf.jot-backup-100-1', new Uint8Array([1, 2, 3]).buffer);
@@ -122,6 +151,37 @@ describe('transaction recovery', () => {
 		expect(result).toBe('finalized');
 		expect([...new Uint8Array(current)]).toEqual([4, 5, 6]);
 		expect(fs.binaryFiles.has('a.pdf.jot-backup-100-1')).toBe(false);
+	});
+});
+
+describe('transactionalRemoveTextExpected', () => {
+	it('refuses to delete a file that no longer matches the verified baseline', async () => {
+		const fs = makeAdapter({ 'a.json': 'remote' });
+
+		await expect(
+			transactionalRemoveTextExpected(fs.adapter, 'a.json', 'old'),
+		).rejects.toBeInstanceOf(TransactionConflictError);
+
+		expect(fs.textFiles['a.json']).toBe('remote');
+		expect(Object.keys(fs.textFiles).filter((path) => path.includes('jot-backup'))).toEqual([]);
+	});
+
+	it('deletes only the quarantined baseline and preserves a synced replacement', async () => {
+		const fs = makeAdapter({ 'a.json': 'old' });
+		const originalRename = vi.mocked(fs.adapter.rename).getMockImplementation()!;
+		let injected = false;
+		vi.mocked(fs.adapter.rename).mockImplementation(async (oldPath: string, newPath: string) => {
+			await originalRename(oldPath, newPath);
+			if (!injected && oldPath === 'a.json' && newPath.includes('.jot-backup-')) {
+				injected = true;
+				fs.textFiles['a.json'] = 'new remote';
+			}
+		});
+
+		await transactionalRemoveTextExpected(fs.adapter, 'a.json', 'old');
+
+		expect(fs.textFiles['a.json']).toBe('new remote');
+		expect(Object.keys(fs.textFiles).filter((path) => path.includes('jot-backup'))).toEqual([]);
 	});
 });
 
