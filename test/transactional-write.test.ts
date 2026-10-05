@@ -324,6 +324,56 @@ describe('transactionalWriteText', () => {
 });
 
 describe('transactionalWriteBinary', () => {
+	it('refuses to create a copy over a file that appears after the transaction starts', async () => {
+		const fs = makeAdapter();
+		const replacement = new Uint8Array([4, 5, 6]).buffer;
+		const originalWriteBinary = vi.mocked(fs.adapter.writeBinary).getMockImplementation()!;
+		vi.mocked(fs.adapter.writeBinary).mockImplementation(async (path: string, data: ArrayBuffer) => {
+			await originalWriteBinary(path, data);
+			if (path.includes('.jot-tmp-')) {
+				fs.binaryFiles.set('new.pdf', new Uint8Array([9, 9, 9]).buffer);
+			}
+		});
+
+		await expect(
+			transactionalWriteBinary(
+				fs.adapter,
+				'new.pdf',
+				replacement,
+				async () => {},
+				undefined,
+				null,
+			),
+		).rejects.toBeInstanceOf(TransactionConflictError);
+
+		expect([...new Uint8Array(fs.binaryFiles.get('new.pdf')!)]).toEqual([9, 9, 9]);
+	});
+
+	it('preserves a synced copy target that replaces Jot’s bytes before verification', async () => {
+		const fs = makeAdapter();
+		const replacement = new Uint8Array([4, 5, 6]).buffer;
+		const originalRename = vi.mocked(fs.adapter.rename).getMockImplementation()!;
+		vi.mocked(fs.adapter.rename).mockImplementation(async (oldPath: string, newPath: string) => {
+			await originalRename(oldPath, newPath);
+			if (oldPath.includes('.jot-tmp-') && newPath === 'new.pdf') {
+				fs.binaryFiles.set('new.pdf', new Uint8Array([8, 8, 8]).buffer);
+			}
+		});
+
+		await expect(
+			transactionalWriteBinary(
+				fs.adapter,
+				'new.pdf',
+				replacement,
+				async () => {},
+				undefined,
+				null,
+			),
+		).rejects.toBeInstanceOf(TransactionConflictError);
+
+		expect([...new Uint8Array(fs.binaryFiles.get('new.pdf')!)]).toEqual([8, 8, 8]);
+	});
+
 	it('removes an invalid newly committed binary when there was no original', async () => {
 		const fs = makeAdapter();
 		const replacement = new Uint8Array([4, 5, 6]).buffer;
