@@ -198,7 +198,15 @@ export default class JotPlugin extends Plugin {
 			}),
 		);
 
-		this.registerDomEvent(window, 'resize', () => this.refreshFloatingPaletteButton());
+		const workspaceDocument = this.app.workspace.containerEl.ownerDocument;
+		const workspaceWindow = workspaceDocument.defaultView;
+		this.registerDomEvent(workspaceDocument, 'visibilitychange', () => {
+			if (workspaceDocument.visibilityState === 'hidden') this.flushDirtyBestEffort();
+		});
+		if (workspaceWindow) {
+			this.registerDomEvent(workspaceWindow, 'pagehide', () => this.flushDirtyBestEffort());
+			this.registerDomEvent(workspaceWindow, 'resize', () => this.refreshFloatingPaletteButton());
+		}
 
 		this.app.workspace.onLayoutReady(async () => {
 			const filePath = this.overlays.getActivePdfFilePath();
@@ -214,20 +222,24 @@ export default class JotPlugin extends Plugin {
 	}
 
 	onunload() {
-		// Obsidian's unload hook is synchronous, so these are best-effort final
-		// flushes. Normal file switches, renames, merges, and notebook closes flush
-		// before the lifecycle transition itself.
-		void this.sidecar?.flushAll();
+		// Obsidian's unload hook is synchronous, so this is a best-effort final
+		// flush. Normal file switches, visibility loss, page hide, renames, merges,
+		// and notebook closes flush before the lifecycle transition itself.
+		this.flushDirtyBestEffort();
 		for (const timer of this.notebookRetryTimers.values()) window.clearTimeout(timer);
 		this.notebookRetryTimers.clear();
+		this.overlays?.disconnectAll();
+		this.palette?.hide();
+		this.floatingPaletteButton?.hide();
+	}
+
+	private flushDirtyBestEffort(): void {
+		void this.sidecar?.flushAll();
 		for (const session of this.notebooks.all()) {
 			if (!session.state.isDirty || session.state.state === 'conflict') continue;
 			const file = this.app.vault.getAbstractFileByPath(session.path);
 			if (file instanceof TFile) void this.saveNotebookSession(file, session);
 		}
-		this.overlays?.disconnectAll();
-		this.palette?.hide();
-		this.floatingPaletteButton?.hide();
 	}
 
 	private async ensureLoaded(pdfPath: string): Promise<SidecarLoadStatus> {
