@@ -1,4 +1,5 @@
 import { Notice, Plugin, TFile } from 'obsidian';
+import { DocumentSessionManager } from './document-session';
 import type { InkSaveScheduler, InkSurfaceController } from './ink-surface';
 import { DEFAULT_TOOL_STATE, Palette, ToolState } from './palette';
 import { normalizePalettePreferences } from './palette-activation';
@@ -11,6 +12,7 @@ import { isSidecarPath, pdfPathFromSidecar } from './jot-file';
 import { JOT_NOTE_EXTENSION, JOT_NOTE_VIEW_TYPE, createJotNote, serializeJotNote } from './jot-note-file';
 import { JotNoteView } from './jot-note-view';
 import { MergeService } from './merge-service';
+import { NotebookSessionManager, type NotebookDocumentSession } from './notebook-session';
 import { OverlayManager } from './overlay-manager';
 import { SidecarStore } from './sidecar-store';
 import { StrokeStore } from './stroke-store';
@@ -24,6 +26,9 @@ const PLUGIN_LOG = '[jot]';
 
 export default class JotPlugin extends Plugin {
 	private strokes = new StrokeStore();
+	private sessions = new DocumentSessionManager();
+	private notebooks = new NotebookSessionManager(this.sessions);
+	private lastActivePdfPath: string | null = null;
 	private sidecar!: SidecarStore;
 	private merge!: MergeService;
 	private overlays!: OverlayManager;
@@ -37,7 +42,22 @@ export default class JotPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 		this.applyInkSettings();
-		this.sidecar = new SidecarStore(this.app.vault.adapter, this.strokes);
+		this.sidecar = new SidecarStore(
+			this.app.vault.adapter,
+			this.strokes,
+			this.sessions,
+			{
+				onSaveError: (path, error) => {
+					new Notice(
+						`Jot: save failed for ${path}. Changes remain dirty and Jot will retry: ${error instanceof Error ? error.message : String(error)}`,
+						8000,
+					);
+				},
+				onSaveRecovered: (path) => {
+					new Notice(`Jot: save recovered for ${path}.`);
+				},
+			},
+		);
 		this.overlays = new OverlayManager(this.app, this.strokes, (canvas) =>
 			this.wirePointerEvents(canvas),
 		);
@@ -128,11 +148,16 @@ export default class JotPlugin extends Plugin {
 
 		this.registerEvent(
 			this.app.workspace.on('file-open', async (file: TFile | null) => {
-				if (file?.extension !== 'pdf') {
+				const nextPdf = file?.extension === 'pdf' ? file.path : null;
+				if (this.lastActivePdfPath && this.lastActivePdfPath !== nextPdf) {
+					await this.sidecar.flush(this.lastActivePdfPath);
+				}
+				this.lastActivePdfPath = nextPdf;
+				if (!nextPdf) {
 					this.refreshFloatingPaletteButton();
 					return;
 				}
-				await this.ensureLoaded(file.path);
+				await this.ensureLoaded(nextPdf);
 				window.setTimeout(() => {
 					this.overlays.attachToActivePdf();
 					this.refreshFloatingPaletteButton();
@@ -154,7 +179,7 @@ export default class JotPlugin extends Plugin {
 				if (this.sidecar.isOwnRecentSave(file.path)) return;
 				const pdfPath = pdfPathFromSidecar(file.path);
 				if (!pdfPath) return;
-				if (this.sidecar.hasPendingSave(pdfPath)) {
+				if (this.sidecar.hasUnsavedChanges(pdfPath)) {
 					void this.resolveExternalSidecarConflict(pdfPath);
 					return;
 				}
@@ -172,6 +197,7 @@ export default class JotPlugin extends Plugin {
 
 		this.app.workspace.onLayoutReady(async () => {
 			const filePath = this.overlays.getActivePdfFilePath();
+			this.lastActivePdfPath = filePath;
 			if (!filePath) {
 				this.refreshFloatingPaletteButton();
 				return;
@@ -183,14 +209,18 @@ export default class JotPlugin extends Plugin {
 	}
 
 	onunload() {
+		// Obsidian's unload hook is synchronous, so this is a best-effort final
+		// flush. Normal file switches, renames, merges, and notebook closes flush
+		// before the lifecycle transition itself.
+		void this.sidecar?.flushAll();
 		this.overlays?.disconnectAll();
-		this.sidecar?.cancelAllPending();
 		this.palette?.hide();
 		this.floatingPaletteButton?.hide();
 	}
 
 	private async ensureLoaded(pdfPath: string) {
 		const status = await this.sidecar.load(pdfPath);
+		if (status === 'dirty') return;
 		if (status === 'protected') {
 			new Notice(
 				'Jot: the existing annotation sidecar could not be safely loaded. It is protected from overwrite and will be backed up before any new annotations are saved.',
@@ -201,6 +231,7 @@ export default class JotPlugin extends Plugin {
 
 	private async reloadSidecar(pdfPath: string) {
 		const status = await this.sidecar.load(pdfPath);
+		if (status === 'dirty') return;
 		if (status === 'protected') {
 			new Notice(
 				'Jot: an external annotation sidecar could not be safely loaded. The file was left untouched and current annotations were kept in memory.',
@@ -211,9 +242,11 @@ export default class JotPlugin extends Plugin {
 	}
 
 	private async handlePdfRename(oldPath: string, newPath: string): Promise<void> {
+		await this.sidecar.flush(oldPath);
 		this.strokes.rekeyDocumentPath(oldPath, newPath);
 		this.history.rekeyPath(oldPath, newPath);
 		await this.sidecar.renamePdfPath(oldPath, newPath);
+		if (this.lastActivePdfPath === oldPath) this.lastActivePdfPath = newPath;
 		this.overlays.attachToActivePdf();
 		this.overlays.redrawOverlaysForPdf(newPath);
 	}
@@ -306,6 +339,14 @@ export default class JotPlugin extends Plugin {
 		const x = Math.min(win.innerWidth - margin, Math.max(margin, rect.left + rect.width / 2));
 		const y = Math.min(win.innerHeight - margin, Math.max(margin, rect.top + rect.height / 2));
 		this.palette.show(doc.body, x, y, this.settings.handedness);
+	}
+
+	getNotebookSession(path: string): NotebookDocumentSession {
+		return this.notebooks.get(path);
+	}
+
+	renameNotebookSession(oldPath: string, newPath: string): NotebookDocumentSession {
+		return this.notebooks.rename(oldPath, newPath);
 	}
 
 	private activeJotNoteView(): JotNoteView | null {
