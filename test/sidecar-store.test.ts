@@ -684,8 +684,8 @@ describe('SidecarStore persistence-domain isolation', () => {
 		const fs = makeFs();
 		const sessions = new DocumentSessionManager();
 		const notebook = sessions.get('Lecture.jot');
-		notebook.beginLoad();
-		notebook.completeLoad();
+		const load = notebook.beginLoad()!;
+		notebook.completeLoad(load);
 		notebook.markDirty();
 		const store = new SidecarStore(fs.adapter, new StrokeStore(), sessions);
 
