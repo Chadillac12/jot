@@ -1,7 +1,13 @@
 /* eslint-disable @typescript-eslint/unbound-method, obsidianmd/no-tfile-tfolder-cast */
 import type { DataAdapter, TFile, Vault } from 'obsidian';
 import { describe, expect, it, vi } from 'vitest';
-import { transactionalModifyVaultBinary, transactionalWriteBinary, transactionalWriteText } from '../src/transactional-write';
+import {
+	recoverInterruptedTextWrite,
+	recoverInterruptedVaultBinary,
+	transactionalModifyVaultBinary,
+	transactionalWriteBinary,
+	transactionalWriteText,
+} from '../src/transactional-write';
 
 function makeAdapter(initial: Record<string, string> = {}) {
 	const textFiles: Record<string, string> = { ...initial };
@@ -20,6 +26,10 @@ function makeAdapter(initial: Record<string, string> = {}) {
 			delete textFiles[path];
 			binaryFiles.delete(path);
 		}),
+		list: vi.fn(async () => ({
+			files: [...Object.keys(textFiles), ...binaryFiles.keys()],
+			folders: [],
+		})),
 		rename: vi.fn(async (oldPath: string, newPath: string) => {
 			if (oldPath in textFiles) {
 				textFiles[newPath] = textFiles[oldPath]!;
@@ -197,3 +207,61 @@ describe('transactionalModifyVaultBinary', () => {
 	});
 });
 
+
+
+describe('transaction recovery', () => {
+	it('restores the original text backup when a crash occurred between the two renames', async () => {
+		const fs = makeAdapter({
+			'a.json.jot-backup-100-1': 'old',
+			'a.json.jot-tmp-100-1': 'new',
+		});
+		const status = await recoverInterruptedTextWrite(
+			fs.adapter,
+			'a.json',
+			(text) => text === 'old' || text === 'new',
+		);
+		expect(status).toBe('restored-backup');
+		expect(fs.textFiles['a.json']).toBe('old');
+		expect(Object.keys(fs.textFiles).filter((path) => path.includes('.jot-'))).toEqual([]);
+	});
+
+	it('salvages a valid first-write temp when no prior authoritative file existed', async () => {
+		const fs = makeAdapter({ 'new.json.jot-tmp-101-1': 'candidate' });
+		const status = await recoverInterruptedTextWrite(
+			fs.adapter,
+			'new.json',
+			(text) => text === 'candidate',
+		);
+		expect(status).toBe('committed-temp');
+		expect(fs.textFiles['new.json']).toBe('candidate');
+	});
+
+	it('rolls back an interrupted tracked PDF overwrite when its sidecar still exists', async () => {
+		const fs = makeAdapter({ 'a.pdf.jot.json': '{"version":3,"pages":{}}' });
+		const original = new Uint8Array([1, 2, 3]).buffer;
+		const replacement = new Uint8Array([4, 5, 6]).buffer;
+		fs.binaryFiles.set('a.pdf.jot-backup-102-1', original);
+		let current = replacement.slice(0);
+		const file = { path: 'a.pdf' } as TFile;
+		const vault = {
+			readBinary: vi.fn(async () => current.slice(0)),
+			modifyBinary: vi.fn(async (_file: TFile, data: ArrayBuffer) => {
+				current = data.slice(0);
+			}),
+		} as unknown as Vault;
+
+		const status = await recoverInterruptedVaultBinary(
+			vault,
+			fs.adapter,
+			file,
+			'a.pdf.jot.json',
+			async (bytes) => {
+				if (bytes.byteLength !== 3) throw new Error('invalid');
+			},
+		);
+
+		expect(status).toBe('rolled-back');
+		expect([...new Uint8Array(current)]).toEqual([1, 2, 3]);
+		expect(fs.binaryFiles.has('a.pdf.jot-backup-102-1')).toBe(false);
+	});
+});
