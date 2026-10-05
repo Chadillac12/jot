@@ -4,7 +4,7 @@ import { ExportChoiceModal } from './merge';
 import { drawStrokesOnPdfPage } from './pdf-render';
 import type { SidecarLoadStatus, SidecarStore } from './sidecar-store';
 import { transactionalModifyVaultBinary, transactionalWriteBinary } from './transactional-write';
- import type { StrokeStore } from './stroke-store';
+import type { StrokeStore } from './stroke-store';
 import {
 	snapshotStrokesForPdf,
 	type MergeStrokeSnapshot,
