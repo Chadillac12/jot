@@ -87,7 +87,7 @@ export function parseStoredStroke(value: unknown): Stroke | null {
 	}
 
 	const color = value.color === undefined ? '#000000' : value.color;
-	if (typeof color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(color)) return null;
+	if (typeof color !== 'string' || !/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(color)) return null;
 
 	const width = value.width === undefined ? 0.0025 : value.width;
 	if (!isFiniteNumber(width) || width <= 0 || width > 0.1) return null;
@@ -117,7 +117,7 @@ export function migrateStroke(raw: Partial<Stroke>): Stroke {
 				}))
 		: [];
 	const color =
-		typeof raw.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(raw.color)
+		typeof raw.color === 'string' && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(raw.color)
 			? raw.color
 			: '#000000';
 	const width =
