@@ -141,6 +141,41 @@ describe('SidecarStore concurrency and failure handling', () => {
 		expect(strokes.forPage('a.pdf', 1)[0]?.color).toBe('#0000ff');
 	});
 
+	it('does not let a sidecar read that started clean replace ink added while the read is in flight', async () => {
+		const remote = JSON.stringify({
+			version: JOT_FORMAT_VERSION,
+			pages: {
+				'1': [
+					{ points: [{ x: 0.9, y: 0.9, pressure: 0.5 }], color: '#ff0000', width: 0.005, tool: 'pen' },
+				],
+			},
+		});
+		const fs = makeFs({ 'a.pdf.jot.json': remote });
+		const strokes = new StrokeStore();
+		const store = new SidecarStore(fs.adapter, strokes);
+		let releaseRead!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			releaseRead = resolve;
+		});
+		const originalRead = vi.mocked(fs.adapter.read).getMockImplementation()!;
+		vi.mocked(fs.adapter.read).mockImplementationOnce(async (path: string) => {
+			await gate;
+			return originalRead(path);
+		});
+
+		const loading = store.load('a.pdf');
+		await Promise.resolve();
+		strokes.setForKey('a.pdf::1', [
+			{ points: [{ x: 0.1, y: 0.1, pressure: 0.5 }], color: '#0000ff', width: 0.005, tool: 'pen' },
+		]);
+		store.scheduleSave('a.pdf');
+		releaseRead();
+
+		expect(await loading).toBe('dirty');
+		expect(strokes.forPage('a.pdf', 1)[0]?.color).toBe('#0000ff');
+		expect(store.hasPendingSave('a.pdf')).toBe(true);
+	});
+
 	it('keeps a newer edit dirty when it arrives during an in-flight save', async () => {
 		const fs = makeFs();
 		const strokes = new StrokeStore();
