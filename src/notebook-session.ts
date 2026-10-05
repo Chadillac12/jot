@@ -12,7 +12,7 @@ import { UndoHistory } from './undo';
 export type NotebookSessionChange = 'ink' | 'structure' | 'reload' | 'rename' | 'save-error' | 'conflict';
 
 export class NotebookExternalConflictError extends Error {
-	constructor() {
+	constructor(readonly externalData: string) {
 		super('Notebook changed on disk while local handwriting was unsaved.');
 		this.name = 'NotebookExternalConflictError';
 	}
@@ -27,6 +27,7 @@ export class NotebookDocumentSession {
 	private rawDataValue = '';
 	private loadErrorValue: string | null = null;
 	private persistedDataValue = '';
+	private conflictDataValue: string | null = null;
 	private listeners = new Set<(change: NotebookSessionChange) => void>();
 	private saveChain: Promise<boolean> = Promise.resolve(true);
 
@@ -72,6 +73,7 @@ export class NotebookDocumentSession {
 
 		if (this.stateSession.isDirty) {
 			if (data === this.persistedDataValue || data === this.serialize()) return 'loaded';
+			this.conflictDataValue = data;
 			this.stateSession.markConflict(
 				'Notebook changed on disk while local handwriting was unsaved.',
 			);
@@ -93,6 +95,7 @@ export class NotebookDocumentSession {
 		}
 
 		this.loadErrorValue = null;
+		this.conflictDataValue = null;
 		this.noteValue = parsed.note;
 		this.strokes.clearFor(this.path);
 		for (const page of parsed.note.pages) {
@@ -147,11 +150,13 @@ export class NotebookDocumentSession {
 		try {
 			await writer(expectedData, serialized);
 			this.persistedDataValue = serialized;
+			this.conflictDataValue = null;
 			this.rawDataValue = serialized;
 			this.stateSession.completeSave(revision);
 			return true;
 		} catch (error) {
 			if (error instanceof NotebookExternalConflictError) {
+				this.conflictDataValue = error.externalData;
 				this.stateSession.markConflict(error.message);
 				this.emit('conflict');
 				return false;
@@ -163,6 +168,12 @@ export class NotebookDocumentSession {
 	}
 
 	resolveConflictKeepLocal(): void {
+		if (this.conflictDataValue !== null) {
+			// Treat the exact external bytes that triggered the conflict as the new
+			// compare-and-swap baseline while retaining the local in-memory model.
+			this.persistedDataValue = this.conflictDataValue;
+		}
+		this.conflictDataValue = null;
 		this.stateSession.resolveConflictKeepLocal();
 	}
 
