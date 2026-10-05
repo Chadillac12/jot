@@ -72,6 +72,25 @@ describe('NotebookStore', () => {
 		expect(session.lifecycle.isDirty).toBe(false);
 	});
 
+	it('does not schedule retries after shutdown if the final notebook flush fails', async () => {
+		const fs = makeVault();
+		const sessions = new NotebookSessionManager(new DocumentSessionManager());
+		const session = sessions.get('Lecture.jot');
+		session.loadFromText(fs.data.get('Lecture.jot')!);
+		session.setPaperStyle('dot');
+		vi.mocked(fs.vault.process).mockRejectedValue(new Error('disk full'));
+
+		const store = new NotebookStore(fs.vault, sessions);
+		store.scheduleSave('Lecture.jot');
+
+		expect(await store.shutdown()).toBe(false);
+		const callsAfterShutdown = vi.mocked(fs.vault.process).mock.calls.length;
+		await vi.advanceTimersByTimeAsync(5000);
+
+		expect(vi.mocked(fs.vault.process).mock.calls.length).toBe(callsAfterShutdown);
+		expect(session.lifecycle.isDirty).toBe(true);
+	});
+
 	it('flushAll persists dirty notebook sessions during lifecycle transitions', async () => {
 		const fs = makeVault();
 		const sessions = new NotebookSessionManager(new DocumentSessionManager());
