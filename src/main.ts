@@ -1,4 +1,5 @@
 import { Notice, Plugin, TFile } from 'obsidian';
+import { PDFDocument } from 'pdf-lib';
 import type { InkSaveScheduler, InkSurfaceController } from './ink-surface';
 import { DEFAULT_TOOL_STATE, Palette, ToolState } from './palette';
 import { DocumentSessionManager } from './document-session';
@@ -8,12 +9,12 @@ import { ConfirmClearModal } from './clear';
 import { collectClearOperations, countStrokes, toUndoEntries } from './clear-ops';
 import { FloatingPaletteButton } from './floating-palette-button';
 import { PointerEventHandler } from './pointer-event-handler';
-import { isSidecarPath, pdfPathFromSidecar } from './jot-file';
+import { isSidecarPath, jotPathFor, pdfPathFromSidecar } from './jot-file';
 import { JOT_NOTE_EXTENSION, JOT_NOTE_VIEW_TYPE, createJotNote, serializeJotNote } from './jot-note-file';
 import { JotNoteView } from './jot-note-view';
 import { NotebookSessionManager, type NotebookSession } from './notebook-session';
 import { NotebookStore } from './notebook-store';
-import { transactionalWriteText } from './transactional-write';
+import { recoverInterruptedVaultBinary, transactionalWriteText } from './transactional-write';
 import { MergeService } from './merge-service';
 import { OverlayManager } from './overlay-manager';
 import { SidecarStore } from './sidecar-store';
@@ -43,6 +44,7 @@ export default class JotPlugin extends Plugin {
 	private lastSaveErrorByPath = new Map<string, string>();
 	private lastActivePdfPath: string | null = null;
 	private lockedPdfPaths = new Set<string>();
+	private recoveredPdfPaths = new Set<string>();
 
 	async onload() {
 		await this.loadSettings();
@@ -234,6 +236,24 @@ export default class JotPlugin extends Plugin {
 	}
 
 	private async ensureLoaded(pdfPath: string) {
+		if (!this.recoveredPdfPaths.has(pdfPath)) {
+			const file = this.app.vault.getAbstractFileByPath(pdfPath);
+			if (file instanceof TFile) {
+				const recovery = await recoverInterruptedVaultBinary(
+					this.app.vault,
+					this.app.vault.adapter,
+					file,
+					jotPathFor(pdfPath),
+					async (bytes) => {
+						await PDFDocument.load(bytes);
+					},
+				);
+				if (recovery === 'rolled-back') {
+					new Notice('Jot: recovered an interrupted PDF overwrite and restored the original PDF.');
+				}
+				if (recovery !== 'unresolved') this.recoveredPdfPaths.add(pdfPath);
+			}
+		}
 		const status = await this.sidecar.load(pdfPath);
 		if (status === 'dirty') return status;
 		if (status === 'protected') {
@@ -262,6 +282,7 @@ export default class JotPlugin extends Plugin {
 
 	private async handlePdfRename(oldPath: string, newPath: string): Promise<void> {
 		if (this.lastActivePdfPath === oldPath) this.lastActivePdfPath = newPath;
+		if (this.recoveredPdfPaths.delete(oldPath)) this.recoveredPdfPaths.add(newPath);
 		this.strokes.rekeyDocumentPath(oldPath, newPath);
 		this.history.rekeyPath(oldPath, newPath);
 		await this.sidecar.renamePdfPath(oldPath, newPath);
