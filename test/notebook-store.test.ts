@@ -23,6 +23,29 @@ function makeVault(path = 'Lecture.jot') {
 	return { vault, file, data };
 }
 
+describe('NotebookStore shutdown', () => {
+	it('does not schedule a retry timer after shutdown begins', async () => {
+		vi.useFakeTimers();
+		const { vault, files } = makeVault({ 'Lecture.jot': validNoteText });
+		const documentSessions = new DocumentSessionManager();
+		const sessions = new NotebookSessionManager(documentSessions);
+		const session = sessions.get('Lecture.jot');
+		expect(session.loadFromText(validNoteText)).toBe('loaded');
+		session.setPaperStyle('grid');
+		const store = new NotebookStore(vault, sessions);
+		store.scheduleSave('Lecture.jot');
+		store.beginShutdown();
+		vi.mocked(vault.process).mockRejectedValueOnce(new Error('suspended'));
+
+		expect(await store.flushAll()).toBe(false);
+		const callsAfterFlush = vi.mocked(vault.process).mock.calls.length;
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(vi.mocked(vault.process).mock.calls.length).toBe(callsAfterFlush);
+		expect(files['Lecture.jot']).toBe(validNoteText);
+		vi.useRealTimers();
+	});
+});
+
 describe('NotebookStore', () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
