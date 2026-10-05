@@ -2,6 +2,13 @@ import type { DataAdapter, TFile, Vault } from 'obsidian';
 
 let transactionCounter = 0;
 
+export class TransactionConflictError extends Error {
+	constructor(readonly path: string) {
+		super(`Transactional write conflict for ${path}: the authoritative file changed`);
+		this.name = 'TransactionConflictError';
+	}
+}
+
 function transactionId(): string {
 	transactionCounter += 1;
 	return `${Date.now()}-${transactionCounter}`;
@@ -21,6 +28,7 @@ export async function transactionalWriteText(
 	path: string,
 	text: string,
 	validate: (text: string) => boolean = (candidate) => candidate === text,
+	expectedCurrent?: string | null,
 ): Promise<void> {
 	const id = transactionId();
 	const tempPath = `${path}.jot-tmp-${id}`;
@@ -34,9 +42,26 @@ export async function transactionalWriteText(
 		const tempText = await adapter.read(tempPath);
 		if (!validate(tempText)) throw new Error(`Temporary write validation failed for ${path}`);
 
+		if (
+			expectedCurrent !== undefined &&
+			hadOriginal !== (expectedCurrent !== null)
+		) {
+			throw new TransactionConflictError(path);
+		}
+
 		if (hadOriginal) {
 			await adapter.rename(path, backupPath);
 			originalMoved = true;
+			if (expectedCurrent !== undefined) {
+				const movedOriginal = await adapter.read(backupPath);
+				if (movedOriginal !== expectedCurrent) {
+					throw new TransactionConflictError(path);
+				}
+			}
+		} else if (expectedCurrent === null && (await adapter.exists(path))) {
+			// The path appeared after the initial exists() check. Do not blindly
+			// rename over a newly arrived synced file.
+			throw new TransactionConflictError(path);
 		}
 		await adapter.rename(tempPath, path);
 		committed = true;
