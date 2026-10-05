@@ -302,7 +302,7 @@ export class SidecarStore {
 					undefined,
 					expectedDestination,
 				);
-				await this.adapter.remove(oldSidecar);
+				await transactionalRemoveTextExpected(this.adapter, oldSidecar, sourceText);
 				this.persistedBaselines.set(newPdfPath, sourceText);
 			}
 			this.recentSelfSaves.delete(oldSidecar);
@@ -336,9 +336,12 @@ export class SidecarStore {
 			throw new Error(`Cannot discard ${pdfPath} annotations because dirty data failed to save`);
 		}
 		const path = jotPathFor(pdfPath);
+		const expected = this.persistedBaselines.has(pdfPath)
+			? this.persistedBaselines.get(pdfPath)!
+			: await this.readTextOrNull(path);
+		await transactionalRemoveTextExpected(this.adapter, path, expected);
 		this.protectedOriginals.delete(pdfPath);
 		this.persistedBaselines.delete(pdfPath);
-		if (await this.adapter.exists(path)) await this.adapter.remove(path);
 		this.ownedPdfPaths.delete(pdfPath);
 		this.sessions.remove(pdfPath);
 	}
