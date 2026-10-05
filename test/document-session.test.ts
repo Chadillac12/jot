@@ -4,12 +4,13 @@ import { DocumentSession, DocumentSessionManager } from '../src/document-session
 describe('DocumentSession state machine', () => {
 	it('blocks reload while dirty', () => {
 		const session = new DocumentSession('a.pdf');
-		expect(session.beginLoad()).not.toBeNull();
-		session.completeLoad();
+		const load = session.beginLoad()!;
+		expect(load).not.toBeNull();
+		expect(session.completeLoad(load)).toBe(true);
 		session.markDirty();
 		expect(session.state).toBe('dirty');
 		expect(session.canReload()).toBe(false);
-		expect(session.beginLoad()).toBe(false);
+		expect(session.beginLoad()).toBeNull();
 	});
 
 	it('rejects a load completion when a new edit arrives after the load began', () => {
