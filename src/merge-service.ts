@@ -4,33 +4,16 @@ import { ExportChoiceModal } from './merge';
 import { drawStrokesOnPdfPage } from './pdf-render';
 import type { SidecarLoadStatus, SidecarStore } from './sidecar-store';
 import { transactionalModifyVaultBinary, transactionalWriteBinary } from './transactional-write';
-import type { Stroke } from './stroke-math';
-import type { StrokeStore } from './stroke-store';
+ import type { StrokeStore } from './stroke-store';
+import {
+	snapshotStrokesForPdf,
+	type MergeStrokeSnapshot,
+} from './merge-snapshot';
 import type { UndoHistory } from './undo';
 
 const PLUGIN_LOG = '[jot]';
 
 type MergeChoice = 'overwrite' | 'copy';
-
-export type MergeStrokeSnapshot = Record<string, Stroke[]>;
-
-export function snapshotStrokesForPdf(
-	strokes: StrokeStore,
-	pdfPath: string,
-): MergeStrokeSnapshot {
-	const payload = strokes.buildPayload(pdfPath);
-	if (!payload) return {};
-	return Object.fromEntries(
-		Object.entries(payload.pages).map(([pageId, pageStrokes]) => [
-			pageId,
-			pageStrokes.map((stroke) => ({
-				...stroke,
-				points: stroke.points.map((point) => ({ ...point })),
-				render: stroke.render ? { ...stroke.render } : undefined,
-			})),
-		]),
-	);
-}
 
 export interface MergeServiceCallbacks {
 	ensureLoaded: (pdfPath: string) => Promise<SidecarLoadStatus>;
