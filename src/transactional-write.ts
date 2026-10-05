@@ -338,41 +338,81 @@ export async function transactionalWriteBinary(
 	bytes: ArrayBuffer,
 	validate: (bytes: ArrayBuffer) => Promise<void>,
 	beforeFinalize?: () => Promise<void>,
+	expectedCurrent?: ArrayBuffer | null,
 ): Promise<void> {
 	const id = transactionId();
 	const tempPath = `${path}.jot-tmp-${id}`;
 	const backupPath = `${path}.jot-backup-${id}`;
+	const recoveryPath = `${path}.recovery-${id}`;
 	const hadOriginal = await adapter.exists(path);
 	let originalMoved = false;
 	let committed = false;
 
 	try {
 		await adapter.writeBinary(tempPath, bytes);
-		await validate(await adapter.readBinary(tempPath));
+		const tempBytes = await adapter.readBinary(tempPath);
+		if (!binaryEqual(tempBytes, bytes)) {
+			throw new Error(`Temporary binary write verification failed for ${path}`);
+		}
+		await validate(tempBytes);
+
+		if (
+			expectedCurrent !== undefined &&
+			hadOriginal !== (expectedCurrent !== null)
+		) {
+			throw new TransactionConflictError(path);
+		}
 
 		if (hadOriginal) {
 			await adapter.rename(path, backupPath);
 			originalMoved = true;
+			if (expectedCurrent instanceof ArrayBuffer) {
+				const movedOriginal = await adapter.readBinary(backupPath);
+				if (!binaryEqual(movedOriginal, expectedCurrent)) {
+					throw new TransactionConflictError(path);
+				}
+			}
+		} else if (expectedCurrent === null && (await adapter.exists(path))) {
+			throw new TransactionConflictError(path);
 		}
+
 		await adapter.rename(tempPath, path);
 		committed = true;
-		await validate(await adapter.readBinary(path));
+		const committedBytes = await adapter.readBinary(path);
+		if (!binaryEqual(committedBytes, bytes)) {
+			throw new TransactionConflictError(path);
+		}
+		await validate(committedBytes);
 		await beforeFinalize?.();
 
 		if (originalMoved) await cleanup(adapter, backupPath);
 	} catch (error) {
 		await cleanup(adapter, tempPath);
-		if (committed && !originalMoved) await cleanup(adapter, path);
-		if (originalMoved) {
-			try {
-				if (await adapter.exists(path)) await adapter.remove(path);
-				if (await adapter.exists(backupPath)) await adapter.rename(backupPath, path);
-			} catch (restoreError) {
-				throw new AggregateError(
-					[error, restoreError],
-					`Binary write failed and rollback also failed for ${path}`,
-				);
+		try {
+			if (committed && !originalMoved && (await adapter.exists(path))) {
+				const current = await adapter.readBinary(path);
+				if (binaryEqual(current, bytes)) await adapter.remove(path);
 			}
+			if (originalMoved && (await adapter.exists(backupPath))) {
+				if (!(await adapter.exists(path))) {
+					await adapter.rename(backupPath, path);
+				} else {
+					const current = await adapter.readBinary(path);
+					if (binaryEqual(current, bytes)) {
+						await adapter.remove(path);
+						await adapter.rename(backupPath, path);
+					} else if (await adapter.exists(recoveryPath)) {
+						await cleanup(adapter, backupPath);
+					} else {
+						await adapter.rename(backupPath, recoveryPath);
+					}
+				}
+			}
+		} catch (restoreError) {
+			throw new AggregateError(
+				[error, restoreError],
+				`Binary write failed and rollback also failed for ${path}`,
+			);
 		}
 		throw error;
 	}
