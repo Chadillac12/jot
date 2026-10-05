@@ -1,10 +1,7 @@
 import { App, TFile, WorkspaceLeaf } from 'obsidian';
 import { INK_KEY_ATTR } from './ink-surface';
 import { pageKey } from './jot-file';
-import {
-	PDF_OVERLAY_CLASS,
-	PdfPageBinding,
-} from './pdf-page-binding';
+import { PdfPageBinding } from './pdf-page-binding';
 import type { Stroke } from './stroke-math';
 import type { StrokeStore } from './stroke-store';
 
