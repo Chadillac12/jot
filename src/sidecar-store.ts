@@ -164,6 +164,10 @@ export class SidecarStore {
 				await transactionalWriteText(this.adapter, recoveryPath, protectedText);
 			}
 
+			const expectedDiskText = this.persistedSidecars.get(pdfPath);
+			if (expectedDiskText === undefined) {
+				throw new Error('Sidecar save has no verified persistence baseline');
+			}
 			await transactionalWriteText(
 				this.adapter,
 				path,
@@ -172,6 +176,7 @@ export class SidecarStore {
 					const parsed = parseJotText(candidate);
 					return parsed !== null && isSupportedVersion(parsed.version);
 				},
+				expectedDiskText,
 			);
 			this.protectedOriginals.delete(pdfPath);
 			this.persistedSidecars.set(pdfPath, text);
@@ -329,15 +334,30 @@ export class SidecarStore {
 		}
 		const path = jotPathFor(pdfPath);
 		if (expectedText !== undefined) {
-			const current = await this.readSidecarText(path);
-			if (current !== expectedText) {
+			const exists = await this.adapter.exists(path);
+			if ((expectedText === null && exists) || (expectedText !== null && !exists)) {
 				throw new Error(
 					`Cannot discard ${pdfPath} annotations because the sidecar changed during the protected operation`,
 				);
 			}
+			if (expectedText !== null) {
+				const claimedPath = `${path}.jot-discard-${Date.now()}`;
+				await this.adapter.rename(path, claimedPath);
+				const claimedText = await this.adapter.read(claimedPath);
+				if (claimedText !== expectedText) {
+					if (!(await this.adapter.exists(path))) {
+						await this.adapter.rename(claimedPath, path);
+					}
+					throw new Error(
+						`Cannot discard ${pdfPath} annotations because the claimed sidecar did not match the protected baseline`,
+					);
+				}
+				await this.adapter.remove(claimedPath);
+			}
+		} else if (await this.adapter.exists(path)) {
+			await this.adapter.remove(path);
 		}
 		this.protectedOriginals.delete(pdfPath);
-		if (await this.adapter.exists(path)) await this.adapter.remove(path);
 		this.persistedSidecars.delete(pdfPath);
 		this.ownedPdfPaths.delete(pdfPath);
 		this.sessions.remove(pdfPath);
