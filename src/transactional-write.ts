@@ -46,7 +46,12 @@ async function cleanup(adapter: DataAdapter, path: string): Promise<void> {
 	}
 }
 
-export type TextRecoveryResult = 'none' | 'cleaned' | 'restored-backup' | 'restored-temp';
+export type TextRecoveryResult =
+	| 'none'
+	| 'cleaned'
+	| 'preserved'
+	| 'restored-backup'
+	| 'restored-temp';
 export type BinaryRecoveryResult = 'none' | 'rolled-back' | 'finalized' | 'external-preserved';
 
 async function transactionArtifacts(
@@ -73,8 +78,44 @@ async function transactionArtifacts(
 			return '';
 		})
 		.filter((candidate): candidate is string => candidate.length > 0)
-		.sort()
-		.reverse();
+		.sort((a, b) => compareTransactionArtifacts(path, kind, b, a));
+}
+
+function compareTransactionArtifacts(
+	path: string,
+	kind: 'jot-backup' | 'jot-tmp',
+	a: string,
+	b: string,
+): number {
+	const prefix = `${path}.${kind}-`;
+	const parse = (candidate: string): [number, number] => {
+		const [timestamp = '0', counter = '0'] = candidate.slice(prefix.length).split('-');
+		return [Number(timestamp) || 0, Number(counter) || 0];
+	};
+	const [aTimestamp, aCounter] = parse(a);
+	const [bTimestamp, bCounter] = parse(b);
+	return aTimestamp - bTimestamp || aCounter - bCounter;
+}
+
+async function preserveTextArtifact(
+	adapter: DataAdapter,
+	path: string,
+	artifact: string,
+	kind: 'jot-backup' | 'jot-tmp',
+): Promise<void> {
+	const prefix = `${path}.${kind}-`;
+	const id = artifact.slice(prefix.length);
+	let recoveryPath = `${path}.recovery-${kind}-${id}.json`;
+	if (await adapter.exists(recoveryPath)) {
+		const existing = await adapter.read(recoveryPath);
+		const candidate = await adapter.read(artifact);
+		if (existing === candidate) {
+			await cleanup(adapter, artifact);
+			return;
+		}
+		recoveryPath = `${path}.recovery-${kind}-${id}-${Date.now()}.json`;
+	}
+	await adapter.rename(artifact, recoveryPath);
 }
 
 export async function recoverInterruptedTextWrite(
@@ -89,8 +130,28 @@ export async function recoverInterruptedTextWrite(
 	if (await adapter.exists(path)) {
 		const current = await adapter.read(path);
 		if (!validate(current)) return 'none';
-		for (const artifact of [...backups, ...temps]) await cleanup(adapter, artifact);
-		return 'cleaned';
+		let preserved = false;
+		for (const [kind, artifacts] of [
+			['jot-backup', backups],
+			['jot-tmp', temps],
+		] as const) {
+			for (const artifact of artifacts) {
+				try {
+					const candidate = await adapter.read(artifact);
+					if (candidate === current) {
+						await cleanup(adapter, artifact);
+					} else {
+						await preserveTextArtifact(adapter, path, artifact, kind);
+						preserved = true;
+					}
+				} catch {
+					// If an artifact cannot be inspected, leave it untouched rather
+					// than risk deleting the only surviving copy of interrupted data.
+					preserved = true;
+				}
+			}
+		}
+		return preserved ? 'preserved' : 'cleaned';
 	}
 
 	for (const [kind, candidates] of [
