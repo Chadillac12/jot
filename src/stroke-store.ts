@@ -57,6 +57,24 @@ export class StrokeStore {
 		}
 	}
 
+	snapshotFor(pdfPath: string): Map<number, Stroke[]> {
+		const snapshot = new Map<number, Stroke[]>();
+		const prefix = pdfPath + '::';
+		for (const [key, strokes] of this.strokesByKey.entries()) {
+			if (!key.startsWith(prefix)) continue;
+			const pageNumber = Number(key.slice(prefix.length));
+			if (!Number.isInteger(pageNumber) || pageNumber <= 0) continue;
+			snapshot.set(
+				pageNumber,
+				strokes.map((stroke) => ({
+					...stroke,
+					points: stroke.points.map((point) => ({ ...point })),
+					render: stroke.render ? { ...stroke.render } : undefined,
+				})),
+			);
+		}
+		return snapshot;
+	}
 
 	rekeyDocumentPath(oldPath: string, newPath: string): void {
 		if (oldPath === newPath) return;
