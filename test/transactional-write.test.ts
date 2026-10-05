@@ -3,6 +3,7 @@ import type { DataAdapter, TFile, Vault } from 'obsidian';
 import { describe, expect, it, vi } from 'vitest';
 import {
 	TransactionConflictError,
+	binaryFingerprint,
 	recoverInterruptedTextWrite,
 	recoverInterruptedVaultBinary,
 	transactionalModifyVaultBinary,
@@ -72,10 +73,17 @@ describe('transaction recovery', () => {
 	});
 
 	it('rolls back an interrupted PDF overwrite when its annotation sidecar still exists', async () => {
-		const fs = makeAdapter({ 'a.pdf.jot.json': '{"version":3,"pages":{}}' });
+		const replacement = new Uint8Array([4, 5, 6]).buffer;
+		const fs = makeAdapter({
+			'a.pdf.jot.json': '{"version":3,"pages":{}}',
+			'a.pdf.jot-txn-100-1': JSON.stringify({
+				version: 1,
+				replacementFingerprint: binaryFingerprint(replacement),
+			}),
+		});
 		fs.binaryFiles.set('a.pdf.jot-backup-100-1', new Uint8Array([1, 2, 3]).buffer);
 		const file = { path: 'a.pdf' } as TFile;
-		let current = new Uint8Array([4, 5, 6]).buffer;
+		let current = replacement.slice(0);
 		const vault = {
 			readBinary: vi.fn(async () => current.slice(0)),
 			modifyBinary: vi.fn(async (_file: TFile, data: ArrayBuffer) => {
@@ -99,12 +107,17 @@ describe('transaction recovery', () => {
 	});
 
 	it('rolls back an interrupted PDF overwrite when the sidecar is quarantined mid-delete', async () => {
+		const replacement = new Uint8Array([4, 5, 6]).buffer;
 		const fs = makeAdapter({
 			'a.pdf.jot.json.jot-backup-100-2': '{"version":3,"pages":{"1":[]}}',
+			'a.pdf.jot-txn-100-1': JSON.stringify({
+				version: 1,
+				replacementFingerprint: binaryFingerprint(replacement),
+			}),
 		});
 		fs.binaryFiles.set('a.pdf.jot-backup-100-1', new Uint8Array([1, 2, 3]).buffer);
 		const file = { path: 'a.pdf' } as TFile;
-		let current = new Uint8Array([4, 5, 6]).buffer;
+		let current = replacement.slice(0);
 		const vault = {
 			readBinary: vi.fn(async () => current.slice(0)),
 			modifyBinary: vi.fn(async (_file: TFile, data: ArrayBuffer) => {
@@ -126,11 +139,54 @@ describe('transaction recovery', () => {
 		expect([...new Uint8Array(current)]).toEqual([1, 2, 3]);
 	});
 
-	it('finalizes an interrupted PDF overwrite when sidecar cleanup already completed', async () => {
-		const fs = makeAdapter();
+	it('preserves an unknown current PDF instead of rolling an old backup over it', async () => {
+		const intendedReplacement = new Uint8Array([4, 5, 6]).buffer;
+		const fs = makeAdapter({
+			'a.pdf.jot.json': '{"version":3,"pages":{}}',
+			'a.pdf.jot-txn-100-1': JSON.stringify({
+				version: 1,
+				replacementFingerprint: binaryFingerprint(intendedReplacement),
+			}),
+		});
 		fs.binaryFiles.set('a.pdf.jot-backup-100-1', new Uint8Array([1, 2, 3]).buffer);
 		const file = { path: 'a.pdf' } as TFile;
-		let current = new Uint8Array([4, 5, 6]).buffer;
+		let current = new Uint8Array([9, 9, 9]).buffer;
+		const vault = {
+			readBinary: vi.fn(async () => current.slice(0)),
+			modifyBinary: vi.fn(async (_file: TFile, data: ArrayBuffer) => {
+				current = data.slice(0);
+			}),
+		} as unknown as Vault;
+
+		const result = await recoverInterruptedVaultBinary(
+			vault,
+			fs.adapter,
+			file,
+			async (candidate) => {
+				if (candidate.byteLength === 0) throw new Error('invalid');
+			},
+			'a.pdf.jot.json',
+		);
+
+		expect(result).toBe('external-preserved');
+		expect([...new Uint8Array(current)]).toEqual([9, 9, 9]);
+		expect(vault.modifyBinary).not.toHaveBeenCalled();
+		expect(
+			[...fs.binaryFiles.keys()].some((path) => path.startsWith('a.pdf.recovery-')),
+		).toBe(true);
+	});
+
+	it('finalizes an interrupted PDF overwrite when sidecar cleanup already completed', async () => {
+		const replacement = new Uint8Array([4, 5, 6]).buffer;
+		const fs = makeAdapter({
+			'a.pdf.jot-txn-100-1': JSON.stringify({
+				version: 1,
+				replacementFingerprint: binaryFingerprint(replacement),
+			}),
+		});
+		fs.binaryFiles.set('a.pdf.jot-backup-100-1', new Uint8Array([1, 2, 3]).buffer);
+		const file = { path: 'a.pdf' } as TFile;
+		let current = replacement.slice(0);
 		const vault = {
 			readBinary: vi.fn(async () => current.slice(0)),
 			modifyBinary: vi.fn(async (_file: TFile, data: ArrayBuffer) => {
@@ -206,6 +262,26 @@ describe('transactionalWriteText', () => {
 		).rejects.toBeInstanceOf(TransactionConflictError);
 		expect(fs.textFiles['a.json']).toBe('remote');
 		expect(Object.keys(fs.textFiles).filter((path) => path.includes('jot-'))).toEqual([]);
+	});
+
+	it('never deletes a synced file that replaces the committed local write before verification', async () => {
+		const fs = makeAdapter({ 'a.json': 'old' });
+		const originalRename = vi.mocked(fs.adapter.rename).getMockImplementation()!;
+		vi.mocked(fs.adapter.rename).mockImplementation(async (oldPath: string, newPath: string) => {
+			await originalRename(oldPath, newPath);
+			if (oldPath.includes('.jot-tmp-') && newPath === 'a.json') {
+				fs.textFiles['a.json'] = 'remote after commit';
+			}
+		});
+
+		await expect(
+			transactionalWriteText(fs.adapter, 'a.json', 'local', undefined, 'old'),
+		).rejects.toThrow('Committed write validation failed');
+
+		expect(fs.textFiles['a.json']).toBe('remote after commit');
+		expect(
+			Object.keys(fs.textFiles).some((path) => path.startsWith('a.json.conflict-')),
+		).toBe(true);
 	});
 
 	it('restores the original if the final rename fails', async () => {
@@ -333,6 +409,65 @@ describe('transactionalModifyVaultBinary', () => {
 		expect([...new Uint8Array(current)]).toEqual([1, 2, 3]);
 		expect(
 			[...fs.binaryFiles.keys()].some((path) => path.startsWith('a.pdf.jot-backup-')),
+		).toBe(true);
+	});
+
+	it('blocks overwrite when the PDF changed after merge input was captured', async () => {
+		const fs = makeAdapter();
+		const file = { path: 'a.pdf' } as TFile;
+		const expected = new Uint8Array([1, 2, 3]).buffer;
+		let current = new Uint8Array([7, 8, 9]).buffer;
+		const vault = {
+			readBinary: vi.fn(async () => current.slice(0)),
+			modifyBinary: vi.fn(async (_file: TFile, data: ArrayBuffer) => {
+				current = data.slice(0);
+			}),
+		} as unknown as Vault;
+
+		await expect(
+			transactionalModifyVaultBinary(
+				vault,
+				fs.adapter,
+				file,
+				new Uint8Array([4, 5, 6]).buffer,
+				async () => {},
+				undefined,
+				expected,
+			),
+		).rejects.toBeInstanceOf(TransactionConflictError);
+
+		expect([...new Uint8Array(current)]).toEqual([7, 8, 9]);
+		expect(vault.modifyBinary).not.toHaveBeenCalled();
+	});
+
+	it('preserves an external PDF that replaces Jot’s committed bytes before verification', async () => {
+		const fs = makeAdapter();
+		const file = { path: 'a.pdf' } as TFile;
+		const original = new Uint8Array([1, 2, 3]).buffer;
+		const replacement = new Uint8Array([4, 5, 6]).buffer;
+		let current = original.slice(0);
+		const vault = {
+			readBinary: vi.fn(async () => current.slice(0)),
+			modifyBinary: vi.fn(async (_file: TFile, _data: ArrayBuffer) => {
+				current = new Uint8Array([9, 9, 9]).buffer;
+			}),
+		} as unknown as Vault;
+
+		await expect(
+			transactionalModifyVaultBinary(
+				vault,
+				fs.adapter,
+				file,
+				replacement,
+				async () => {},
+				undefined,
+				original,
+			),
+		).rejects.toThrow('external PDF was preserved');
+
+		expect([...new Uint8Array(current)]).toEqual([9, 9, 9]);
+		expect(
+			[...fs.binaryFiles.keys()].some((path) => path.startsWith('a.pdf.recovery-')),
 		).toBe(true);
 	});
 
