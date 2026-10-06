@@ -126,8 +126,8 @@ export default class JotPlugin extends Plugin {
 		this.palette = new Palette(
 			this.toolState,
 			(state) => {
-				this.toolState = state;
-				this.settings.toolState = state;
+				this.toolState = { ...state };
+				this.settings.toolState = { ...state };
 				const mem = this.palette.getMemory();
 				this.settings.penState = mem.pen;
 				this.settings.highlighterState = mem.highlighter;
