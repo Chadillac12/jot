@@ -92,6 +92,19 @@ describe('JotNoteSurface', () => {
 		);
 	});
 
+	it('stores an explicit width-derived page height ratio for iPad layout', () => {
+		const host = document.createElement('div');
+		const surface = new JotNoteSurface(host, new StrokeStore(), vi.fn());
+
+		surface.render(createJotNote(), 'Lecture.jot');
+
+		const sheet = host.querySelector<HTMLElement>('.jot-note-sheet');
+		expect(sheet?.style.getPropertyValue('--jot-page-height-ratio')).toBe(
+			((2048 / 1536) * 100).toString() + '%',
+		);
+		expect(sheet?.style.aspectRatio).toBe('');
+	});
+
 	it('renders paper as a dedicated layer below both ink canvases', () => {
 		const host = document.createElement('div');
 		const surface = new JotNoteSurface(host, new StrokeStore(), vi.fn());
