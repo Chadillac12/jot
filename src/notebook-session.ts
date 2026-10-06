@@ -206,6 +206,7 @@ export class NotebookDocumentSession {
 
 export class NotebookSessionManager {
 	private notebooks = new Map<string, NotebookDocumentSession>();
+	private refCounts = new Map<string, number>();
 
 	constructor(private sessions: DocumentSessionManager) {}
 
@@ -218,12 +219,47 @@ export class NotebookSessionManager {
 		return session;
 	}
 
+	peek(path: string): NotebookDocumentSession | null {
+		return this.notebooks.get(path) ?? null;
+	}
+
+	acquire(path: string): NotebookDocumentSession {
+		const session = this.get(path);
+		this.refCounts.set(path, (this.refCounts.get(path) ?? 0) + 1);
+		return session;
+	}
+
+	release(session: NotebookDocumentSession): void {
+		const path = session.path;
+		if (this.notebooks.get(path) !== session) return;
+		const next = Math.max(0, (this.refCounts.get(path) ?? 0) - 1);
+		if (next === 0) this.refCounts.delete(path);
+		else this.refCounts.set(path, next);
+		this.dropIfUnused(path);
+	}
+
+	dropIfUnused(path: string): boolean {
+		const session = this.notebooks.get(path);
+		if (!session || (this.refCounts.get(path) ?? 0) > 0 || session.state.isDirty) return false;
+		this.drop(path);
+		return true;
+	}
+
 	rename(oldPath: string, newPath: string): NotebookDocumentSession {
 		const existing = this.notebooks.get(oldPath);
-		if (!existing) return this.get(newPath);
+		if (!existing) return this.notebooks.get(newPath) ?? this.get(newPath);
+		if (oldPath === newPath) return existing;
+		const destination = this.notebooks.get(newPath);
+		if (destination && destination !== existing) {
+			if ((this.refCounts.get(newPath) ?? 0) > 0 || destination.state.isDirty) return existing;
+			this.drop(newPath);
+		}
+		const refs = this.refCounts.get(oldPath) ?? 0;
 		this.notebooks.delete(oldPath);
+		this.refCounts.delete(oldPath);
 		existing.rename(newPath);
 		this.notebooks.set(newPath, existing);
+		if (refs > 0) this.refCounts.set(newPath, refs);
 		return existing;
 	}
 
@@ -232,6 +268,7 @@ export class NotebookSessionManager {
 	}
 
 	drop(path: string): void {
+		this.refCounts.delete(path);
 		this.notebooks.delete(path);
 		this.sessions.drop(path);
 	}
