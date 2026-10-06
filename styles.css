@@ -351,6 +351,12 @@
 	gap: 6px;
 }
 
+.jot-note-tool.is-active {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	box-shadow: inset 0 0 0 1px var(--interactive-accent-hover);
+}
+
 .jot-note-pages {
 	display: flex;
 	flex-direction: column;
