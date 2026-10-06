@@ -1,11 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
-
-vi.mock('obsidian', () => ({
-	App: class {},
-	ColorComponent: class {},
-	PluginSettingTab: class {},
-	Setting: class {},
-}));
+import { describe, expect, it } from 'vitest';
 
 import {
 	DEFAULT_SETTINGS,
