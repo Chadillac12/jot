@@ -10,6 +10,7 @@ import {
 } from './palette';
 import {
 	DEFAULT_PALETTE_PREFERENCES,
+	normalizePalettePreferences,
 	type FloatingPaletteButtonPosition,
 	type PaletteActivation,
 	type PalettePreferences,
@@ -38,6 +39,72 @@ export const DEFAULT_SETTINGS: JotSettings = {
 	pressureSensitivity: 0.5,
 	...DEFAULT_PALETTE_PREFERENCES,
 };
+
+export function normalizeJotSettings(stored: unknown): JotSettings {
+	const raw = isRecord(stored) ? stored : {};
+	const palettePreferences = normalizePalettePreferences(raw as Partial<PalettePreferences>);
+	return {
+		...DEFAULT_SETTINGS,
+		...palettePreferences,
+		handedness: raw.handedness === 'left' ? 'left' : 'right',
+		toolState: normalizeToolState(raw.toolState, DEFAULT_TOOL_STATE),
+		penState: normalizeToolMemory(raw.penState, DEFAULT_PEN_MEMORY),
+		highlighterState: normalizeToolMemory(raw.highlighterState, DEFAULT_HIGHLIGHTER_MEMORY),
+		colors: normalizeColors(raw.colors),
+		inkSmoothing: normalizeUnitInterval(raw.inkSmoothing, DEFAULT_SETTINGS.inkSmoothing),
+		pressureSensitivity: normalizeUnitInterval(
+			raw.pressureSensitivity,
+			DEFAULT_SETTINGS.pressureSensitivity,
+		),
+	};
+}
+
+function normalizeToolState(value: unknown, fallback: ToolState): ToolState {
+	if (!isRecord(value)) return { ...fallback };
+	const tool =
+		value.tool === 'pen' || value.tool === 'highlighter' || value.tool === 'eraser'
+			? value.tool
+			: fallback.tool;
+	return {
+		tool,
+		color: normalizeColor(value.color, fallback.color),
+		width: normalizeWidth(value.width, fallback.width),
+	};
+}
+
+function normalizeToolMemory(value: unknown, fallback: ToolMemory): ToolMemory {
+	if (!isRecord(value)) return { ...fallback };
+	return {
+		color: normalizeColor(value.color, fallback.color),
+		width: normalizeWidth(value.width, fallback.width),
+	};
+}
+
+function normalizeColors(value: unknown): string[] {
+	const incoming = Array.isArray(value) ? value : [];
+	return PALETTE_COLORS.map((fallback, index) => normalizeColor(incoming[index], fallback));
+}
+
+function normalizeColor(value: unknown, fallback: string): string {
+	return typeof value === 'string' && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(value)
+		? value
+		: fallback;
+}
+
+function normalizeWidth(value: unknown, fallback: number): number {
+	return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 0.1
+		? value
+		: fallback;
+}
+
+function normalizeUnitInterval(value: unknown, fallback: number): number {
+	if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+	return Math.max(0, Math.min(1, value));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null;
+}
 
 export class JotSettingTab extends PluginSettingTab {
 	plugin: JotPlugin;
