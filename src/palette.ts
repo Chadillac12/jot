@@ -155,6 +155,23 @@ export class Palette {
 		return { ...this.state };
 	}
 
+	selectTool(tool: Tool): void {
+		if (tool === 'eraser') {
+			if (this.state.tool !== 'eraser') this.lastDrawingTool = this.state.tool;
+			this.state.tool = 'eraser';
+		} else {
+			this.lastDrawingTool = tool;
+			this.state.tool = tool;
+			const memory = this.memoryFor(tool);
+			if (memory) {
+				this.state.color = memory.color;
+				this.state.width = memory.width;
+			}
+		}
+		this.onChange(this.state);
+		if (this.element) this.rerender();
+	}
+
 	isOpen(): boolean {
 		return this.element !== null;
 	}
