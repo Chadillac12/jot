@@ -171,7 +171,7 @@ describe('JotNoteSurface', () => {
 	});
 
 	it('mounts canvases only for pages near the viewport and disposes them when they leave', () => {
-		let callback: IntersectionObserverCallback | null = null;
+		let callback: IntersectionObserverCallback = () => {};
 		const observe = vi.fn();
 		const disconnect = vi.fn();
 		class IntersectionObserverMock {
@@ -211,25 +211,25 @@ describe('JotNoteSurface', () => {
 		expect(observe).toHaveBeenCalledTimes(3);
 		expect(host.querySelectorAll('canvas')).toHaveLength(2);
 
-		callback?.(
+		callback(
 			[
 				{
 					target: sheets[1]!,
 					isIntersecting: true,
 					intersectionRatio: 1,
-				} as IntersectionObserverEntry,
+				} as unknown as IntersectionObserverEntry,
 			],
 			{} as IntersectionObserver,
 		);
 		expect(host.querySelectorAll('canvas')).toHaveLength(4);
 
-		callback?.(
+		callback(
 			[
 				{
 					target: sheets[0]!,
 					isIntersecting: false,
 					intersectionRatio: 0,
-				} as IntersectionObserverEntry,
+				} as unknown as IntersectionObserverEntry,
 			],
 			{} as IntersectionObserver,
 		);
