@@ -139,7 +139,7 @@ export class JotNoteSurface implements InkSurfaceController {
 				}
 			},
 			{
-				root: null,
+				root: this.host.parentElement,
 				rootMargin: '100% 0px 100% 0px',
 				threshold: 0,
 			},
