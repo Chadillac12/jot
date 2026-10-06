@@ -163,9 +163,14 @@ export class JotNoteSurface implements InkSurfaceController {
 
 		const sheet = doc.createElement('div');
 		sheet.className = SHEET_CLASS;
-		sheet.setCssStyles({
-			aspectRatio: `${page.width} / ${page.height}`,
-		});
+		// Do not rely on CSS aspect-ratio for notebook page height. On iPad
+		// WKWebView a zero-height sheet removes the paper, live ink canvas and
+		// Pencil gesture target together. A percentage-padding pseudo element
+		// gives the sheet deterministic geometry from its width instead.
+		sheet.style.setProperty(
+			'--jot-page-height-ratio',
+			`${(page.height / page.width) * 100}%`,
+		);
 		wrapper.appendChild(sheet);
 
 		const paperSpacing = 64;
