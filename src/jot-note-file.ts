@@ -33,7 +33,6 @@ export type JotNoteParseResult =
 const DEFAULT_PAGE_WIDTH = 1536;
 const DEFAULT_PAGE_HEIGHT = 2048;
 export const MAX_NOTEBOOK_PAGES = 500;
-export const MAX_STROKES_PER_PAGE = 50_000;
 const MAX_PAGE_DIMENSION = 100_000;
 const MIN_PAGE_ASPECT = 0.05;
 const MAX_PAGE_ASPECT = 20;
@@ -150,7 +149,7 @@ function parsePage(value: unknown, index: number): JotNotePage | null {
 	if (width > MAX_PAGE_DIMENSION || height > MAX_PAGE_DIMENSION) return null;
 	const aspect = width / height;
 	if (aspect < MIN_PAGE_ASPECT || aspect > MAX_PAGE_ASPECT) return null;
-	if (!Array.isArray(value.strokes) || value.strokes.length > MAX_STROKES_PER_PAGE) return null;
+	if (!Array.isArray(value.strokes)) return null;
 
 	const strokes: Stroke[] = [];
 	for (const rawStroke of value.strokes) {
