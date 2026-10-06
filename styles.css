@@ -452,11 +452,8 @@
 .jot-note-live-ink {
 	pointer-events: auto;
 	z-index: 2;
-	/* Finger gestures remain available for scrolling/zooming while Pencil
-	   events are captured by Jot's stylus-specific input path. */
-	/* WebKit may apply touch-action to direct stylus input as well as fingers.
-	   manipulation keeps finger scrolling/zooming available without the more
-	   aggressive pan-y cancellation behavior that was stealing Pencil streams. */
-	touch-action: manipulation;
+	/* Leave touch-action at the WebView default. Finger gestures are ignored by
+	   the ink handler, while Pencil events are cancelled explicitly in JS. This
+	   matches the PDF ink path and avoids notebook-only WebKit arbitration. */
 }
 
