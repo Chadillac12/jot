@@ -34,6 +34,11 @@ beforeEach(() => {
 	ResizeObserverMock.instances = [];
 	(globalThis as any).ResizeObserver = ResizeObserverMock;
 	(globalThis as any).window.devicePixelRatio = 2;
+	Object.defineProperty(window, 'IntersectionObserver', {
+		value: undefined,
+		configurable: true,
+		writable: true,
+	});
 	(HTMLElement.prototype as any).setCssStyles = function (styles: Record<string, string>) {
 		for (const [key, value] of Object.entries(styles)) {
 			if (key.startsWith('--')) {
@@ -163,6 +168,76 @@ describe('JotNoteSurface', () => {
 		ResizeObserverMock.instances[0]?.fire();
 
 		expect(clearRect.mock.calls.length).toBe(afterInitialRender);
+	});
+
+	it('mounts canvases only for pages near the viewport and disposes them when they leave', () => {
+		let callback: IntersectionObserverCallback | null = null;
+		const observe = vi.fn();
+		const disconnect = vi.fn();
+		class IntersectionObserverMock {
+			constructor(cb: IntersectionObserverCallback) {
+				callback = cb;
+			}
+			observe = observe;
+			unobserve = vi.fn();
+			disconnect = disconnect;
+			takeRecords = vi.fn(() => []);
+			root = null;
+			rootMargin = '100% 0px 100% 0px';
+			thresholds = [0];
+		}
+		Object.defineProperty(window, 'IntersectionObserver', {
+			value: IntersectionObserverMock,
+			configurable: true,
+			writable: true,
+		});
+
+		const host = document.createElement('div');
+		document.body.appendChild(host);
+		const note = createJotNote();
+		note.pages.push(createJotPage('page-2'));
+		note.pages.push(createJotPage('page-3'));
+		const disposers: ReturnType<typeof vi.fn>[] = [];
+		const wire = vi.fn(() => {
+			const dispose = vi.fn();
+			disposers.push(dispose);
+			return dispose;
+		});
+		const surface = new JotNoteSurface(host, new StrokeStore(), wire);
+
+		surface.render(note, 'Lecture.jot');
+
+		const sheets = Array.from(host.querySelectorAll<HTMLElement>('.jot-note-sheet'));
+		expect(observe).toHaveBeenCalledTimes(3);
+		expect(host.querySelectorAll('canvas')).toHaveLength(2);
+
+		callback?.(
+			[
+				{
+					target: sheets[1]!,
+					isIntersecting: true,
+					intersectionRatio: 1,
+				} as IntersectionObserverEntry,
+			],
+			{} as IntersectionObserver,
+		);
+		expect(host.querySelectorAll('canvas')).toHaveLength(4);
+
+		callback?.(
+			[
+				{
+					target: sheets[0]!,
+					isIntersecting: false,
+					intersectionRatio: 0,
+				} as IntersectionObserverEntry,
+			],
+			{} as IntersectionObserver,
+		);
+		expect(host.querySelectorAll('canvas')).toHaveLength(2);
+		expect(disposers[0]).toHaveBeenCalledTimes(1);
+
+		surface.disconnect();
+		expect(disconnect).toHaveBeenCalledTimes(1);
 	});
 
 	it('caps both notebook canvas backing stores at the iPad-safe area', () => {
