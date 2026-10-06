@@ -28,7 +28,11 @@ export class NotebookDocumentSession {
 	private loadErrorValue: string | null = null;
 	private persistedDataValue = '';
 	private conflictDataValue: string | null = null;
-	private listeners = new Set<(change: NotebookSessionChange) => void>();
+	private listeners = new Set<(
+		change: NotebookSessionChange,
+		key?: string,
+		source?: object,
+	) => void>();
 	private saveChain: Promise<boolean> = Promise.resolve(true);
 
 	constructor(
@@ -123,10 +127,10 @@ export class NotebookDocumentSession {
 		return this.rawDataValue;
 	}
 
-	markDirty(change: NotebookSessionChange = 'ink'): void {
+	markDirty(change: NotebookSessionChange = 'ink', key?: string, source?: object): void {
 		if (this.loadErrorValue) return;
 		this.stateSession.markDirty();
-		this.emit(change);
+		this.emit(change, key, source);
 	}
 
 	async save(writer: NotebookSaveWriter): Promise<boolean> {
@@ -188,13 +192,15 @@ export class NotebookDocumentSession {
 		this.emit('rename');
 	}
 
-	subscribe(listener: (change: NotebookSessionChange) => void): () => void {
+	subscribe(
+		listener: (change: NotebookSessionChange, key?: string, source?: object) => void,
+	): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
 	}
 
-	private emit(change: NotebookSessionChange): void {
-		for (const listener of this.listeners) listener(change);
+	private emit(change: NotebookSessionChange, key?: string, source?: object): void {
+		for (const listener of this.listeners) listener(change, key, source);
 	}
 }
 
