@@ -362,11 +362,16 @@
 	flex-direction: column;
 	align-items: center;
 	gap: 24px;
+	width: 100%;
+	box-sizing: border-box;
 	padding: 24px 16px 72px;
 }
 
 .jot-note-page {
-	width: min(900px, 100%);
+	width: 100%;
+	max-width: 900px;
+	box-sizing: border-box;
+	flex: 0 0 auto;
 }
 
 .jot-note-page-label {
@@ -379,14 +384,25 @@
 .jot-note-sheet {
 	position: relative;
 	width: 100%;
+	box-sizing: border-box;
 	user-select: none;
 	-webkit-user-select: none;
-	contain: layout paint;
 	overflow: hidden;
 	background-color: #ffffff;
 	border: 1px solid rgba(0, 0, 0, 0.16);
 	border-radius: 4px;
 	box-shadow: 0 3px 18px rgba(0, 0, 0, 0.16);
+}
+
+/* The in-flow spacer is the notebook page's sizing authority. Percentage
+   padding is resolved from the sheet width and is reliable in WKWebView even
+   when aspect-ratio layout is not. All visual/input layers remain absolute. */
+.jot-note-sheet::before {
+	content: '';
+	display: block;
+	width: 100%;
+	padding-top: var(--jot-page-height-ratio, 133.333333%);
+	pointer-events: none;
 }
 
 .jot-note-paper {
