@@ -1,9 +1,8 @@
 import { Notice, Plugin, TFile } from 'obsidian';
 import { DocumentSessionManager } from './document-session';
 import type { InkSaveScheduler, InkSurfaceController } from './ink-surface';
-import { DEFAULT_TOOL_STATE, Palette, Tool, ToolState } from './palette';
-import { normalizePalettePreferences } from './palette-activation';
-import { DEFAULT_SETTINGS, JotSettings, JotSettingTab } from './settings';
+import { DEFAULT_TOOL_STATE, Palette, type Tool, type ToolState } from './palette';
+import { DEFAULT_SETTINGS, JotSettings, JotSettingTab, normalizeJotSettings } from './settings';
 import { ConfirmClearModal } from './clear';
 import { collectClearOperations, countStrokes, toUndoEntries } from './clear-ops';
 import { FloatingPaletteButton } from './floating-palette-button';
@@ -337,12 +336,7 @@ export default class JotPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		const stored = (await this.loadData()) as Partial<JotSettings> | null;
-		this.settings = {
-			...DEFAULT_SETTINGS,
-			...(stored ?? {}),
-			...normalizePalettePreferences(stored),
-		};
+		this.settings = normalizeJotSettings(await this.loadData());
 		this.toolState = { ...this.settings.toolState };
 	}
 
