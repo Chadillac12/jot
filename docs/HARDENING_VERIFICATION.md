@@ -24,7 +24,33 @@ verification. It is engineering traceability for Jot; it is not FAA certificatio
 - 3- and 6-digit ink colors are validated and exported consistently,
 - external PDF reload establishes a new undo-history boundary,
 - gesture timers and palette UI use the owning document/window,
-- release assets are immutable once published.
+- release assets are immutable once published,
+- protected/conflicted notebook state survives idempotent multi-view attach,
+- notebook ink changes are page-scoped across views and are not double-rendered locally,
+- ruled/grid/dot paper uses an explicit layer below transparent ink canvases,
+- single-point highlighter marks remain visible,
+- notebook sessions are acquired/released and stale clean sessions are retired,
+- dirty notebook conflicts receive durable sibling recovery copies,
+- notebook rename notifications are serialized and path ownership is explicit,
+- notebook pages virtualize canvas/input resources outside the scroll viewport,
+- malformed persisted ink settings are normalized to safe values,
+- notebook resource validation bounds page count and pathological page geometry.
+
+## Notebook stabilization verification
+
+| ID | Requirement | Implementation | Verification |
+| --- | --- | --- | --- |
+| N-01 | Protected/conflicted second-view attach preserves state | `NotebookDocumentSession.load` | `test/notebook-session.test.ts` |
+| N-02 | Local ink is not double-rendered; other views repaint only the changed page | keyed/source-aware notebook notifications | notebook session notification tests + surface tests |
+| N-03 | Paper guides render independently of ink canvases | explicit `.jot-note-paper` layer | `test/jot-note-surface.test.ts` |
+| N-04 | Single-point highlighter marks remain visible | `drawHighlighterPolyline` | `test/stroke-render.test.ts` |
+| N-05 | Clean sessions retire; dirty zero-view sessions survive for persistence | `NotebookSessionManager.acquire/release/dropIfUnused` | `test/notebook-session.test.ts` |
+| N-06 | Notebook canvas/input resources are viewport-scoped and disposable | `JotNoteSurface` virtualization | `test/jot-note-surface.test.ts` |
+| N-07 | Malformed persisted tool settings cannot disable ink | `normalizeJotSettings` | `test/settings-normalization.test.ts` |
+| N-08 | Notebook tool buttons share radial-palette memory/state | `Palette.selectTool` + tool-state subscription | `test/palette-tool-selection.test.ts` |
+| N-09 | Reader resource bounds match writer behavior | notebook parser + Add page cap | `test/jot-note-file.test.ts` |
+| N-10 | Rename path ownership is explicit and stale destination sessions are displaced read-only | serialized rename flow + `NotebookSessionManager.displace` | `test/notebook-session.test.ts` |
+| N-11 | Conflicted local ink is durable across app termination | sibling recovery notebook | conflict tests + release/manual iPad verification |
 
 ## Required release gate
 
