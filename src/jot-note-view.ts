@@ -24,6 +24,7 @@ export class JotNoteView extends TextFileView {
 	private undoController: UndoController | null = null;
 	private pagesEl: HTMLElement | null = null;
 	private unsubscribeSession: (() => void) | null = null;
+	private readonly viewSource = {};
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -142,7 +143,9 @@ export class JotNoteView extends TextFileView {
 		if (this.session === session) return;
 		this.unsubscribeSession?.();
 		this.session = session;
-		this.unsubscribeSession = session.subscribe((change) => this.onSessionChange(change));
+		this.unsubscribeSession = session.subscribe((change, key, source) =>
+			this.onSessionChange(change, key, source),
+		);
 	}
 
 	private detachViewState(): void {
@@ -152,9 +155,15 @@ export class JotNoteView extends TextFileView {
 		this.session = null;
 	}
 
-	private onSessionChange(change: NotebookSessionChange): void {
+	private onSessionChange(
+		change: NotebookSessionChange,
+		key?: string,
+		source?: object,
+	): void {
 		if (change === 'ink') {
-			this.surface?.redrawAll();
+			if (source === this.viewSource) return;
+			if (key) this.surface?.redrawKey(key);
+			else this.surface?.redrawAll();
 			return;
 		}
 		if (change === 'save-error') return;
@@ -184,7 +193,8 @@ export class JotNoteView extends TextFileView {
 				this.surface,
 				{
 					scheduleSave: () => {
-						session.markDirty('ink');
+						const key = canvas.getAttribute('data-jot-key') ?? undefined;
+						session.markDirty('ink', key, this.viewSource);
 						this.requestSave();
 					},
 				},
@@ -200,7 +210,7 @@ export class JotNoteView extends TextFileView {
 			{
 				activeDocumentPath: () => session.path,
 				onAfterApply: () => {
-					session.markDirty('ink');
+					session.markDirty('ink', undefined, this.viewSource);
 					this.requestSave();
 				},
 			},
