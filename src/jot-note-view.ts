@@ -54,8 +54,9 @@ export class JotNoteView extends TextFileView {
 		const path = this.file?.path;
 		if (!path) return;
 
-		this.attachSession(this.plugin.getNotebookSession(path));
-		const status = this.session?.load(data) ?? 'protected';
+		const session = this.plugin.getNotebookSession(path);
+		const status = session.load(data);
+		this.attachSession(session);
 		if (status === 'protected') {
 			this.renderLoadError(
 				this.session?.loadError ??
