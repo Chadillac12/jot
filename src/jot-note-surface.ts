@@ -13,6 +13,7 @@ import type { StrokeStore } from './stroke-store';
 
 const PAGE_CLASS = 'jot-note-page';
 const SHEET_CLASS = 'jot-note-sheet';
+const PAPER_CLASS = 'jot-note-paper';
 const PERSISTENT_CLASS = 'jot-note-ink';
 const LIVE_CLASS = 'jot-note-live-ink';
 
@@ -38,9 +39,9 @@ export class JotNoteSurface implements InkSurfaceController {
 
 	setPaperStyle(style: JotNoteFile['paper']): void {
 		const classes = ['jot-note-paper-blank', 'jot-note-paper-ruled', 'jot-note-paper-grid', 'jot-note-paper-dot'];
-		for (const sheet of Array.from(this.host.querySelectorAll<HTMLElement>(`.${SHEET_CLASS}`))) {
-			sheet.classList.remove(...classes);
-			sheet.classList.add(`jot-note-paper-${style}`);
+		for (const paper of Array.from(this.host.querySelectorAll<HTMLElement>(`.${PAPER_CLASS}`))) {
+			paper.classList.remove(...classes);
+			paper.classList.add(`jot-note-paper-${style}`);
 		}
 	}
 
@@ -123,14 +124,18 @@ export class JotNoteSurface implements InkSurfaceController {
 		wrapper.appendChild(label);
 
 		const sheet = doc.createElement('div');
-		sheet.className = `${SHEET_CLASS} jot-note-paper-${note.paper}`;
-		const paperSpacing = 64;
+		sheet.className = SHEET_CLASS;
 		sheet.setCssStyles({
 			aspectRatio: `${page.width} / ${page.height}`,
 		});
-		sheet.style.setProperty('--jot-paper-x', `${(paperSpacing / page.width) * 100}%`);
-		sheet.style.setProperty('--jot-paper-y', `${(paperSpacing / page.height) * 100}%`);
 		wrapper.appendChild(sheet);
+
+		const paperSpacing = 64;
+		const paper = doc.createElement('div');
+		paper.className = `${PAPER_CLASS} jot-note-paper-${note.paper}`;
+		paper.style.setProperty('--jot-paper-x', `${(paperSpacing / page.width) * 100}%`);
+		paper.style.setProperty('--jot-paper-y', `${(paperSpacing / page.height) * 100}%`);
+		sheet.appendChild(paper);
 
 		const key = documentPageKey(documentPath, page.id);
 		const persistent = this.makeCanvas(doc, PERSISTENT_CLASS, key);
