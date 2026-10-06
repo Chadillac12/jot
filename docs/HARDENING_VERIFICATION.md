@@ -61,3 +61,4 @@ A candidate is releasable only when the exact versioned commit passes:
 - ESLint,
 - Node 20, 22, and 24 CI matrix,
 - release workflow rebuild from the exact release SHA.
+- BRAT test builds increment the base patch version so BRAT's semver-coercion update check can distinguish consecutive prereleases.
