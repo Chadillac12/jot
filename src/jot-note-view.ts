@@ -18,7 +18,7 @@ import { JotNoteSurface } from './jot-note-surface';
 import type { NotebookDocumentSession, NotebookSessionChange } from './notebook-session';
 import { UndoController } from './undo-controller';
 import type JotPlugin from './main';
-import type { Tool, ToolState } from './palette';
+import type { ToolState } from './palette';
 
 export class JotNoteView extends TextFileView {
 	private session: NotebookDocumentSession | null = null;
