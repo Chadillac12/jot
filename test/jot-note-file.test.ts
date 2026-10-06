@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	JOT_NOTE_FORMAT_VERSION,
+	MAX_NOTEBOOK_PAGES,
 	createJotNote,
 	nextPageId,
 	parseJotNoteText,
@@ -145,6 +146,43 @@ describe('Jot note file format', () => {
 			color: '#000000',
 			width: 0.0025,
 		});
+	});
+
+	it('rejects notebooks with an unsafe page count before rendering', () => {
+		const pages = Array.from({ length: MAX_NOTEBOOK_PAGES + 1 }, (_, index) => ({
+			id: `page-${index + 1}`,
+			width: 1536,
+			height: 2048,
+			strokes: [],
+		}));
+		const result = parseJotNoteTextResult(
+			JSON.stringify({
+				version: JOT_NOTE_FORMAT_VERSION,
+				type: 'notebook',
+				paper: 'ruled',
+				pages,
+			}),
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.reason).toBe('invalid-schema');
+	});
+
+	it('rejects pathological page dimensions and aspect ratios', () => {
+		for (const [width, height] of [
+			[100001, 2048],
+			[1, 1000],
+			[1000, 1],
+		]) {
+			const result = parseJotNoteTextResult(
+				JSON.stringify({
+					version: JOT_NOTE_FORMAT_VERSION,
+					type: 'notebook',
+					paper: 'ruled',
+					pages: [{ id: 'page-1', width, height, strokes: [] }],
+				}),
+			);
+			expect(result.ok).toBe(false);
+		}
 	});
 
 	it('allocates page IDs without colliding with existing pages', () => {
