@@ -9,7 +9,14 @@ import {
 import { StrokeStore } from './stroke-store';
 import { UndoHistory } from './undo';
 
-export type NotebookSessionChange = 'ink' | 'structure' | 'reload' | 'rename' | 'save-error' | 'conflict';
+export type NotebookSessionChange =
+	| 'ink'
+	| 'structure'
+	| 'reload'
+	| 'rename'
+	| 'save-error'
+	| 'conflict'
+	| 'protected';
 
 export class NotebookExternalConflictError extends Error {
 	constructor(readonly externalData: string) {
@@ -183,6 +190,12 @@ export class NotebookDocumentSession {
 		this.stateSession.resolveConflictKeepLocal();
 	}
 
+	protectFromPathReplacement(message: string): void {
+		this.loadErrorValue = message;
+		this.stateSession.failLoad(message);
+		this.emit('protected');
+	}
+
 	rename(newPath: string): void {
 		const oldPath = this.path;
 		if (oldPath === newPath) return;
@@ -251,8 +264,7 @@ export class NotebookSessionManager {
 		if (oldPath === newPath) return existing;
 		const destination = this.notebooks.get(newPath);
 		if (destination && destination !== existing) {
-			if ((this.refCounts.get(newPath) ?? 0) > 0 || destination.state.isDirty) return existing;
-			this.drop(newPath);
+			throw new Error('Notebook rename destination session must be displaced first.');
 		}
 		const refs = this.refCounts.get(oldPath) ?? 0;
 		this.notebooks.delete(oldPath);
@@ -261,6 +273,15 @@ export class NotebookSessionManager {
 		this.notebooks.set(newPath, existing);
 		if (refs > 0) this.refCounts.set(newPath, refs);
 		return existing;
+	}
+
+	displace(path: string): NotebookDocumentSession | null {
+		const session = this.notebooks.get(path);
+		if (!session) return null;
+		this.refCounts.delete(path);
+		this.notebooks.delete(path);
+		this.sessions.drop(path);
+		return session;
 	}
 
 	all(): NotebookDocumentSession[] {
