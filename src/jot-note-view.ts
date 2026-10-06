@@ -129,7 +129,7 @@ export class JotNoteView extends TextFileView {
 	override async onRename(file: TFile): Promise<void> {
 		const oldPath = this.session?.path ?? this.file?.path;
 		if (oldPath && oldPath !== file.path) {
-			this.attachSession(this.plugin.renameNotebookSession(oldPath, file.path));
+			this.attachSession(await this.plugin.renameNotebookSession(oldPath, file.path));
 		}
 		await super.onRename(file);
 		this.render();
@@ -175,6 +175,12 @@ export class JotNoteView extends TextFileView {
 			return;
 		}
 		if (change === 'save-error') return;
+		if (change === 'protected') {
+			this.renderLoadError(
+				this.session?.loadError ?? 'This notebook view is read-only to protect local data.',
+			);
+			return;
+		}
 		if (change === 'conflict') {
 			this.renderConflict();
 			return;
