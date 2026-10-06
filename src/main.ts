@@ -200,8 +200,22 @@ export default class JotPlugin extends Plugin {
 		);
 		this.registerEvent(
 			this.app.vault.on('rename', (file, oldPath) => {
-				if (!(file instanceof TFile) || file.extension !== 'pdf') return;
-				void this.handlePdfRename(oldPath, file.path);
+				if (!(file instanceof TFile)) return;
+				if (file.extension === 'pdf') {
+					void this.handlePdfRename(oldPath, file.path);
+					return;
+				}
+				if (file.extension === JOT_NOTE_EXTENSION || oldPath.endsWith(`.${JOT_NOTE_EXTENSION}`)) {
+					this.handleNotebookRename(oldPath, file.path);
+				}
+			}),
+		);
+
+		this.registerEvent(
+			this.app.vault.on('delete', (file) => {
+				if (!(file instanceof TFile) || file.extension !== JOT_NOTE_EXTENSION) return;
+				this.clearNotebookRetry(file.path);
+				this.notebooks.dropIfUnused(file.path);
 			}),
 		);
 
@@ -393,6 +407,14 @@ export default class JotPlugin extends Plugin {
 		for (const listener of this.toolStateListeners) listener(snapshot);
 	}
 
+	acquireNotebookSession(path: string): NotebookDocumentSession {
+		return this.notebooks.acquire(path);
+	}
+
+	releaseNotebookSession(session: NotebookDocumentSession): void {
+		this.notebooks.release(session);
+	}
+
 	getNotebookSession(path: string): NotebookDocumentSession {
 		return this.notebooks.get(path);
 	}
@@ -409,6 +431,7 @@ export default class JotPlugin extends Plugin {
 
 		if (success) {
 			this.clearNotebookRetry(session.path);
+			this.notebooks.dropIfUnused(session.path);
 			return true;
 		}
 
@@ -421,8 +444,8 @@ export default class JotPlugin extends Plugin {
 		const id = window.setTimeout(() => {
 			this.notebookRetryTimers.delete(path);
 			const file = this.app.vault.getAbstractFileByPath(path);
-			const session = this.notebooks.get(path);
-			if (!(file instanceof TFile) || !session.state.isDirty || session.state.state === 'conflict') {
+			const session = this.notebooks.peek(path);
+			if (!(file instanceof TFile) || !session || !session.state.isDirty || session.state.state === 'conflict') {
 				return;
 			}
 			void this.saveNotebookSession(file, session);
@@ -434,6 +457,11 @@ export default class JotPlugin extends Plugin {
 		const id = this.notebookRetryTimers.get(path);
 		if (id !== undefined) window.clearTimeout(id);
 		this.notebookRetryTimers.delete(path);
+	}
+
+	private handleNotebookRename(oldPath: string, newPath: string): void {
+		if (!this.notebooks.peek(oldPath)) return;
+		this.renameNotebookSession(oldPath, newPath);
 	}
 
 	renameNotebookSession(oldPath: string, newPath: string): NotebookDocumentSession {
