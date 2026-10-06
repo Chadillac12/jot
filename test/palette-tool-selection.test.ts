@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('obsidian', () => ({
-	setIcon: vi.fn(),
-}));
-
 import {
 	DEFAULT_HIGHLIGHTER_MEMORY,
 	DEFAULT_PEN_MEMORY,
