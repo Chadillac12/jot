@@ -244,6 +244,7 @@ export class JotNoteView extends TextFileView {
 	}
 
 	private renderConflict(): void {
+		if (this.session) void this.plugin.preserveNotebookConflict(this.session);
 		this.surface?.disconnect();
 		this.surface = null;
 		this.contentEl.empty();
