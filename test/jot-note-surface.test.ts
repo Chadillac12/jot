@@ -87,17 +87,30 @@ describe('JotNoteSurface', () => {
 		);
 	});
 
-	it('keeps paper guide spacing tied to normalized page dimensions', () => {
+	it('renders paper as a dedicated layer below both ink canvases', () => {
 		const host = document.createElement('div');
 		const surface = new JotNoteSurface(host, new StrokeStore(), vi.fn());
 
 		surface.render(createJotNote(), 'Lecture.jot');
 
 		const sheet = host.querySelector<HTMLElement>('.jot-note-sheet');
-		expect(sheet?.style.getPropertyValue('--jot-paper-x')).toBe(
+		expect(sheet?.children[0]?.classList.contains('jot-note-paper')).toBe(true);
+		expect(sheet?.children[1]?.classList.contains('jot-note-ink')).toBe(true);
+		expect(sheet?.children[2]?.classList.contains('jot-note-live-ink')).toBe(true);
+		expect(sheet?.querySelector('.jot-note-paper-ruled')).not.toBeNull();
+	});
+
+	it('keeps paper guide spacing tied to normalized page dimensions', () => {
+		const host = document.createElement('div');
+		const surface = new JotNoteSurface(host, new StrokeStore(), vi.fn());
+
+		surface.render(createJotNote(), 'Lecture.jot');
+
+		const paper = host.querySelector<HTMLElement>('.jot-note-paper');
+		expect(paper?.style.getPropertyValue('--jot-paper-x')).toBe(
 			((64 / 1536) * 100).toString() + '%',
 		);
-		expect(sheet?.style.getPropertyValue('--jot-paper-y')).toBe(
+		expect(paper?.style.getPropertyValue('--jot-paper-y')).toBe(
 			((64 / 2048) * 100).toString() + '%',
 		);
 	});
@@ -113,7 +126,7 @@ describe('JotNoteSurface', () => {
 
 		surface.setPaperStyle('grid');
 
-		expect(host.querySelector('.jot-note-sheet')?.classList.contains('jot-note-paper-grid')).toBe(true);
+		expect(host.querySelector('.jot-note-paper')?.classList.contains('jot-note-paper-grid')).toBe(true);
 		expect(host.querySelector<HTMLCanvasElement>('canvas.jot-note-live-ink')).toBe(liveBefore);
 		expect(wire).toHaveBeenCalledTimes(1);
 	});
