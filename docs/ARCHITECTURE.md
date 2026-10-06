@@ -75,7 +75,9 @@ dirty are preserved as conflict copies before local persistence proceeds.
 
 ## Standalone notebooks
 
-A `.jot` file is represented by exactly one `NotebookDocumentSession` per vault path.
+A `.jot` file is represented by exactly one authoritative `NotebookDocumentSession` per active
+vault path. Views acquire and release that shared session rather than owning document state.
+
 All open views share:
 
 - the same `StrokeStore`,
@@ -83,8 +85,25 @@ All open views share:
 - the same revision/state machine,
 - one serialized save chain.
 
+Clean sessions are retired after their last view releases them. Dirty sessions remain alive with
+no views until persistence succeeds or the conflict is explicitly resolved. Retry timers use
+non-creating session lookup so a retry can never manufacture a new empty notebook session.
+
 Notebook writes use `Vault.process()` as an atomic compare-and-write boundary. If current disk
-bytes differ from the session's last persisted bytes, the write is blocked as a conflict.
+bytes differ from the session's last persisted bytes, the write is blocked as a conflict. Before
+the conflict UI depends on in-memory state, Jot writes a sibling local recovery notebook for the
+current dirty revision. A repeated conflict render for the same revision does not create duplicate
+recovery files.
+
+Rename notifications are serialized because Obsidian may report the same rename through both the
+vault and an open view. The source session always adopts the renamed vault path. If an obsolete
+destination session exists, dirty local data is preserved first, the stale session is displaced
+and made read-only, and only then does the renamed source session claim the path.
+
+Ink notifications carry the changed page key and a view-source identity. The originating view
+draws the committed stroke incrementally; other views redraw only the changed page. A normal pen
+stroke therefore does not trigger a full-notebook repaint or a second render in its originating
+view.
 
 ## Rendering
 
@@ -92,6 +111,10 @@ New pen strokes persist a versioned render profile containing smoothing and pres
 Persisted stroke geometry therefore does not depend on later user-setting changes.
 
 Legacy strokes without a render profile migrate to the documented default profile.
+
+Single-point pen and highlighter marks are first-class persisted strokes and must remain visible
+after redraw/reopen. Plugin settings are normalized at the persistence boundary so malformed or
+legacy tool/color/width values cannot disable the ink path.
 
 ## PDF merge / overwrite
 
@@ -114,8 +137,18 @@ If sidecar deletion fails, annotations remain available instead of being silentl
 Each PDF page is owned by one disposable `PdfPageBinding`. It owns its canvases, mutation
 observer, resize observer, pending animation frame, and pointer-handler disposer.
 
-Notebook surfaces likewise retain pointer-handler disposers. Teardown must unregister all input
-handlers and observers and remove Jot-owned DOM.
+Notebook pages keep only lightweight page/paper DOM permanently. `JotNoteSurface` uses an
+`IntersectionObserver` rooted at the notebook scroll viewport to mount persistent/live canvases,
+a resize observer, and Pencil handlers only for pages in or near the viewport. Unmounting a page
+disposes input/observer resources and releases its canvas backing stores; the authoritative
+strokes remain in `NotebookDocumentSession`. Remounting always repaints from that model.
+
+Ruled, grid, and dot guides live on an explicit paper layer below transparent ink canvases. Paper
+visibility therefore does not depend on WebKit's treatment of canvas backgrounds.
+
+If WebKit refuses a 2D canvas context, the page shows a non-destructive read-only error layer
+instead of mutating or discarding notebook data. Teardown must unregister all input handlers,
+observers, animation frames, and Jot-owned transient canvas resources.
 
 ## Lifecycle persistence
 
