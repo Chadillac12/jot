@@ -1,9 +1,46 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DocumentSessionManager } from '../src/document-session';
 import { createJotNote, serializeJotNote } from '../src/jot-note-file';
 import { NotebookExternalConflictError, NotebookSessionManager } from '../src/notebook-session';
 
 describe('NotebookSessionManager', () => {
+	it('keeps a protected notebook protected on an idempotent second-view attach', () => {
+		const manager = new NotebookSessionManager(new DocumentSessionManager());
+		const session = manager.get('Broken.jot');
+		const broken = '{broken';
+
+		expect(session.load(broken)).toBe('protected');
+		expect(session.load(broken)).toBe('protected');
+		expect(session.loadError).not.toBeNull();
+	});
+
+	it('keeps conflict state visible when another view receives the persisted baseline', () => {
+		const manager = new NotebookSessionManager(new DocumentSessionManager());
+		const session = manager.get('Lecture.jot');
+		const initial = serializeJotNote(createJotNote());
+		expect(session.load(initial)).toBe('loaded');
+		session.markDirty();
+
+		const externalNote = createJotNote();
+		externalNote.paper = 'grid';
+		expect(session.load(serializeJotNote(externalNote))).toBe('conflict');
+		expect(session.load(initial)).toBe('conflict');
+		expect(session.state.state).toBe('conflict');
+	});
+
+	it('forwards page key and source identity with ink notifications', () => {
+		const manager = new NotebookSessionManager(new DocumentSessionManager());
+		const session = manager.get('Lecture.jot');
+		session.load(serializeJotNote(createJotNote()));
+		const source = {};
+		const listener = vi.fn();
+		session.subscribe(listener);
+
+		session.markDirty('ink', 'Lecture.jot::page-1', source);
+
+		expect(listener).toHaveBeenCalledWith('ink', 'Lecture.jot::page-1', source);
+	});
+
 	it('drops a clean notebook after the last acquired view releases it', () => {
 		const manager = new NotebookSessionManager(new DocumentSessionManager());
 		const session = manager.acquire('Lecture.jot');
