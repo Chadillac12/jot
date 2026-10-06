@@ -34,7 +34,8 @@ verification. It is engineering traceability for Jot; it is not FAA certificatio
 - notebook rename notifications are serialized and path ownership is explicit,
 - notebook pages virtualize canvas/input resources outside the scroll viewport,
 - malformed persisted ink settings are normalized to safe values,
-- notebook resource validation bounds page count and pathological page geometry.
+- notebook resource validation bounds page count and pathological page geometry,
+- notebook sheets use width-derived in-flow geometry so paper/canvas/Pencil targets cannot collapse with CSS aspect-ratio failures.
 
 ## Notebook stabilization verification
 
@@ -51,6 +52,7 @@ verification. It is engineering traceability for Jot; it is not FAA certificatio
 | N-09 | Reader resource bounds match writer behavior | notebook parser + Add page cap | `test/jot-note-file.test.ts` |
 | N-10 | Rename path ownership is explicit and stale destination sessions are displaced read-only | serialized rename flow + `NotebookSessionManager.displace` | `test/notebook-session.test.ts` |
 | N-11 | Conflicted local ink is durable across app termination | sibling recovery notebook | conflict tests + release/manual iPad verification |
+| N-12 | Notebook page geometry cannot collapse on iPad WebKit | width-derived in-flow page spacer; no aspect-ratio dependency | `test/jot-note-surface.test.ts` + manual iPad verification |
 
 ## Required release gate
 
