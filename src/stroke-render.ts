@@ -172,14 +172,24 @@ export function drawHighlighterPolyline(
 	baseWidth: number,
 	canvas: CanvasSize,
 ) {
-	if (points.length < 2) return;
+	if (points.length === 0) return;
 	ctx.save();
 	applyDprTransform(ctx, canvas);
-	ctx.lineWidth = baseWidth * HIGHLIGHTER_WIDTH_FACTOR * canvas.height;
+	const lineWidth = baseWidth * HIGHLIGHTER_WIDTH_FACTOR * canvas.height;
+	ctx.globalAlpha = HIGHLIGHTER_ALPHA;
+	if (points.length === 1) {
+		const point = denormalize(points[0]!, canvas);
+		ctx.fillStyle = color;
+		ctx.beginPath();
+		ctx.arc(point.x, point.y, lineWidth / 2, 0, Math.PI * 2);
+		ctx.fill();
+		ctx.restore();
+		return;
+	}
+	ctx.lineWidth = lineWidth;
 	ctx.strokeStyle = color;
 	ctx.lineCap = 'butt';
 	ctx.lineJoin = 'round';
-	ctx.globalAlpha = HIGHLIGHTER_ALPHA;
 	ctx.beginPath();
 	const head = denormalize(points[0]!, canvas);
 	ctx.moveTo(head.x, head.y);
