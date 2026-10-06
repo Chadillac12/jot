@@ -4,6 +4,30 @@ import { createJotNote, serializeJotNote } from '../src/jot-note-file';
 import { NotebookExternalConflictError, NotebookSessionManager } from '../src/notebook-session';
 
 describe('NotebookSessionManager', () => {
+	it('drops a clean notebook after the last acquired view releases it', () => {
+		const manager = new NotebookSessionManager(new DocumentSessionManager());
+		const session = manager.acquire('Lecture.jot');
+		session.load(serializeJotNote(createJotNote()));
+		expect(manager.peek('Lecture.jot')).toBe(session);
+
+		manager.release(session);
+
+		expect(manager.peek('Lecture.jot')).toBeNull();
+		expect(manager.get('Lecture.jot')).not.toBe(session);
+	});
+
+	it('retains a dirty notebook with no views until persistence succeeds', () => {
+		const manager = new NotebookSessionManager(new DocumentSessionManager());
+		const session = manager.acquire('Lecture.jot');
+		session.load(serializeJotNote(createJotNote()));
+		session.markDirty();
+
+		manager.release(session);
+
+		expect(manager.peek('Lecture.jot')).toBe(session);
+		expect(manager.dropIfUnused('Lecture.jot')).toBe(false);
+	});
+
 	it('returns one authoritative notebook model for every view of a path', () => {
 		const manager = new NotebookSessionManager(new DocumentSessionManager());
 		const a = manager.get('Lecture.jot');
