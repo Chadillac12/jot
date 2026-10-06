@@ -17,6 +17,7 @@ import { JotNoteSurface } from './jot-note-surface';
 import type { NotebookDocumentSession, NotebookSessionChange } from './notebook-session';
 import { UndoController } from './undo-controller';
 import type JotPlugin from './main';
+import type { Tool, ToolState } from './palette';
 
 export class JotNoteView extends TextFileView {
 	private session: NotebookDocumentSession | null = null;
@@ -24,6 +25,7 @@ export class JotNoteView extends TextFileView {
 	private undoController: UndoController | null = null;
 	private pagesEl: HTMLElement | null = null;
 	private unsubscribeSession: (() => void) | null = null;
+	private unsubscribeToolState: (() => void) | null = null;
 	private readonly viewSource = {};
 
 	constructor(
@@ -151,6 +153,8 @@ export class JotNoteView extends TextFileView {
 	private detachViewState(): void {
 		this.unsubscribeSession?.();
 		this.unsubscribeSession = null;
+		this.unsubscribeToolState?.();
+		this.unsubscribeToolState = null;
 		this.undoController = null;
 		this.session = null;
 	}
@@ -184,6 +188,8 @@ export class JotNoteView extends TextFileView {
 
 		const toolbar = this.contentEl.createDiv({ cls: 'jot-note-toolbar' });
 		this.renderToolbar(toolbar);
+		this.ensureToolStateSubscription();
+		this.syncToolButtons(this.plugin.getToolState());
 
 		this.pagesEl = this.contentEl.createDiv({ cls: 'jot-note-pages' });
 		this.surface = new JotNoteSurface(this.pagesEl, session.strokes, (canvas) => {
@@ -257,6 +263,23 @@ export class JotNoteView extends TextFileView {
 	private renderToolbar(toolbar: HTMLElement): void {
 		const session = this.session;
 		if (!session) return;
+		const toolWrap = toolbar.createDiv({ cls: 'jot-note-toolbar-group jot-note-tools' });
+		for (const [tool, label] of [
+			['pen', 'Pen'],
+			['highlighter', 'Highlighter'],
+			['eraser', 'Eraser'],
+		] as const) {
+			const button = new ButtonComponent(toolWrap)
+				.setButtonText(label)
+				.setTooltip(`Use ${label.toLowerCase()}`)
+				.onClick(() => this.plugin.selectTool(tool));
+			button.buttonEl.dataset.jotTool = tool;
+			button.buttonEl.addClass('jot-note-tool');
+		}
+		new ButtonComponent(toolWrap)
+			.setButtonText('Palette')
+			.setTooltip('Open the radial ink palette')
+			.onClick(() => this.plugin.openPaletteForActiveSurface());
 		const paperWrap = toolbar.createDiv({ cls: 'jot-note-toolbar-group' });
 		paperWrap.createSpan({ text: 'Paper' });
 		new DropdownComponent(paperWrap)
@@ -281,6 +304,21 @@ export class JotNoteView extends TextFileView {
 			.setButtonText('Redo')
 			.setTooltip('Redo the last ink change')
 			.onClick(() => this.undoController?.redo());
+	}
+
+	private ensureToolStateSubscription(): void {
+		if (this.unsubscribeToolState) return;
+		this.unsubscribeToolState = this.plugin.subscribeToolState((state) =>
+			this.syncToolButtons(state),
+		);
+	}
+
+	private syncToolButtons(state: ToolState): void {
+		for (const button of Array.from(
+			this.contentEl.querySelectorAll<HTMLElement>('[data-jot-tool]'),
+		)) {
+			button.toggleClass('is-active', button.dataset.jotTool === state.tool);
+		}
 	}
 
 	private setPaperStyle(style: JotPaperStyle): void {
