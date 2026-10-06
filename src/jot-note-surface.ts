@@ -16,11 +16,22 @@ const SHEET_CLASS = 'jot-note-sheet';
 const PAPER_CLASS = 'jot-note-paper';
 const PERSISTENT_CLASS = 'jot-note-ink';
 const LIVE_CLASS = 'jot-note-live-ink';
+const CANVAS_ERROR_CLASS = 'jot-note-canvas-error';
+
+interface NotebookPageMount {
+	sheet: HTMLElement;
+	key: string;
+	persistent: HTMLCanvasElement | null;
+	live: HTMLCanvasElement | null;
+	resizeObserver: ResizeObserver | null;
+	resizeFrame: number | null;
+	disposeInput: (() => void) | null;
+	errorEl: HTMLElement | null;
+}
 
 export class JotNoteSurface implements InkSurfaceController {
-	private observers: ResizeObserver[] = [];
-	private frames = new Set<number>();
-	private inputDisposers: Array<() => void> = [];
+	private intersectionObserver: IntersectionObserver | null = null;
+	private pageMounts = new Map<HTMLElement, NotebookPageMount>();
 
 	constructor(
 		private host: HTMLElement,
@@ -31,6 +42,7 @@ export class JotNoteSurface implements InkSurfaceController {
 	render(note: JotNoteFile, documentPath: string): void {
 		this.disconnect();
 		this.host.replaceChildren();
+		this.intersectionObserver = this.createIntersectionObserver();
 
 		note.pages.forEach((page, index) => {
 			this.renderPage(note, page, documentPath, index);
@@ -38,8 +50,15 @@ export class JotNoteSurface implements InkSurfaceController {
 	}
 
 	setPaperStyle(style: JotNoteFile['paper']): void {
-		const classes = ['jot-note-paper-blank', 'jot-note-paper-ruled', 'jot-note-paper-grid', 'jot-note-paper-dot'];
-		for (const paper of Array.from(this.host.querySelectorAll<HTMLElement>(`.${PAPER_CLASS}`))) {
+		const classes = [
+			'jot-note-paper-blank',
+			'jot-note-paper-ruled',
+			'jot-note-paper-grid',
+			'jot-note-paper-dot',
+		];
+		for (const paper of Array.from(
+			this.host.querySelectorAll<HTMLElement>(`.${PAPER_CLASS}`),
+		)) {
 			paper.classList.remove(...classes);
 			paper.classList.add(`jot-note-paper-${style}`);
 		}
@@ -57,15 +76,10 @@ export class JotNoteSurface implements InkSurfaceController {
 	}
 
 	disconnect(): void {
-		for (const observer of this.observers) observer.disconnect();
-		this.observers = [];
-		const win = this.host.ownerDocument.defaultView;
-		if (win) {
-			for (const frame of this.frames) win.cancelAnimationFrame(frame);
-		}
-		this.frames.clear();
-		for (const dispose of this.inputDisposers) dispose();
-		this.inputDisposers = [];
+		this.intersectionObserver?.disconnect();
+		this.intersectionObserver = null;
+		for (const sheet of [...this.pageMounts.keys()]) this.unmountPage(sheet);
+		this.pageMounts.clear();
 	}
 
 	redrawPage(canvas: HTMLCanvasElement): void {
@@ -108,6 +122,29 @@ export class JotNoteSurface implements InkSurfaceController {
 		);
 	}
 
+	private createIntersectionObserver(): IntersectionObserver | null {
+		const win = this.host.ownerDocument.defaultView;
+		const Observer = win?.IntersectionObserver;
+		if (!Observer) return null;
+		return new Observer(
+			(entries) => {
+				for (const entry of entries) {
+					const sheet = entry.target as HTMLElement;
+					if (entry.isIntersecting || entry.intersectionRatio > 0) {
+						this.mountPage(sheet);
+					} else {
+						this.unmountPage(sheet);
+					}
+				}
+			},
+			{
+				root: null,
+				rootMargin: '100% 0px 100% 0px',
+				threshold: 0,
+			},
+		);
+	}
+
 	private renderPage(
 		note: JotNoteFile,
 		page: JotNotePage,
@@ -137,49 +174,116 @@ export class JotNoteSurface implements InkSurfaceController {
 		paper.style.setProperty('--jot-paper-y', `${(paperSpacing / page.height) * 100}%`);
 		sheet.appendChild(paper);
 
-		const key = documentPageKey(documentPath, page.id);
-		const persistent = this.makeCanvas(doc, PERSISTENT_CLASS, key);
-		const live = this.makeCanvas(doc, LIVE_CLASS, key);
-		sheet.appendChild(persistent);
-		sheet.appendChild(live);
-		const disposeInput = this.wireOverlay(live);
-		if (disposeInput) this.inputDisposers.push(disposeInput);
+		const mount: NotebookPageMount = {
+			sheet,
+			key: documentPageKey(documentPath, page.id),
+			persistent: null,
+			live: null,
+			resizeObserver: null,
+			resizeFrame: null,
+			disposeInput: null,
+			errorEl: null,
+		};
+		this.pageMounts.set(sheet, mount);
 		this.host.appendChild(wrapper);
 
+		if (this.intersectionObserver) {
+			this.intersectionObserver.observe(sheet);
+			if (index === 0) this.mountPage(sheet);
+		} else {
+			this.mountPage(sheet);
+		}
+	}
+
+	private mountPage(sheet: HTMLElement): void {
+		const mount = this.pageMounts.get(sheet);
+		if (!mount || mount.persistent || mount.live) return;
+
+		const doc = sheet.ownerDocument;
+		const persistent = this.makeCanvas(doc, PERSISTENT_CLASS, mount.key);
+		const live = this.makeCanvas(doc, LIVE_CLASS, mount.key);
+		sheet.appendChild(persistent);
+		sheet.appendChild(live);
+		mount.persistent = persistent;
+		mount.live = live;
+
+		const persistentCtx = persistent.getContext('2d');
+		const liveCtx = live.getContext('2d');
+		if (!persistentCtx || !liveCtx) {
+			this.showCanvasUnavailable(mount);
+			return;
+		}
+		mount.errorEl?.remove();
+		mount.errorEl = null;
+
+		const disposeInput = this.wireOverlay(live);
+		mount.disposeInput = disposeInput ?? null;
+
 		const applyResize = () => {
-			const persistentChanged = this.sizeCanvas(persistent, sheet);
-			const liveChanged = this.sizeCanvas(live, sheet);
+			if (!mount.persistent || !mount.live) return;
+			const persistentChanged = this.sizeCanvas(mount.persistent, sheet);
+			const liveChanged = this.sizeCanvas(mount.live, sheet);
 			if (!persistentChanged && !liveChanged) return;
-			this.redrawPage(persistent);
-			this.clearLivePage(live);
+			this.redrawPage(mount.persistent);
+			this.clearLivePage(mount.live);
 		};
 
-		let resizeFrame: number | null = null;
 		const scheduleResize = () => {
 			const win = doc.defaultView;
 			if (!win) {
 				applyResize();
 				return;
 			}
-			if (resizeFrame !== null) return;
+			if (mount.resizeFrame !== null) return;
 			let completedSynchronously = false;
 			let frame = 0;
 			frame = win.requestAnimationFrame(() => {
 				completedSynchronously = true;
-				this.frames.delete(frame);
-				resizeFrame = null;
+				mount.resizeFrame = null;
 				applyResize();
 			});
-			if (!completedSynchronously) {
-				resizeFrame = frame;
-				this.frames.add(frame);
-			}
+			if (!completedSynchronously) mount.resizeFrame = frame;
 		};
 
-		const observer = new ResizeObserver(scheduleResize);
-		observer.observe(sheet);
-		this.observers.push(observer);
+		if (typeof ResizeObserver !== 'undefined') {
+			mount.resizeObserver = new ResizeObserver(scheduleResize);
+			mount.resizeObserver.observe(sheet);
+		}
 		scheduleResize();
+	}
+
+	private unmountPage(sheet: HTMLElement): void {
+		const mount = this.pageMounts.get(sheet);
+		if (!mount) return;
+		mount.disposeInput?.();
+		mount.disposeInput = null;
+		mount.resizeObserver?.disconnect();
+		mount.resizeObserver = null;
+
+		const win = sheet.ownerDocument.defaultView;
+		if (win && mount.resizeFrame !== null) win.cancelAnimationFrame(mount.resizeFrame);
+		mount.resizeFrame = null;
+
+		if (mount.persistent) this.releaseCanvas(mount.persistent);
+		if (mount.live) this.releaseCanvas(mount.live);
+		mount.persistent = null;
+		mount.live = null;
+	}
+
+	private showCanvasUnavailable(mount: NotebookPageMount): void {
+		if (mount.errorEl) return;
+		const error = mount.sheet.ownerDocument.createElement('div');
+		error.className = CANVAS_ERROR_CLASS;
+		error.textContent =
+			'Ink canvas is temporarily unavailable. Your saved handwriting data has not been changed.';
+		mount.sheet.appendChild(error);
+		mount.errorEl = error;
+	}
+
+	private releaseCanvas(canvas: HTMLCanvasElement): void {
+		canvas.width = 1;
+		canvas.height = 1;
+		canvas.remove();
 	}
 
 	private makeCanvas(doc: Document, className: string, key: string): HTMLCanvasElement {
@@ -195,20 +299,21 @@ export class JotNoteSurface implements InkSurfaceController {
 		const win = sheet.ownerDocument.defaultView ?? window;
 		const requestedDpr = devicePixelRatioFor(win);
 		const effectiveDpr = safeBackingStoreDpr(rect.width, rect.height, requestedDpr);
-		// Canvas CSS sizing is handled entirely by the stylesheet (100% x 100%).
-		// Only mutate the backing store when its pixel dimensions truly change;
-		// repeatedly writing CSS pixel sizes from ResizeObserver can create a
-		// WebKit resize/repaint feedback loop on iPad.
 		return applyBackingStoreSize(canvas, rect.width, rect.height, effectiveDpr);
 	}
 
 	private persistentCanvasFor(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
 		if (canvas.classList.contains(PERSISTENT_CLASS)) return canvas;
-		return canvas.parentElement?.querySelector<HTMLCanvasElement>(`canvas.${PERSISTENT_CLASS}`) ?? null;
+		return (
+			canvas.parentElement?.querySelector<HTMLCanvasElement>(`canvas.${PERSISTENT_CLASS}`) ??
+			null
+		);
 	}
 
 	private liveCanvasFor(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
 		if (canvas.classList.contains(LIVE_CLASS)) return canvas;
-		return canvas.parentElement?.querySelector<HTMLCanvasElement>(`canvas.${LIVE_CLASS}`) ?? null;
+		return (
+			canvas.parentElement?.querySelector<HTMLCanvasElement>(`canvas.${LIVE_CLASS}`) ?? null
+		);
 	}
 }
