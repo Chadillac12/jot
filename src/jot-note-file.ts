@@ -32,6 +32,11 @@ export type JotNoteParseResult =
 
 const DEFAULT_PAGE_WIDTH = 1536;
 const DEFAULT_PAGE_HEIGHT = 2048;
+export const MAX_NOTEBOOK_PAGES = 500;
+export const MAX_STROKES_PER_PAGE = 50_000;
+const MAX_PAGE_DIMENSION = 100_000;
+const MIN_PAGE_ASPECT = 0.05;
+const MAX_PAGE_ASPECT = 20;
 
 export function createJotNote(): JotNoteFile {
 	return {
@@ -96,6 +101,14 @@ export function parseJotNoteTextResult(text: string): JotNoteParseResult {
 		};
 	}
 
+	if (raw.pages.length > MAX_NOTEBOOK_PAGES) {
+		return {
+			ok: false,
+			reason: 'invalid-schema',
+			message: `This Jot notebook contains more than ${MAX_NOTEBOOK_PAGES} pages and was opened read-only for safety.`,
+		};
+	}
+
 	const pages: JotNotePage[] = [];
 	const ids = new Set<string>();
 	for (let index = 0; index < raw.pages.length; index++) {
@@ -134,7 +147,10 @@ function parsePage(value: unknown, index: number): JotNotePage | null {
 	const width = value.width === undefined ? DEFAULT_PAGE_WIDTH : value.width;
 	const height = value.height === undefined ? DEFAULT_PAGE_HEIGHT : value.height;
 	if (!finitePositive(width) || !finitePositive(height)) return null;
-	if (!Array.isArray(value.strokes)) return null;
+	if (width > MAX_PAGE_DIMENSION || height > MAX_PAGE_DIMENSION) return null;
+	const aspect = width / height;
+	if (aspect < MIN_PAGE_ASPECT || aspect > MAX_PAGE_ASPECT) return null;
+	if (!Array.isArray(value.strokes) || value.strokes.length > MAX_STROKES_PER_PAGE) return null;
 
 	const strokes: Stroke[] = [];
 	for (const rawStroke of value.strokes) {
