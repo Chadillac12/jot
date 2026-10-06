@@ -25,6 +25,7 @@ interface NotebookPageMount {
 	live: HTMLCanvasElement | null;
 	resizeObserver: ResizeObserver | null;
 	resizeFrame: number | null;
+	painted: boolean;
 	disposeInput: (() => void) | null;
 	errorEl: HTMLElement | null;
 }
@@ -181,6 +182,7 @@ export class JotNoteSurface implements InkSurfaceController {
 			live: null,
 			resizeObserver: null,
 			resizeFrame: null,
+			painted: false,
 			disposeInput: null,
 			errorEl: null,
 		};
@@ -223,7 +225,8 @@ export class JotNoteSurface implements InkSurfaceController {
 			if (!mount.persistent || !mount.live) return;
 			const persistentChanged = this.sizeCanvas(mount.persistent, sheet);
 			const liveChanged = this.sizeCanvas(mount.live, sheet);
-			if (!persistentChanged && !liveChanged) return;
+			if (!persistentChanged && !liveChanged && mount.painted) return;
+			mount.painted = true;
 			this.redrawPage(mount.persistent);
 			this.clearLivePage(mount.live);
 		};
@@ -245,8 +248,9 @@ export class JotNoteSurface implements InkSurfaceController {
 			if (!completedSynchronously) mount.resizeFrame = frame;
 		};
 
-		if (typeof ResizeObserver !== 'undefined') {
-			mount.resizeObserver = new ResizeObserver(scheduleResize);
+		const ResizeObserverCtor = doc.defaultView?.ResizeObserver;
+		if (ResizeObserverCtor) {
+			mount.resizeObserver = new ResizeObserverCtor(scheduleResize);
 			mount.resizeObserver.observe(sheet);
 		}
 		scheduleResize();
@@ -263,6 +267,7 @@ export class JotNoteSurface implements InkSurfaceController {
 		const win = sheet.ownerDocument.defaultView;
 		if (win && mount.resizeFrame !== null) win.cancelAnimationFrame(mount.resizeFrame);
 		mount.resizeFrame = null;
+		mount.painted = false;
 
 		if (mount.persistent) this.releaseCanvas(mount.persistent);
 		if (mount.live) this.releaseCanvas(mount.live);
