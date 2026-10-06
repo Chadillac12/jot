@@ -144,7 +144,10 @@ disposes input/observer resources and releases its canvas backing stores; the au
 strokes remain in `NotebookDocumentSession`. Remounting always repaints from that model.
 
 Ruled, grid, and dot guides live on an explicit paper layer below transparent ink canvases. Paper
-visibility therefore does not depend on WebKit's treatment of canvas backgrounds.
+visibility therefore does not depend on WebKit's treatment of canvas backgrounds. Notebook page
+height is established by an in-flow percentage spacer derived from the persisted page dimensions,
+not CSS `aspect-ratio`; this prevents a zero-height WKWebView sheet from simultaneously removing
+the paper, ink canvases, and Pencil gesture target.
 
 If WebKit refuses a 2D canvas context, the page shows a non-destructive read-only error layer
 instead of mutating or discarding notebook data. Teardown must unregister all input handlers,
