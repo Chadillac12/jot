@@ -65,6 +65,31 @@ describe('NotebookSessionManager', () => {
 		expect(manager.dropIfUnused('Lecture.jot')).toBe(false);
 	});
 
+	it('requires an existing destination session to be displaced before rename', () => {
+		const manager = new NotebookSessionManager(new DocumentSessionManager());
+		const source = manager.acquire('Old.jot');
+		const destination = manager.acquire('New.jot');
+		source.load(serializeJotNote(createJotNote()));
+		destination.load(serializeJotNote(createJotNote()));
+		destination.markDirty();
+
+		expect(() => manager.rename('Old.jot', 'New.jot')).toThrow(
+			'destination session must be displaced',
+		);
+
+		const protectedChange = vi.fn();
+		destination.subscribe(protectedChange);
+		expect(manager.displace('New.jot')).toBe(destination);
+		destination.protectFromPathReplacement('stale path');
+		const renamed = manager.rename('Old.jot', 'New.jot');
+
+		expect(renamed).toBe(source);
+		expect(renamed.path).toBe('New.jot');
+		expect(manager.peek('New.jot')).toBe(source);
+		expect(destination.loadError).toBe('stale path');
+		expect(protectedChange).toHaveBeenCalledWith('protected', undefined, undefined);
+	});
+
 	it('returns one authoritative notebook model for every view of a path', () => {
 		const manager = new NotebookSessionManager(new DocumentSessionManager());
 		const a = manager.get('Lecture.jot');
