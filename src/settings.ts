@@ -153,7 +153,7 @@ export class JotSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Floating palette button')
-			.setDesc('Show a small edge button on the active PDF as a gesture-free fallback.')
+			.setDesc('Show a small edge button on the active ink view as a gesture-free fallback.')
 			.addDropdown((d) =>
 				d
 					.addOption('off', 'Off')
