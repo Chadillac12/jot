@@ -83,6 +83,10 @@ export class JotNoteView extends TextFileView {
 			await super.save(clear);
 			return;
 		}
+		if (session.loadError) {
+			new Notice('Jot: this notebook view is read-only to protect local data.');
+			return;
+		}
 		if (session.state.state === 'conflict') {
 			new Notice('Jot: notebook save blocked because an external edit conflicts with unsaved ink.');
 			this.renderConflict();
@@ -116,7 +120,11 @@ export class JotNoteView extends TextFileView {
 
 	override async onClose(): Promise<void> {
 		try {
-			if (this.session?.state.isDirty && this.session.state.state !== 'conflict') {
+			if (
+				this.session?.state.isDirty &&
+				!this.session.loadError &&
+				this.session.state.state !== 'conflict'
+			) {
 				await this.save();
 			}
 		} finally {
