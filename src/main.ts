@@ -29,6 +29,7 @@ export default class JotPlugin extends Plugin {
 	private notebooks = new NotebookSessionManager(this.sessions);
 	private lastActivePdfPath: string | null = null;
 	private notebookRetryTimers = new Map<string, number>();
+	private notebookConflictRecoveries = new Map<string, number>();
 	private sidecar!: SidecarStore;
 	private merge!: MergeService;
 	private overlays!: OverlayManager;
@@ -431,12 +432,42 @@ export default class JotPlugin extends Plugin {
 
 		if (success) {
 			this.clearNotebookRetry(session.path);
+			this.notebookConflictRecoveries.delete(session.path);
 			this.notebooks.dropIfUnused(session.path);
 			return true;
 		}
 
+		if (session.state.state === 'conflict') void this.preserveNotebookConflict(session);
 		if (session.state.state === 'error') this.scheduleNotebookRetry(session.path);
 		return false;
+	}
+
+	async preserveNotebookConflict(session: NotebookDocumentSession): Promise<string | null> {
+		const revision = session.state.revision;
+		if (this.notebookConflictRecoveries.get(session.path) === revision) return null;
+		const extension = `.${JOT_NOTE_EXTENSION}`;
+		const base = session.path.endsWith(extension)
+			? session.path.slice(0, -extension.length)
+			: session.path;
+		const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+		let recoveryPath = `${base}.local-conflict-${stamp}${extension}`;
+		let suffix = 2;
+		while (this.app.vault.getAbstractFileByPath(recoveryPath)) {
+			recoveryPath = `${base}.local-conflict-${stamp}-${suffix}${extension}`;
+			suffix += 1;
+		}
+		try {
+			await this.app.vault.create(recoveryPath, session.serialize());
+			this.notebookConflictRecoveries.set(session.path, revision);
+			new Notice(`Jot: preserved local conflicted ink at ${recoveryPath}.`, 8000);
+			return recoveryPath;
+		} catch (error) {
+			new Notice(
+				`Jot: could not create a local conflict recovery copy: ${error instanceof Error ? error.message : String(error)}`,
+				8000,
+			);
+			return null;
+		}
 	}
 
 	private scheduleNotebookRetry(path: string): void {
@@ -465,6 +496,11 @@ export default class JotPlugin extends Plugin {
 	}
 
 	renameNotebookSession(oldPath: string, newPath: string): NotebookDocumentSession {
+		const recoveryRevision = this.notebookConflictRecoveries.get(oldPath);
+		if (recoveryRevision !== undefined) {
+			this.notebookConflictRecoveries.delete(oldPath);
+			this.notebookConflictRecoveries.set(newPath, recoveryRevision);
+		}
 		const retryTimer = this.notebookRetryTimers.get(oldPath);
 		if (retryTimer !== undefined) {
 			window.clearTimeout(retryTimer);
