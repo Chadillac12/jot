@@ -9,6 +9,7 @@ import {
 } from 'obsidian';
 import {
 	JOT_NOTE_VIEW_TYPE,
+	MAX_NOTEBOOK_PAGES,
 	createJotPage,
 	nextPageId,
 	type JotPaperStyle,
@@ -337,6 +338,10 @@ export class JotNoteView extends TextFileView {
 		const session = this.session;
 		if (!session || session.loadError) {
 			new Notice('Jot: this notebook is read-only because its data could not be validated.');
+			return;
+		}
+		if (session.note.pages.length >= MAX_NOTEBOOK_PAGES) {
+			new Notice(`Jot: notebooks are limited to ${MAX_NOTEBOOK_PAGES} pages for stability.`);
 			return;
 		}
 		const page = createJotPage(nextPageId(session.note.pages));
