@@ -50,6 +50,11 @@ export class JotNoteSurface implements InkSurfaceController {
 			.forEach((canvas) => this.redrawPage(canvas));
 	}
 
+	redrawKey(key: string): void {
+		const canvas = this.overlayForKey(key);
+		if (canvas) this.redrawPage(canvas);
+	}
+
 	disconnect(): void {
 		for (const observer of this.observers) observer.disconnect();
 		this.observers = [];
