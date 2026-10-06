@@ -42,7 +42,7 @@ export const DEFAULT_SETTINGS: JotSettings = {
 
 export function normalizeJotSettings(stored: unknown): JotSettings {
 	const raw = isRecord(stored) ? stored : {};
-	const palettePreferences = normalizePalettePreferences(raw as Partial<PalettePreferences>);
+	const palettePreferences = normalizePalettePreferences(raw);
 	return {
 		...DEFAULT_SETTINGS,
 		...palettePreferences,
