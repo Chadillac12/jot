@@ -1,7 +1,7 @@
 import { Notice, Plugin, TFile } from 'obsidian';
 import { DocumentSessionManager } from './document-session';
 import type { InkSaveScheduler, InkSurfaceController } from './ink-surface';
-import { DEFAULT_TOOL_STATE, Palette, ToolState } from './palette';
+import { DEFAULT_TOOL_STATE, Palette, Tool, ToolState } from './palette';
 import { normalizePalettePreferences } from './palette-activation';
 import { DEFAULT_SETTINGS, JotSettings, JotSettingTab } from './settings';
 import { ConfirmClearModal } from './clear';
@@ -34,6 +34,7 @@ export default class JotPlugin extends Plugin {
 	private merge!: MergeService;
 	private overlays!: OverlayManager;
 	private toolState: ToolState = { ...DEFAULT_TOOL_STATE };
+	private toolStateListeners = new Set<(state: ToolState) => void>();
 	private palette!: Palette;
 	private floatingPaletteButton!: FloatingPaletteButton;
 	settings: JotSettings = { ...DEFAULT_SETTINGS };
@@ -130,6 +131,7 @@ export default class JotPlugin extends Plugin {
 				const mem = this.palette.getMemory();
 				this.settings.penState = mem.pen;
 				this.settings.highlighterState = mem.highlighter;
+				this.notifyToolState();
 				void this.saveSettings();
 			},
 			{
@@ -174,6 +176,12 @@ export default class JotPlugin extends Plugin {
 			this.app.workspace.on('layout-change', () => {
 				this.overlays.pruneClosedObservers();
 				this.overlays.attachToActivePdf();
+				this.refreshFloatingPaletteButton();
+			}),
+		);
+
+		this.registerEvent(
+			this.app.workspace.on('active-leaf-change', () => {
 				this.refreshFloatingPaletteButton();
 			}),
 		);
@@ -370,6 +378,25 @@ export default class JotPlugin extends Plugin {
 		const x = Math.min(win.innerWidth - margin, Math.max(margin, rect.left + rect.width / 2));
 		const y = Math.min(win.innerHeight - margin, Math.max(margin, rect.top + rect.height / 2));
 		this.palette.show(doc.body, x, y, this.settings.handedness);
+	}
+
+	getToolState(): ToolState {
+		return { ...this.toolState };
+	}
+
+	selectTool(tool: Tool): void {
+		this.palette.selectTool(tool);
+	}
+
+	subscribeToolState(listener: (state: ToolState) => void): () => void {
+		this.toolStateListeners.add(listener);
+		listener(this.getToolState());
+		return () => this.toolStateListeners.delete(listener);
+	}
+
+	private notifyToolState(): void {
+		const snapshot = this.getToolState();
+		for (const listener of this.toolStateListeners) listener(snapshot);
 	}
 
 	getNotebookSession(path: string): NotebookDocumentSession {
