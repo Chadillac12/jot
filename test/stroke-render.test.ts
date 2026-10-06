@@ -22,6 +22,7 @@ function makeCtx() {
 		closePath: vi.fn(),
 		stroke: vi.fn(),
 		fill: vi.fn(),
+		arc: vi.fn(),
 		save: vi.fn(),
 		restore: vi.fn(),
 		lineWidth: 0,
@@ -117,17 +118,24 @@ describe('drawHighlighterPolyline', () => {
 		);
 		expect(ctx.lineWidth).toBe(0.005 * HIGHLIGHTER_WIDTH_FACTOR * 600);
 	});
-	it('does nothing for fewer than two points', () => {
+	it('renders a single-point highlighter mark as a visible dot', () => {
 		const ctx = makeCtx();
 		drawHighlighterPolyline(
 			ctx as unknown as CanvasRenderingContext2D,
-			[point(0, 0)],
+			[point(0.25, 0.5)],
 			'#ff0',
 			0.005,
 			{ width: 800, height: 600, dpr: 2 },
 		);
-		expect(ctx.setTransform).not.toHaveBeenCalled();
-		expect(ctx.stroke).not.toHaveBeenCalled();
+		expect(ctx.setTransform).toHaveBeenCalledWith(2, 0, 0, 2, 0, 0);
+		expect(ctx.arc).toHaveBeenCalledWith(
+			200,
+			300,
+			(0.005 * HIGHLIGHTER_WIDTH_FACTOR * 600) / 2,
+			0,
+			Math.PI * 2,
+		);
+		expect(ctx.fill).toHaveBeenCalled();
 	});
 });
 
