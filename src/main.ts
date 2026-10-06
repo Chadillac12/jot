@@ -207,7 +207,7 @@ export default class JotPlugin extends Plugin {
 					return;
 				}
 				if (file.extension === JOT_NOTE_EXTENSION || oldPath.endsWith(`.${JOT_NOTE_EXTENSION}`)) {
-					this.handleNotebookRename(oldPath, file.path);
+					void this.handleNotebookRename(oldPath, file.path);
 				}
 			}),
 		);
@@ -490,12 +490,27 @@ export default class JotPlugin extends Plugin {
 		this.notebookRetryTimers.delete(path);
 	}
 
-	private handleNotebookRename(oldPath: string, newPath: string): void {
+	private async handleNotebookRename(oldPath: string, newPath: string): Promise<void> {
 		if (!this.notebooks.peek(oldPath)) return;
-		this.renameNotebookSession(oldPath, newPath);
+		await this.renameNotebookSession(oldPath, newPath);
 	}
 
-	renameNotebookSession(oldPath: string, newPath: string): NotebookDocumentSession {
+	async renameNotebookSession(
+		oldPath: string,
+		newPath: string,
+	): Promise<NotebookDocumentSession> {
+		const source = this.notebooks.peek(oldPath);
+		const destination = this.notebooks.peek(newPath);
+		if (source && destination && source !== destination) {
+			if (destination.state.isDirty) await this.preserveNotebookConflict(destination);
+			this.clearNotebookRetry(newPath);
+			const displaced = this.notebooks.displace(newPath);
+			displaced?.protectFromPathReplacement(
+				'Another notebook was renamed onto this vault path. This stale view is read-only; any unsaved local ink was preserved in a recovery notebook.',
+			);
+			this.notebookConflictRecoveries.delete(newPath);
+		}
+
 		const recoveryRevision = this.notebookConflictRecoveries.get(oldPath);
 		if (recoveryRevision !== undefined) {
 			this.notebookConflictRecoveries.delete(oldPath);
