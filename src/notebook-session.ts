@@ -68,6 +68,8 @@ export class NotebookDocumentSession {
 			this.stateSession.state !== 'unloaded' &&
 			data === this.persistedDataValue
 		) {
+			if (this.loadErrorValue) return 'protected';
+			if (this.stateSession.state === 'conflict') return 'conflict';
 			return 'loaded';
 		}
 
