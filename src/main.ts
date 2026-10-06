@@ -30,6 +30,7 @@ export default class JotPlugin extends Plugin {
 	private lastActivePdfPath: string | null = null;
 	private notebookRetryTimers = new Map<string, number>();
 	private notebookConflictRecoveries = new Map<string, number>();
+	private notebookRenameChain: Promise<void> = Promise.resolve();
 	private sidecar!: SidecarStore;
 	private merge!: MergeService;
 	private overlays!: OverlayManager;
@@ -421,6 +422,7 @@ export default class JotPlugin extends Plugin {
 	}
 
 	async saveNotebookSession(file: TFile, session: NotebookDocumentSession): Promise<boolean> {
+		if (session.loadError) return false;
 		const success = await session.save(async (expectedData, nextData) => {
 			await this.app.vault.process(file, (currentData) => {
 				if (currentData !== expectedData && currentData !== nextData) {
@@ -499,9 +501,30 @@ export default class JotPlugin extends Plugin {
 		oldPath: string,
 		newPath: string,
 	): Promise<NotebookDocumentSession> {
+		let result: NotebookDocumentSession | null = null;
+		const operation = this.notebookRenameChain.then(async () => {
+			result = await this.performNotebookRename(oldPath, newPath);
+		});
+		this.notebookRenameChain = operation.then(
+			() => undefined,
+			() => undefined,
+		);
+		await operation;
+		if (!result) throw new Error('Notebook rename completed without a session.');
+		return result;
+	}
+
+	private async performNotebookRename(
+		oldPath: string,
+		newPath: string,
+	): Promise<NotebookDocumentSession> {
 		const source = this.notebooks.peek(oldPath);
+		if (!source) {
+			return this.notebooks.peek(newPath) ?? this.notebooks.get(newPath);
+		}
+
 		const destination = this.notebooks.peek(newPath);
-		if (source && destination && source !== destination) {
+		if (destination && source !== destination) {
 			if (destination.state.isDirty) await this.preserveNotebookConflict(destination);
 			this.clearNotebookRetry(newPath);
 			const displaced = this.notebooks.displace(newPath);
