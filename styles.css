@@ -397,6 +397,20 @@
 	background-color: #ffffff;
 }
 
+.jot-note-canvas-error {
+	position: absolute;
+	inset: 0;
+	z-index: 3;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+	text-align: center;
+	color: var(--text-error);
+	background: color-mix(in srgb, var(--background-primary) 92%, transparent);
+	pointer-events: none;
+}
+
 .jot-note-paper-ruled {
 	background-repeat: repeat-y;
 	background-image: linear-gradient(
