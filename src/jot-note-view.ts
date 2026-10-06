@@ -57,7 +57,8 @@ export class JotNoteView extends TextFileView {
 		const path = this.file?.path;
 		if (!path) return;
 
-		const session = this.plugin.getNotebookSession(path);
+		const session =
+			this.session?.path === path ? this.session : this.plugin.acquireNotebookSession(path);
 		const status = session.load(data);
 		this.attachSession(session);
 		if (status === 'protected') {
@@ -151,12 +152,14 @@ export class JotNoteView extends TextFileView {
 	}
 
 	private detachViewState(): void {
+		const session = this.session;
 		this.unsubscribeSession?.();
 		this.unsubscribeSession = null;
 		this.unsubscribeToolState?.();
 		this.unsubscribeToolState = null;
 		this.undoController = null;
 		this.session = null;
+		if (session) this.plugin.releaseNotebookSession(session);
 	}
 
 	private onSessionChange(
