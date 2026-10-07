@@ -286,7 +286,7 @@ describe('JotNoteSurface', () => {
 			rootMargin: '50% 0px 50% 0px',
 			backingStoreLimits: {
 				maxDimension: 3072,
-				maxArea: 4_194_304,
+				maxArea: 4_000_000,
 			},
 		});
 
@@ -324,7 +324,7 @@ describe('JotNoteSurface', () => {
 		expect(canvases).toHaveLength(2);
 		expect(wire).toHaveBeenCalledTimes(1);
 		for (const canvas of canvases) {
-			expect(canvas.width * canvas.height).toBeLessThanOrEqual(4_194_304);
+			expect(canvas.width * canvas.height).toBeLessThanOrEqual(4_000_000);
 		}
 
 		callback(
