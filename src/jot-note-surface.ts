@@ -38,6 +38,7 @@ export class JotNoteSurface implements InkSurfaceController {
 		private host: HTMLElement,
 		private strokes: StrokeStore,
 		private wireOverlay: (canvas: HTMLCanvasElement) => (() => void) | void,
+		private observerRoot?: Element,
 	) {}
 
 	render(note: JotNoteFile, documentPath: string): void {
@@ -139,7 +140,7 @@ export class JotNoteSurface implements InkSurfaceController {
 				}
 			},
 			{
-				root: this.host.parentElement,
+				root: this.observerRoot ?? this.host.parentElement,
 				rootMargin: '100% 0px 100% 0px',
 				threshold: 0,
 			},
