@@ -127,6 +127,32 @@ describe('SidecarStore session loading', () => {
 		expect(h.strokes.forKey('a.pdf::jot:inserted-a')[0]?.color).toBe('#abcdef');
 	});
 
+	it('never overwrites an existing sidecar after adapter read fails', async () => {
+		const h = makeStore(makeFs({ 'a.pdf.jot.json': validPayload }));
+		const read = h.fs.adapter.read.bind(h.fs.adapter);
+		const readSpy = vi.spyOn(h.fs.adapter, 'read').mockImplementation(async (path) => {
+			if (path === 'a.pdf.jot.json') throw new Error('injected iCloud read error');
+			return read(path);
+		});
+		const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			expect(await h.store.load('a.pdf')).toBe('error');
+			expect(h.store.isWriteBlocked('a.pdf')).toBe(true);
+			h.strokes.setForKey('a.pdf::1', [stroke('#aabbcc')]);
+			h.store.scheduleSave('a.pdf');
+			expect(await h.store.save('a.pdf')).toBe(false);
+			expect(await h.store.flush('a.pdf')).toBe(false);
+			expect(h.fs.files['a.pdf.jot.json']).toBe(validPayload);
+			expect(h.onSaveError).toHaveBeenCalled();
+			// A later successful read can clear protection only if there is no
+			// dirty local state that would otherwise be discarded.
+			readSpy.mockRestore();
+		} finally {
+			readSpy.mockRestore();
+			errorLog.mockRestore();
+		}
+	});
+
 	it('protects malformed sidecars without clearing current memory', async () => {
 		const h = makeStore(makeFs({ 'a.pdf.jot.json': '{bad' }));
 		h.strokes.setForKey('a.pdf::1', [stroke('#112233')]);
