@@ -26,6 +26,8 @@ export class SidecarStore {
 	private retryTimers = new Map<string, number>();
 	private recentSelfSaves = new Map<string, number>();
 	private protectedOriginals = new Map<string, string>();
+	// An unreadable existing sidecar must never be overwritten by partial in-memory ink.
+	private unreadableLoads = new Set<string>();
 	private saveChains = new Map<string, Promise<boolean>>();
 
 	constructor(
@@ -44,6 +46,7 @@ export class SidecarStore {
 		try {
 			if (!(await this.adapter.exists(path))) {
 				this.protectedOriginals.delete(pdfPath);
+				this.unreadableLoads.delete(pdfPath);
 				this.strokes.clearFor(pdfPath);
 				this.insertedPages.clear(pdfPath);
 				session.completeLoad();
@@ -53,6 +56,7 @@ export class SidecarStore {
 			const text = await this.adapter.read(path);
 			const parsed = parseJotText(text);
 			if (!parsed || !isSupportedVersion(parsed.version)) {
+				this.unreadableLoads.delete(pdfPath);
 				this.protectedOriginals.set(pdfPath, text);
 				session.completeLoad();
 				console.warn(
@@ -63,6 +67,7 @@ export class SidecarStore {
 
 			// Parse and validate fully before touching the live StrokeStore.
 			this.protectedOriginals.delete(pdfPath);
+			this.unreadableLoads.delete(pdfPath);
 			this.strokes.clearFor(pdfPath);
 			this.insertedPages.clear(pdfPath);
 			this.strokes.populateFromPayload(pdfPath, parsed.pages);
@@ -70,14 +75,23 @@ export class SidecarStore {
 			session.completeLoad();
 			return 'loaded';
 		} catch (error) {
+			this.unreadableLoads.add(pdfPath);
 			session.failLoad(error);
 			console.error(`${PLUGIN_LOG} load failed for ${path}:`, error);
 			return 'error';
 		}
 	}
 
+	isWriteBlocked(pdfPath: string): boolean {
+		return this.unreadableLoads.has(pdfPath);
+	}
+
 	scheduleSave(pdfPath: string): void {
 		this.sessions.get(pdfPath).markDirty();
+		if (this.isWriteBlocked(pdfPath)) {
+			this.callbacks.onSaveError?.(pdfPath, new Error('Existing annotation sidecar could not be read; writes blocked to protect the original.'));
+			return;
+		}
 		this.clearTimer(this.saveTimers, pdfPath);
 		const id = window.setTimeout(() => {
 			this.saveTimers.delete(pdfPath);
@@ -109,6 +123,7 @@ export class SidecarStore {
 	}
 
 	async flush(pdfPath: string): Promise<boolean> {
+		if (this.isWriteBlocked(pdfPath)) return false;
 		this.clearTimer(this.saveTimers, pdfPath);
 		this.clearTimer(this.retryTimers, pdfPath);
 		if (!this.sessions.get(pdfPath).isDirty) return true;
@@ -171,6 +186,7 @@ export class SidecarStore {
 		// and session identity must follow even if sidecar migration later fails.
 		this.insertedPages.rekeyDocumentPath(oldPdfPath, newPdfPath);
 		const session = this.sessions.rename(oldPdfPath, newPdfPath);
+		if (this.unreadableLoads.delete(oldPdfPath)) this.unreadableLoads.add(newPdfPath);
 		let displacedDestination: string | null = null;
 		let displacedConflictPath: string | null = null;
 
@@ -225,8 +241,12 @@ export class SidecarStore {
 	isOwnRecentSave(path: string): boolean {
 		const writtenAt = this.recentSelfSaves.get(path);
 		if (writtenAt === undefined) return false;
-		if (Date.now() - writtenAt >= SELF_SAVE_SUPPRESS_MS) return false;
-		this.recentSelfSaves.delete(path);
+		if (Date.now() - writtenAt >= SELF_SAVE_SUPPRESS_MS) {
+			this.recentSelfSaves.delete(path);
+			return false;
+		}
+		// One atomic rename may emit multiple Obsidian watcher notifications.
+		// Preserve the suppression marker throughout the bounded window.
 		return true;
 	}
 
@@ -239,6 +259,7 @@ export class SidecarStore {
 		const path = jotPathFor(pdfPath);
 		this.clearTimer(this.saveTimers, pdfPath);
 		this.clearTimer(this.retryTimers, pdfPath);
+		if (this.isWriteBlocked(pdfPath)) return false;
 		this.protectedOriginals.delete(pdfPath);
 		try {
 			if (await this.adapter.exists(path)) await this.transactionalDelete(path);
@@ -254,6 +275,7 @@ export class SidecarStore {
 	}
 
 	private async performSave(pdfPath: string): Promise<boolean> {
+		if (this.isWriteBlocked(pdfPath)) return false;
 		const session = this.sessions.get(pdfPath);
 		const wasError = session.state === 'error';
 		const saveRevision = session.beginSave();
