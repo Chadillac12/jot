@@ -202,10 +202,18 @@ the sidecar can be discarded.
 ## UI lifetime
 
 Each source PDF page is owned by one disposable `PdfPageBinding`, but the binding is
-lightweight when its page is outside the PDF viewport. An `IntersectionObserver` rooted at the PDF
-view mounts persistent/live annotation canvases only for pages in or near the viewport. Leaving the
-viewport immediately shrinks each canvas backing store to 1x1 before removing it so WebKit does not
-retain a large detached backing store until garbage collection.
+lightweight when its page is outside the PDF viewport. Every bound source page keeps one transparent
+live Pencil hit target connected to the page, even while virtualized. In dormant state that live
+canvas has only a 1x1 backing store and fills the page through CSS, so it preserves pointer/palette
+input without carrying meaningful canvas memory.
+
+An `IntersectionObserver` rooted at the PDF view promotes pages in or near the viewport to full
+rendering. The expensive persistent annotation canvas and the live canvas backing store are allocated
+only while the page is active. A false intersection does not immediately tear them down: deactivation
+waits 750 ms, and a later true intersection cancels that timer. Pencil or mouse down on a dormant
+hit target synchronously promotes the page before the normal input handler executes and pins the
+page active for the duration of the pointer gesture. When deactivation finally occurs, the persistent
+canvas is released and the live input canvas returns to a 1x1 backing store but remains connected.
 
 PDF overlay backing stores use a conservative bounded area. During a PDF.js page-layer rebuild,
 Jot never recreates a removed annotation canvas synchronously from the mutation callback. Detached
