@@ -17,7 +17,7 @@ const stroke = (points: typeof point[]) => ({
 
 describe('ink resource limits', () => {
 	it('rejects an oversized individual stroke before copying its points', () => {
-		expect(parseStoredStroke(stroke(Array(MAX_POINTS_PER_STROKE + 1).fill(point)))).toBeNull();
+		expect(parseStoredStroke(stroke(Array.from({ length: MAX_POINTS_PER_STROKE + 1 }, () => point)))).toBeNull();
 	});
 
 	it('keeps an oversized PDF sidecar unreadable rather than rendering it', () => {
