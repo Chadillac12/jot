@@ -246,6 +246,7 @@ export class OverlayManager {
 							this.callbacks.onInsertedPagePaperChange(filePath, page.id, paper),
 					},
 					binding.container.ownerDocument,
+					binding.container,
 				);
 				binding.insertedPages.set(page.id, pageBinding);
 			} else {
