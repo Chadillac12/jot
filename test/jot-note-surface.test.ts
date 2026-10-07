@@ -234,7 +234,7 @@ describe('JotNoteSurface', () => {
 			],
 			{} as IntersectionObserver,
 		);
-		expect(host.querySelectorAll('canvas')).toHaveLength(4);
+		expect(host.querySelectorAll('canvas')).toHaveLength(5);
 
 		callback(
 			[
