@@ -379,8 +379,7 @@ describe('OverlayManager zoom recovery', () => {
 			)) {
 				expect(canvas.width).toBe(1);
 				expect(canvas.height).toBe(1);
-				expect(canvas.style.width).toBe('100%');
-				expect(canvas.style.height).toBe('100%');
+				expect(canvas.classList.contains('jot-live-overlay-dormant')).toBe(true);
 			}
 
 			IntersectionObserverVirtualizationMock.instances[1]?.fire(true);
