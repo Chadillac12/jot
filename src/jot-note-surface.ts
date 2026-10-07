@@ -345,7 +345,7 @@ export class JotNoteSurface implements InkSurfaceController {
 		mount.live = canvas;
 		mount.sheet.appendChild(canvas);
 		canvas.addEventListener('pointerdown', mount.onPointerDown, true);
-		for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+		for (const event of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
 			canvas.addEventListener(event, mount.onPointerEnd, true);
 		}
 		const ctx = canvas.getContext('2d');
@@ -416,7 +416,7 @@ export class JotNoteSurface implements InkSurfaceController {
 		if (final) {
 			if (mount.live) {
 				mount.live.removeEventListener('pointerdown', mount.onPointerDown, true);
-				for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+				for (const event of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
 					mount.live.removeEventListener(event, mount.onPointerEnd, true);
 				}
 			}
