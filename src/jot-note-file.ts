@@ -121,7 +121,7 @@ export function parseJotNoteTextResult(text: string): JotNoteParseResult {
 	let totalStrokes = 0;
 	let totalPoints = 0;
 	for (let index = 0; index < raw.pages.length; index++) {
-		const rawPage = raw.pages[index];
+		const rawPage: unknown = raw.pages[index];
 		if (!isRecord(rawPage) || !Array.isArray(rawPage.strokes)) return { ok: false, reason: 'invalid-schema', message: 'Invalid notebook page data.' };
 		totalStrokes += rawPage.strokes.length;
 		for (const stroke of rawPage.strokes) {
