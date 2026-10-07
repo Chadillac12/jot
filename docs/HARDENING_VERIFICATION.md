@@ -71,6 +71,7 @@ verification. It is engineering traceability for Jot; it is not FAA certificatio
 | P-11 | Overwrite removes sidecar/layout only after output PDF verifies | existing `PdfTransactionWriter` + SidecarStore discard | `test/pdf-transaction.test.ts` + manual overwrite verification |
 | P-12 | Paper export work is bounded for pathological persisted dimensions | bounded guide density | build/test gate + code review |
 | P-13 | PDF.js zoom/rebuild mutations never run hybrid layout reconciliation synchronously | source-page sync in mutation callback; 300 ms debounced hybrid repair only when hybrid pages exist | `test/overlay-zoom-recovery.test.ts` |
+| P-14 | Hybrid handwritten pages never reallocate canvas backing stores during PDF zoom | fixed logical backing store + CSS-only scaling + no per-page ResizeObserver | `test/jot-note-surface.test.ts` |
 
 ## Required release gate
 
