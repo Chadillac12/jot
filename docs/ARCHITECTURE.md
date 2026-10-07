@@ -151,6 +151,30 @@ Single-point pen and highlighter marks are first-class persisted strokes and mus
 after redraw/reopen. Plugin settings are normalized at the persistence boundary so malformed or
 legacy tool/color/width values cannot disable the ink path.
 
+## Persistent diagnostics
+
+`PersistentDiagnostics` is an optional append-only recorder isolated behind the `DiagnosticSink`
+interface. PDF/rendering components only emit primitive structured events; they do not perform
+storage themselves.
+
+Recording state is kept in the plugin's configured Obsidian directory. Starting a session persists
+`enabled=true` and `cleanShutdown=false` before the trace begins. A normal plugin unload flushes
+the pending batch and marks the session clean. If the next load finds an enabled, unclean active
+session, that file becomes `lastCrashSession` and a fresh session starts automatically.
+
+Trace events are JSON Lines. In-memory events are appended in batches after a short quiet period or
+immediately once the batch reaches its size threshold. This bounds filesystem call frequency while
+keeping the crash tail durable. Old session files are pruned, while the active, most recent clean,
+and most recent crash sessions are protected.
+
+The PDF hot path must obey an observer-effect rule: when diagnostics are disabled, diagnostic-only
+DOM scans, native-canvas discovery, mutation counting, and other expensive measurements are not
+performed. Diagnostics must never enumerate hybrid layout merely to report a count, because that
+would violate the PDF zoom-isolation behavior being observed.
+
+Export copies the selected internal JSONL trace to a visible `Jot Diagnostics/` folder. The
+recorder never changes PDF bytes, sidecars, strokes, or notebook content.
+
 ## PDF merge / overwrite
 
 Overwriting a PDF is transactional:
