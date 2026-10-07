@@ -62,6 +62,30 @@ Jot creates a `.jot` file in the vault and opens it as a handwritten notebook. T
 
 Opening the same notebook in multiple panes shares one authoritative in-memory document session rather than creating independent copies.
 
+## Persistent crash diagnostics
+
+For iPad/WebKit crashes that terminate Obsidian before the console can be inspected, Jot can record
+a lightweight append-only PDF lifecycle trace that survives process restarts.
+
+Use these Command Palette commands:
+
+- **Jot: Start persistent diagnostics** — starts recording and persists that choice across restarts.
+- **Jot: Stop persistent diagnostics** — flushes and stops recording.
+- **Jot: Export last diagnostic recording** — copies the most recent preserved crash session (or
+  current/latest session when no crash is preserved) into the visible `Jot Diagnostics/` vault folder.
+- **Jot: Clear diagnostic recordings** — removes retained internal traces; if recording is active,
+  it immediately continues in a fresh session.
+
+When recording is enabled, Jot marks the active session as unclean before testing begins. If
+Obsidian is killed without a normal plugin unload, the next launch preserves that session as the
+latest crash trace and automatically resumes recording. A startup notice confirms recovery.
+
+The trace intentionally records PDF/overlay lifecycle data rather than Pencil samples: PDF.js DOM
+mutation counts, source page binding creation/disposal, native PDF canvas dimensions, Jot overlay
+canvas dimensions, hybrid page reconciliation, and plugin/window lifecycle events. Traces remain
+inside the vault/plugin storage unless **Export last diagnostic recording** is run. Exported traces
+can include vault file paths and device/browser metadata, so review them before sharing.
+
 ## Data integrity
 
 Jot treats handwritten ink as user data:
