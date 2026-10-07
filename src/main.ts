@@ -438,7 +438,7 @@ export default class JotPlugin extends Plugin {
 		}
 		if (status === 'error') {
 			new Notice(
-				'Jot: could not read existing PDF annotations. Saving is BLOCKED to protect the original. Resolve the storage error and reload before annotating.',
+				'Jot: could not read existing PDF annotations. Saving is blocked to protect the original. Resolve the storage error and reload before annotating.',
 				10000,
 			);
 		}
