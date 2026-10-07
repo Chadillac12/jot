@@ -1,6 +1,6 @@
 import { App, TFile, WorkspaceLeaf } from 'obsidian';
 import { INK_KEY_ATTR } from './ink-surface';
-import { pageKey, type PdfInsertedPage } from './jot-file';
+import { insertedPageKey, pageKey, type PdfInsertedPage } from './jot-file';
 import {
 	PDF_INSERTED_PAGE_CLASS,
 	PdfInsertedPageBinding,
@@ -235,7 +235,7 @@ export class OverlayManager {
 
 		for (const page of layout) {
 			let pageBinding = binding.insertedPages.get(page.id);
-			const expectedKey = `${filePath}::jot:${page.id}`;
+			const expectedKey = insertedPageKey(filePath, page.id);
 			if (pageBinding && pageBinding.key !== expectedKey) {
 				pageBinding.dispose();
 				binding.insertedPages.delete(page.id);
