@@ -56,12 +56,14 @@ export class OverlayManager {
 		const filePath = this.filePathForLeaf(leaf);
 		if (!filePath) return;
 		const container = leaf.view.containerEl;
-		this.diagnostics.record('overlay.attach-active-pdf', {
-			pdfPath: filePath,
-			existingLeafBinding: this.leaves.has(leaf),
-			domPdfPages: this.pdfPageElements(container).length,
-			hasInsertedLayout: this.insertedPageStore.hasFor(filePath),
-		});
+		if (this.diagnostics.isEnabled()) {
+			this.diagnostics.record('overlay.attach-active-pdf', {
+				pdfPath: filePath,
+				existingLeafBinding: this.leaves.has(leaf),
+				domPdfPages: this.pdfPageElements(container).length,
+				hasInsertedLayout: this.insertedPageStore.hasFor(filePath),
+			});
+		}
 
 		let binding = this.leaves.get(leaf);
 		if (!binding) {
@@ -69,21 +71,23 @@ export class OverlayManager {
 			const observer = new MutationObserver((records) => {
 				const currentPath = this.filePathForLeaf(leaf);
 				if (!currentPath) return;
-				let addedNodes = 0;
-				let removedNodes = 0;
-				for (const record of records) {
-					addedNodes += record.addedNodes.length;
-					removedNodes += record.removedNodes.length;
+				if (this.diagnostics.isEnabled()) {
+					let addedNodes = 0;
+					let removedNodes = 0;
+					for (const record of records) {
+						addedNodes += record.addedNodes.length;
+						removedNodes += record.removedNodes.length;
+					}
+					this.diagnostics.record('pdf.container-mutation', {
+						pdfPath: currentPath,
+						records: records.length,
+						addedNodes,
+						removedNodes,
+						domPdfPages: this.pdfPageElements(created.container).length,
+						boundPdfPages: created.pages.size,
+						boundInsertedPages: created.insertedPages.size,
+					});
 				}
-				this.diagnostics.record('pdf.container-mutation', {
-					pdfPath: currentPath,
-					records: records.length,
-					addedNodes,
-					removedNodes,
-					domPdfPages: this.pdfPageElements(created.container).length,
-					boundPdfPages: created.pages.size,
-					boundInsertedPages: created.insertedPages.size,
-				});
 				// Keep ordinary PDF.js rebuild/zoom recovery on the same narrow
 				// path used by the pre-hybrid implementation. Hybrid layout work
 				// is intentionally deferred until the mutation burst settles.
@@ -265,7 +269,8 @@ export class OverlayManager {
 
 	private syncPdfPages(binding: LeafBinding, filePath: string): void {
 		const currentPages = new Set(this.pdfPageElements(binding.container));
-		const before = binding.pages.size;
+		const diagnosticsEnabled = this.diagnostics.isEnabled();
+		const before = diagnosticsEnabled ? binding.pages.size : 0;
 		let disposed = 0;
 		let createdCount = 0;
 		let refreshed = 0;
@@ -273,7 +278,7 @@ export class OverlayManager {
 			if (!currentPages.has(page) || !page.isConnected) {
 				pageBinding.dispose();
 				binding.pages.delete(page);
-				disposed += 1;
+				if (diagnosticsEnabled) disposed += 1;
 			}
 		}
 
@@ -284,7 +289,7 @@ export class OverlayManager {
 			const existing = binding.pages.get(page);
 			if (existing) {
 				existing.refreshKey(key);
-				refreshed += 1;
+				if (diagnosticsEnabled) refreshed += 1;
 				continue;
 			}
 			const created = new PdfPageBinding(
@@ -296,17 +301,19 @@ export class OverlayManager {
 			);
 			created.mount();
 			binding.pages.set(page, created);
-			createdCount += 1;
+			if (diagnosticsEnabled) createdCount += 1;
 		}
-		this.diagnostics.record('pdf.sync-pages', {
-			pdfPath: filePath,
-			domPages: currentPages.size,
-			before,
-			after: binding.pages.size,
-			created: createdCount,
-			disposed,
-			refreshed,
-		});
+		if (diagnosticsEnabled) {
+			this.diagnostics.record('pdf.sync-pages', {
+				pdfPath: filePath,
+				domPages: currentPages.size,
+				before,
+				after: binding.pages.size,
+				created: createdCount,
+				disposed,
+				refreshed,
+			});
+		}
 	}
 
 	private syncInsertedPages(binding: LeafBinding, filePath: string): void {
