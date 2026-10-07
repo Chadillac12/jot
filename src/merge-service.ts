@@ -14,7 +14,7 @@ type MergeChoice = 'overwrite' | 'copy';
 
 export interface MergeServiceCallbacks {
 	prepareForMerge: (pdfPath: string) => Promise<boolean>;
-	redrawOverlays: () => void;
+	refreshOverlays: (pdfPath: string) => void;
 }
 
 export class MergeService {
@@ -151,7 +151,7 @@ export class MergeService {
 		if (!(await this.sidecar.discard(pdfPath))) return false;
 		this.strokes.clearFor(pdfPath);
 		this.history.dropPath(pdfPath);
-		this.callbacks.redrawOverlays();
+		this.callbacks.refreshOverlays(pdfPath);
 		return true;
 	}
 
