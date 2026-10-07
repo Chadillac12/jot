@@ -412,6 +412,8 @@ describe('OverlayManager zoom recovery', () => {
 			expect(activeLive?.width).toBe(1);
 			expect(activeLive?.height).toBe(1);
 			expect(activeLive?.isConnected).toBe(true);
+			expect(activeLive?.style.width).toBe('');
+			expect(activeLive?.style.height).toBe('');
 
 			// Even when IntersectionObserver still considers the page outside,
 			// Pencil-down on the dormant 1x1 hit target promotes it before the
@@ -442,6 +444,16 @@ describe('OverlayManager zoom recovery', () => {
 			expect(activeLive?.width).toBe(1);
 			expect(activeLive?.height).toBe(1);
 			expect(activeLive?.isConnected).toBe(true);
+
+			// Losing the original live canvas during an active gesture must not
+			// strand pointerActive and keep its heavy buffer alive forever.
+			activeLive?.dispatchEvent(penDown);
+			activeLive?.remove();
+			await flushMutations();
+			await vi.advanceTimersByTimeAsync(150);
+			await vi.advanceTimersByTimeAsync(750);
+			expect(secondPage.querySelector('canvas.jot-overlay')).toBeNull();
+			expect(secondPage.querySelector('canvas.jot-live-overlay')).not.toBeNull();
 		} finally {
 			vi.useRealTimers();
 		}
