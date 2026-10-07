@@ -12,7 +12,7 @@ import type { StrokeStore } from './stroke-store';
 export const PDF_INSERTED_PAGE_CLASS = 'jot-pdf-inserted-page';
 export const PDF_INSERTED_BACKING_STORE_LIMITS = {
 	maxDimension: 3072,
-	maxArea: 4_194_304,
+	maxArea: 4_000_000,
 } as const;
 
 export interface PdfInsertedPageBindingCallbacks {
