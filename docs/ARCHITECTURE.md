@@ -26,6 +26,7 @@ JotPlugin
 ├── Ink input / renderer
 └── Views and surfaces
     ├── PdfPageBinding
+    ├── PdfInsertedPageBinding
     └── JotNoteSurface
 ```
 
@@ -72,6 +73,36 @@ Sidecar writes use a verified transaction:
 
 Save failures remain dirty and are retried. External changes detected while local annotations are
 dirty are preserved as conflict copies before local persistence proceeds.
+
+### Hybrid PDF + Jot pages
+
+Sidecar format v3 extends the existing PDF annotation sidecar without modifying the source PDF.
+It stores an optional ordered `insertedPages` array. Each inserted page has a stable ID, paper
+style, normalized page dimensions, and a `slot` identifying the gap between original PDF pages:
+
+- slot 0 is before original PDF page 1,
+- slot N is after original PDF page N,
+- multiple inserted pages in the same slot retain array order.
+
+Ink for an inserted page uses the same document-key model as PDF annotations:
+`<pdf path>::jot:<stable page id>`. Older v1/v2 sidecars remain readable; only v3 may contain
+inserted-page metadata or inserted-page ink keys.
+
+`PdfInsertedPageStore` owns the in-memory hybrid layout. It follows PDF renames and is persisted
+inside the same transactional sidecar save as the strokes. A blank inserted page therefore remains
+durable even before the first stroke. Serialization only emits numeric source-page ink and ink for
+currently-live inserted page IDs, preventing stale/orphan page ink from making a future sidecar
+unreadable.
+
+The PDF bytes remain untouched during normal editing. `OverlayManager` inserts lightweight Jot
+page roots into gap containers between PDF.js page elements. Each hybrid page is rendered by the
+same `JotNoteSurface` used for standalone notebooks, so paper rendering, Pencil input, backing
+store limits, deterministic stroke rendering, and page virtualization have one implementation.
+Hybrid surfaces use the PDF view as their IntersectionObserver root so offscreen inserted pages
+release their canvas backing stores.
+
+PDF.js page elements remain authoritative for source page numbering; inserted pages never receive
+the PDF.js `.page` class and never renumber source pages.
 
 ## Standalone notebooks
 
@@ -131,6 +162,14 @@ Overwriting a PDF is transactional:
 9. only then remove the annotation sidecar.
 
 If sidecar deletion fails, annotations remain available instead of being silently discarded.
+
+For hybrid documents, export first draws annotations onto the original PDF-page snapshot, then
+inserts Jot pages from the highest slot downward so lower source-page indices cannot shift during
+construction. Pages sharing a slot are inserted in reverse construction order to preserve their
+stored visual order. Each exported Jot page keeps its on-screen aspect ratio, paper guides are
+drawn into the PDF, and its strokes are flattened through the same deterministic stroke exporter.
+The expected output page count includes every inserted page and is verified transactionally before
+the sidecar can be discarded.
 
 ## UI lifetime
 
