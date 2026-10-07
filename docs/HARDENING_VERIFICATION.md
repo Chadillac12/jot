@@ -76,6 +76,9 @@ verification. It is engineering traceability for Jot; it is not FAA certificatio
 | P-16 | Detached PDF overlay canvases release WebKit backing stores before replacement | explicit 1x1 release before remove/drop | delayed-recovery regression in `test/overlay-zoom-recovery.test.ts` |
 | P-17 | PDF.js layer rebuilds cannot cause synchronous overlay recreation storms | 150 ms quiet-period recovery with timer reset on continued churn | mutation-burst regression in `test/overlay-zoom-recovery.test.ts` |
 | P-18 | PDF descendant churn does not cause whole-document source-page rescans | container observer reacts only to source `.page` topology changes | hybrid/ordinary zoom isolation regressions |
+| P-19 | PDF zoom virtualization never removes the Pencil/palette hit target | one connected dormant live canvas per source page with 1x1 backing store | 53-page input-surface regression in `test/overlay-zoom-recovery.test.ts` |
+| P-20 | A dormant PDF page becomes writable before its Pencil event reaches the normal handler | capture-phase input promotion | Pencil-down promotion regression in `test/overlay-zoom-recovery.test.ts` |
+| P-21 | Transient IntersectionObserver false events during zoom do not immediately discard active rendering | 750 ms deactivation grace, cancelled by re-entry or active pointer | zoom-out hysteresis regression in `test/overlay-zoom-recovery.test.ts` |
 
 ## Persistent diagnostics verification
 
