@@ -302,6 +302,9 @@ export class PdfPageBinding {
 	}
 
 	private detachLiveInput(canvas: HTMLCanvasElement): void {
+		// PDF.js can remove the hit target mid-stroke without dispatching pointerup.
+		this.pointerActive = false;
+		if (!this.nearViewport) this.scheduleDeactivate();
 		canvas.removeEventListener('pointerdown', this.handleInputPointerDown, true);
 		canvas.removeEventListener('pointerup', this.handleInputPointerEnd, true);
 		canvas.removeEventListener('pointercancel', this.handleInputPointerEnd, true);
@@ -433,6 +436,9 @@ export class PdfPageBinding {
 		}
 		live.width = 1;
 		live.height = 1;
+		// Inline pixel dimensions override the dormant 100% CSS rule after zoom.
+		live.style.removeProperty('width');
+		live.style.removeProperty('height');
 		live.classList.add(PDF_DORMANT_INPUT_CLASS);
 	}
 
