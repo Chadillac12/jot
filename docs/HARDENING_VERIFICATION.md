@@ -54,6 +54,23 @@ verification. It is engineering traceability for Jot; it is not FAA certificatio
 | N-11 | Conflicted local ink is durable across app termination | sibling recovery notebook | conflict tests + release/manual iPad verification |
 | N-12 | Notebook page geometry cannot collapse on iPad WebKit | width-derived in-flow page spacer; no aspect-ratio dependency | `test/jot-note-surface.test.ts` + manual iPad verification |
 
+## Hybrid PDF + Jot page verification
+
+| ID | Requirement | Implementation | Verification |
+| --- | --- | --- | --- |
+| P-01 | Source PDF remains unchanged while handwritten pages are added | sidecar v3 layout + `PdfInsertedPageStore` | sidecar/store tests + manual iPad verification |
+| P-02 | Existing v1/v2 PDF annotation sidecars remain readable | `parseJotText`, `isSupportedVersion` | `test/jot-file.test.ts`, `test/sidecar-compatibility.test.ts` |
+| P-03 | Blank inserted pages persist before ink exists | sidecar v3 `insertedPages` | `test/sidecar-store.test.ts`, `test/jot-file.test.ts` |
+| P-04 | Inserted-page ink uses stable document keys | `insertedPageKey` / `jot:<id>` | `test/jot-file.test.ts`, `test/stroke-store.test.ts` |
+| P-05 | Hybrid pages render between PDF.js pages without impersonating source pages | `OverlayManager` gap containers + `PdfInsertedPageBinding` | `test/overlay-zoom-recovery.test.ts` |
+| P-06 | Hybrid pages reuse notebook Pencil/paper renderer and offscreen virtualization | `PdfInsertedPageBinding` + `JotNoteSurface` | overlay/surface tests + manual iPad verification |
+| P-07 | PDF rename rekeys both layout and hybrid ink bindings | inserted-page store rekey + binding recreation | `test/pdf-inserted-page-store.test.ts`, `test/overlay-zoom-recovery.test.ts` |
+| P-08 | Removed/stale inserted-page ink cannot create an invalid sidecar | payload whitelist against live inserted IDs | `test/jot-file.test.ts` |
+| P-09 | Paper-style changes persist transactionally | inserted-page store + SidecarStore dirty/save path | sidecar tests + manual iPad verification |
+| P-10 | Flatten/export preserves inserted page order, aspect ratio, paper and ink | `MergeService`, `drawPaperOnPdfPage` | PDF transaction tests + release/manual export verification |
+| P-11 | Overwrite removes sidecar/layout only after output PDF verifies | existing `PdfTransactionWriter` + SidecarStore discard | `test/pdf-transaction.test.ts` + manual overwrite verification |
+| P-12 | Paper export work is bounded for pathological persisted dimensions | bounded guide density | build/test gate + code review |
+
 ## Required release gate
 
 A candidate is releasable only when the exact versioned commit passes:
@@ -63,4 +80,3 @@ A candidate is releasable only when the exact versioned commit passes:
 - ESLint,
 - Node 20, 22, and 24 CI matrix,
 - release workflow rebuild from the exact release SHA.
-- BRAT test builds increment the base patch version so BRAT's semver-coercion update check can distinguish consecutive prereleases.
