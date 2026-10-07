@@ -24,12 +24,14 @@ export const PDF_OVERLAY_BACKING_STORE_LIMITS: CanvasBackingStoreLimits = {
 };
 
 const PDF_OVERLAY_RECOVERY_DELAY_MS = 150;
+const PDF_OVERLAY_DEACTIVATION_GRACE_MS = 750;
 
 export interface PdfPageBindingOptions {
 	observerRoot?: Element;
 	rootMargin?: string;
 	backingStoreLimits?: CanvasBackingStoreLimits;
 	recoveryDelayMs?: number;
+	deactivationGraceMs?: number;
 }
 
 export class PdfPageBinding {
@@ -41,8 +43,22 @@ export class PdfPageBinding {
 	private intersectionObserver: IntersectionObserver | null = null;
 	private resizeFrame: number | null = null;
 	private recoveryTimer: number | null = null;
+	private deactivationTimer: number | null = null;
 	private active = false;
+	private nearViewport = false;
+	private pointerActive = false;
 	private disposed = false;
+	private readonly handleInputPointerDown = (event: PointerEvent) => {
+		if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
+		this.pointerActive = true;
+		this.cancelDeactivate();
+		this.activate('input');
+	};
+	private readonly handleInputPointerEnd = (event: PointerEvent) => {
+		if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
+		this.pointerActive = false;
+		if (!this.nearViewport) this.scheduleDeactivate();
+	};
 
 	constructor(
 		private page: HTMLElement,
@@ -64,6 +80,9 @@ export class PdfPageBinding {
 			pageNumber: this.page.getAttribute('data-page-number'),
 		});
 		this.page.classList.add(PDF_PAGE_ANCHOR_CLASS);
+		this.ensureLiveInputCanvas();
+		this.makeLiveInputDormant();
+		this.disablePdfInteractionLayers();
 
 		this.mutationObserver = new MutationObserver((records) => {
 			if (this.disposed) return;
@@ -83,8 +102,13 @@ export class PdfPageBinding {
 				});
 			}
 			this.disablePdfInteractionLayers();
-			if (!this.active) return;
-			if (!this.trackedCanvasesAttached()) {
+			const liveMissing = !this.liveInputAttached();
+			const activePersistentMissing =
+				this.active &&
+				(this.persistent === null ||
+					!this.persistent.isConnected ||
+					!this.page.contains(this.persistent));
+			if (liveMissing || activePersistentMissing) {
 				this.releaseDetachedCanvases();
 				this.scheduleRecovery();
 			}
@@ -115,9 +139,12 @@ export class PdfPageBinding {
 					for (const entry of entries) {
 						if (entry.target !== this.page) continue;
 						if (entry.isIntersecting || entry.intersectionRatio > 0) {
-							this.activate();
+							this.nearViewport = true;
+							this.cancelDeactivate();
+							this.activate('viewport');
 						} else {
-							this.deactivate();
+							this.nearViewport = false;
+							this.scheduleDeactivate();
 						}
 					}
 				},
@@ -130,7 +157,8 @@ export class PdfPageBinding {
 			this.intersectionObserver.observe(this.page);
 		} else {
 			// Compatibility fallback for older/limited environments.
-			this.activate();
+			this.nearViewport = true;
+			this.activate('fallback');
 		}
 	}
 
@@ -142,10 +170,8 @@ export class PdfPageBinding {
 			previousKey,
 			key,
 		});
-		if (this.active) {
-			this.replaceCanvases();
-			this.resizeAndRedraw();
-		}
+		this.replaceCanvases();
+		if (this.active) this.resizeAndRedraw();
 	}
 
 	redraw(): void {
@@ -204,8 +230,11 @@ export class PdfPageBinding {
 		this.intersectionObserver = null;
 		this.cancelResize();
 		this.cancelRecovery();
-		this.releaseCanvases();
+		this.cancelDeactivate();
+		this.releaseAllCanvases();
 		this.active = false;
+		this.nearViewport = false;
+		this.pointerActive = false;
 		this.page.classList.remove(PDF_PAGE_ANCHOR_CLASS);
 		this.page.querySelector<HTMLElement>('.textLayer')?.classList.remove(PDF_PASSTHROUGH_CLASS);
 		this.page.querySelector<HTMLElement>('.annotationLayer')?.classList.remove(PDF_PASSTHROUGH_CLASS);
@@ -213,6 +242,7 @@ export class PdfPageBinding {
 
 	private ensureCanvases(): void {
 		if (this.disposed || !this.active) return;
+		this.ensureLiveInputCanvas();
 
 		const persistent = this.page.querySelector<HTMLCanvasElement>(`canvas.${PDF_OVERLAY_CLASS}`);
 		if (this.persistent && this.persistent !== persistent) {
@@ -232,38 +262,61 @@ export class PdfPageBinding {
 		} else {
 			this.persistent = persistent;
 		}
+	}
 
+	private ensureLiveInputCanvas(): void {
+		if (this.disposed) return;
 		const live = this.page.querySelector<HTMLCanvasElement>(`canvas.${PDF_LIVE_OVERLAY_CLASS}`);
 		if (this.live && this.live !== live) {
-			this.liveDisposer?.();
-			this.liveDisposer = null;
+			this.detachLiveInput(this.live);
 			this.releaseCanvas(this.live);
 			this.live = null;
 		}
 		if (!live || live.getAttribute(INK_KEY_ATTR) !== this.keyValue) {
 			const replaced = live !== null;
-			this.liveDisposer?.();
-			this.liveDisposer = null;
 			if (live) this.releaseCanvas(live);
 			this.live = this.createCanvas(PDF_LIVE_OVERLAY_CLASS);
 			this.page.appendChild(this.live);
-			this.liveDisposer = this.wireLiveCanvas(this.live) ?? null;
+			this.attachLiveInput(this.live);
 			this.diagnostics.record('pdf.overlay-canvas-created', {
 				key: this.keyValue,
-				layer: 'live',
+				layer: 'live-input',
 				replaced,
 			});
-		} else if (this.live !== live) {
-			this.liveDisposer?.();
+			return;
+		}
+		if (this.live !== live) {
 			this.live = live;
-			this.liveDisposer = this.wireLiveCanvas(this.live) ?? null;
+			this.attachLiveInput(live);
 			this.diagnostics.record('pdf.live-canvas-rewired', { key: this.keyValue });
 		}
 	}
 
+	private attachLiveInput(canvas: HTMLCanvasElement): void {
+		canvas.addEventListener('pointerdown', this.handleInputPointerDown, true);
+		canvas.addEventListener('pointerup', this.handleInputPointerEnd, true);
+		canvas.addEventListener('pointercancel', this.handleInputPointerEnd, true);
+		canvas.addEventListener('lostpointercapture', this.handleInputPointerEnd, true);
+		this.liveDisposer = this.wireLiveCanvas(canvas) ?? null;
+	}
+
+	private detachLiveInput(canvas: HTMLCanvasElement): void {
+		canvas.removeEventListener('pointerdown', this.handleInputPointerDown, true);
+		canvas.removeEventListener('pointerup', this.handleInputPointerEnd, true);
+		canvas.removeEventListener('pointercancel', this.handleInputPointerEnd, true);
+		canvas.removeEventListener('lostpointercapture', this.handleInputPointerEnd, true);
+		this.liveDisposer?.();
+		this.liveDisposer = null;
+	}
+
 	private replaceCanvases(): void {
-		this.releaseCanvases();
-		this.ensureCanvases();
+		this.releaseAllCanvases();
+		this.ensureLiveInputCanvas();
+		if (this.active) {
+			this.ensureCanvases();
+		} else {
+			this.makeLiveInputDormant();
+		}
 	}
 
 	private createCanvas(className: string): HTMLCanvasElement {
@@ -273,32 +326,71 @@ export class PdfPageBinding {
 		return canvas;
 	}
 
-	private activate(): void {
-		if (this.disposed || this.active) return;
-		this.active = true;
-		this.diagnostics.record('pdf.page-activate', { key: this.keyValue });
+	private activate(reason: 'viewport' | 'input' | 'fallback'): void {
+		if (this.disposed) return;
+		this.cancelDeactivate();
+		if (!this.active) {
+			this.active = true;
+			this.diagnostics.record('pdf.page-activate', { key: this.keyValue, reason });
+		}
 		this.ensureCanvases();
 		this.disablePdfInteractionLayers();
 		this.resizeAndRedraw();
 	}
 
-	private deactivate(): void {
+	private scheduleDeactivate(): void {
+		if (this.disposed || !this.active || this.nearViewport || this.pointerActive) return;
+		const win = this.page.ownerDocument.defaultView;
+		if (!win) {
+			this.deactivateNow();
+			return;
+		}
+		if (this.deactivationTimer !== null) win.clearTimeout(this.deactivationTimer);
+		const delay = this.options.deactivationGraceMs ?? PDF_OVERLAY_DEACTIVATION_GRACE_MS;
+		this.diagnostics.record('pdf.page-deactivate-scheduled', {
+			key: this.keyValue,
+			delayMs: delay,
+		});
+		this.deactivationTimer = win.setTimeout(() => {
+			this.deactivationTimer = null;
+			if (this.disposed || this.nearViewport || this.pointerActive) return;
+			this.deactivateNow();
+		}, delay);
+	}
+
+	private cancelDeactivate(): void {
+		if (this.deactivationTimer === null) return;
+		this.page.ownerDocument.defaultView?.clearTimeout(this.deactivationTimer);
+		this.deactivationTimer = null;
+	}
+
+	private deactivateNow(): void {
 		if (!this.active) return;
 		this.active = false;
 		this.diagnostics.record('pdf.page-deactivate', { key: this.keyValue });
 		this.cancelResize();
 		this.cancelRecovery();
-		this.releaseCanvases();
+		if (this.persistent) {
+			this.releaseCanvas(this.persistent);
+			this.persistent = null;
+		}
+		this.makeLiveInputDormant();
+	}
+
+	private liveInputAttached(): boolean {
+		return (
+			this.live !== null &&
+			this.live.isConnected &&
+			this.page.contains(this.live)
+		);
 	}
 
 	private trackedCanvasesAttached(): boolean {
 		return (
 			this.persistent !== null &&
-			this.live !== null &&
+			this.liveInputAttached() &&
 			this.persistent.isConnected &&
-			this.live.isConnected &&
-			this.page.contains(this.persistent) &&
-			this.page.contains(this.live)
+			this.page.contains(this.persistent)
 		);
 	}
 
@@ -311,25 +403,40 @@ export class PdfPageBinding {
 			this.persistent = null;
 		}
 		if (this.live && (!this.live.isConnected || !this.page.contains(this.live))) {
-			this.liveDisposer?.();
-			this.liveDisposer = null;
+			this.detachLiveInput(this.live);
 			this.releaseCanvas(this.live);
 			this.live = null;
 		}
 	}
 
-	private releaseCanvases(): void {
-		this.liveDisposer?.();
-		this.liveDisposer = null;
+	private releaseAllCanvases(): void {
 		if (this.persistent) this.releaseCanvas(this.persistent);
-		if (this.live) this.releaseCanvas(this.live);
+		if (this.live) {
+			this.detachLiveInput(this.live);
+			this.releaseCanvas(this.live);
+		}
 		this.persistent = null;
 		this.live = null;
 	}
 
+	private makeLiveInputDormant(): void {
+		const live = this.live;
+		if (!live) return;
+		if (this.diagnostics.isEnabled()) {
+			this.diagnostics.record('pdf.live-input-dormant', {
+				key: this.keyValue,
+				width: live.width,
+				height: live.height,
+				area: live.width * live.height,
+			});
+		}
+		live.width = 1;
+		live.height = 1;
+		live.style.width = '100%';
+		live.style.height = '100%';
+	}
+
 	private releaseCanvas(canvas: HTMLCanvasElement): void {
-		// Setting dimensions to 1x1 releases the large WebKit backing store
-		// immediately instead of waiting for GC on a detached canvas.
 		if (this.diagnostics.isEnabled()) {
 			this.diagnostics.record('pdf.overlay-canvas-released', {
 				key: this.keyValue,
@@ -346,11 +453,16 @@ export class PdfPageBinding {
 	}
 
 	private scheduleRecovery(): void {
-		if (this.disposed || !this.active) return;
+		if (this.disposed) return;
 		const win = this.page.ownerDocument.defaultView;
 		if (!win) {
-			this.ensureCanvases();
-			this.resizeAndRedraw();
+			this.ensureLiveInputCanvas();
+			if (this.active) {
+				this.ensureCanvases();
+				this.resizeAndRedraw();
+			} else {
+				this.makeLiveInputDormant();
+			}
 			return;
 		}
 		if (this.recoveryTimer !== null) win.clearTimeout(this.recoveryTimer);
@@ -358,14 +470,23 @@ export class PdfPageBinding {
 		this.diagnostics.record('pdf.overlay-recovery-scheduled', {
 			key: this.keyValue,
 			delayMs: delay,
+			active: this.active,
 		});
 		this.recoveryTimer = win.setTimeout(() => {
 			this.recoveryTimer = null;
-			if (this.disposed || !this.active || !this.page.isConnected) return;
-			this.diagnostics.record('pdf.overlay-recovery-fired', { key: this.keyValue });
-			this.ensureCanvases();
+			if (this.disposed || !this.page.isConnected) return;
+			this.diagnostics.record('pdf.overlay-recovery-fired', {
+				key: this.keyValue,
+				active: this.active,
+			});
+			this.ensureLiveInputCanvas();
+			if (this.active) {
+				this.ensureCanvases();
+				this.resizeAndRedraw();
+			} else {
+				this.makeLiveInputDormant();
+			}
 			this.disablePdfInteractionLayers();
-			this.resizeAndRedraw();
 		}, delay);
 	}
 
