@@ -11,8 +11,8 @@ import type { StrokeStore } from './stroke-store';
 
 export const PDF_INSERTED_PAGE_CLASS = 'jot-pdf-inserted-page';
 export const PDF_INSERTED_BACKING_STORE_LIMITS = {
-	maxDimension: 3072,
-	maxArea: 4_000_000,
+	maxDimension: 2048,
+	maxArea: 2_500_000,
 } as const;
 
 export interface PdfInsertedPageBindingCallbacks {
@@ -83,6 +83,7 @@ export class PdfInsertedPageBinding {
 			eagerMountFirstPage: false,
 			rootMargin: '50% 0px 50% 0px',
 			backingStoreLimits: PDF_INSERTED_BACKING_STORE_LIMITS,
+			fixedLogicalBackingStore: true,
 		});
 		this.surface.render(this.asNotebook(), pdfPath);
 	}
