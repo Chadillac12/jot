@@ -52,6 +52,7 @@ interface NotebookPageMount {
 	onPointerEnd: (event: PointerEvent) => void;
 	painted: boolean;
 	disposeInput: (() => void) | null;
+	inputWired: boolean;
 	errorEl: HTMLElement | null;
 }
 
@@ -254,6 +255,7 @@ export class JotNoteSurface implements InkSurfaceController {
 			},
 			painted: false,
 			disposeInput: null,
+			inputWired: false,
 			errorEl: null,
 		};
 		this.pageMounts.set(sheet, mount);
@@ -340,7 +342,10 @@ export class JotNoteSurface implements InkSurfaceController {
 	}
 
 	private ensureInputTarget(mount: NotebookPageMount): void {
-		if (mount.live) return;
+		if (mount.live) {
+			this.wireInputIfPossible(mount);
+			return;
+		}
 		const canvas = this.makeCanvas(mount.sheet.ownerDocument, LIVE_CLASS, mount.key);
 		mount.live = canvas;
 		mount.sheet.appendChild(canvas);
@@ -348,10 +353,21 @@ export class JotNoteSurface implements InkSurfaceController {
 		for (const event of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
 			canvas.addEventListener(event, mount.onPointerEnd, true);
 		}
-		const ctx = canvas.getContext('2d');
-		if (ctx) mount.disposeInput = this.wireOverlay(canvas) ?? null;
-		else this.showCanvasUnavailable(mount);
+		this.wireInputIfPossible(mount);
 		this.makeInputDormant(mount);
+	}
+
+	private wireInputIfPossible(mount: NotebookPageMount): void {
+		if (!mount.live || mount.inputWired) return;
+		if (!mount.live.getContext('2d')) {
+			this.showCanvasUnavailable(mount);
+			this.scheduleContextRetry(mount);
+			return;
+		}
+		mount.disposeInput = this.wireOverlay(mount.live) ?? null;
+		mount.inputWired = true;
+		mount.errorEl?.remove();
+		mount.errorEl = null;
 	}
 
 	private makeInputDormant(mount: NotebookPageMount): void {
@@ -422,6 +438,7 @@ export class JotNoteSurface implements InkSurfaceController {
 			}
 			mount.disposeInput?.();
 			mount.disposeInput = null;
+			mount.inputWired = false;
 			if (mount.live) this.releaseCanvas(mount.live);
 			mount.live = null;
 			mount.errorEl?.remove();
