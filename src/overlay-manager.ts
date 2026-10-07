@@ -235,6 +235,12 @@ export class OverlayManager {
 
 		for (const page of layout) {
 			let pageBinding = binding.insertedPages.get(page.id);
+			const expectedKey = `${filePath}::jot:${page.id}`;
+			if (pageBinding && pageBinding.key !== expectedKey) {
+				pageBinding.dispose();
+				binding.insertedPages.delete(page.id);
+				pageBinding = undefined;
+			}
 			if (!pageBinding) {
 				pageBinding = new PdfInsertedPageBinding(
 					filePath,
