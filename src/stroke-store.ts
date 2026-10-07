@@ -1,6 +1,8 @@
 import {
 	JotFileFormat,
+	type PdfInsertedPage,
 	buildJotPayload,
+	documentPageKey,
 	dropStrokesForPdf,
 	hasStrokesForPdf,
 	migrateStroke,
@@ -45,15 +47,14 @@ export class StrokeStore {
 		dropStrokesForPdf(pdfPath, this.strokesByKey);
 	}
 
-	buildPayload(pdfPath: string): JotFileFormat | null {
-		return buildJotPayload(pdfPath, this.strokesByKey);
+	buildPayload(pdfPath: string, insertedPages: PdfInsertedPage[] = []): JotFileFormat | null {
+		return buildJotPayload(pdfPath, this.strokesByKey, insertedPages);
 	}
 
 	populateFromPayload(pdfPath: string, pages: Record<string, Stroke[]>): void {
-		for (const [pageNumStr, strokes] of Object.entries(pages)) {
-			const pageNumber = parseInt(pageNumStr, 10);
-			if (Number.isNaN(pageNumber)) continue;
-			this.strokesByKey.set(pageKey(pdfPath, pageNumber), strokes.map(migrateStroke));
+		for (const [pageId, strokes] of Object.entries(pages)) {
+			if (!/^\d+$/.test(pageId) && !/^jot:[^:]{1,128}$/.test(pageId)) continue;
+			this.strokesByKey.set(documentPageKey(pdfPath, pageId), strokes.map(migrateStroke));
 		}
 	}
 
