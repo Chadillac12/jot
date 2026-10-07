@@ -167,6 +167,18 @@ describe('SidecarStore lifecycle persistence', () => {
 	beforeEach(() => vi.useFakeTimers());
 	afterEach(() => vi.useRealTimers());
 
+	it('ignores repeated notifications for an own save but not changed external bytes', async () => {
+		const h = makeStore();
+		h.strokes.setForKey('a.pdf::1', [stroke('#abcdef')]);
+		h.store.scheduleSave('a.pdf');
+		await vi.advanceTimersByTimeAsync(750);
+		const path = 'a.pdf.jot.json';
+		expect(await h.store.isOwnRecentSave(path)).toBe(true);
+		expect(await h.store.isOwnRecentSave(path)).toBe(true);
+		h.fs.files[path] = validPayload;
+		expect(await h.store.isOwnRecentSave(path)).toBe(false);
+	});
+
 	it('persists an inserted blank Jot page even before ink is added', async () => {
 		const h = makeStore();
 		h.insertedPages.add('a.pdf', 2, 'ruled');
