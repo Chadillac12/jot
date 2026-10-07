@@ -201,8 +201,25 @@ the sidecar can be discarded.
 
 ## UI lifetime
 
-Each PDF page is owned by one disposable `PdfPageBinding`. It owns its canvases, mutation
-observer, resize observer, pending animation frame, and pointer-handler disposer.
+Each source PDF page is owned by one disposable `PdfPageBinding`, but the binding is
+lightweight when its page is outside the PDF viewport. An `IntersectionObserver` rooted at the PDF
+view mounts persistent/live annotation canvases only for pages in or near the viewport. Leaving the
+viewport immediately shrinks each canvas backing store to 1x1 before removing it so WebKit does not
+retain a large detached backing store until garbage collection.
+
+PDF overlay backing stores use a conservative bounded area. During a PDF.js page-layer rebuild,
+Jot never recreates a removed annotation canvas synchronously from the mutation callback. Detached
+tracked canvases are explicitly released, then recovery is delayed until the page's direct-child
+mutation stream has been quiet for 150 ms. Additional mutations restart that quiet period. This
+prevents a PDF.js remove/rebuild cycle from becoming a Jot remove/recreate feedback loop.
+
+The document-level PDF mutation observer treats descendant churn inside an existing `.page` as a
+page-local concern. It rescans the full document only when source `.page` elements are actually
+added or removed. This prevents a zoom gesture from repeatedly walking every PDF page simply
+because PDF.js is rebuilding canvas/text/annotation children.
+
+Each active `PdfPageBinding` owns its mounted canvases, direct-child mutation observer, resize
+observer, viewport observer, pending resize/recovery work, and pointer-handler disposer.
 
 Notebook pages keep only lightweight page/paper DOM permanently. `JotNoteSurface` uses an
 `IntersectionObserver` rooted at the notebook scroll viewport to mount persistent/live canvases,
