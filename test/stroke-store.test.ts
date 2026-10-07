@@ -104,7 +104,13 @@ describe('StrokeStore.populateFromPayload', () => {
 		expect(store.forKey('a.pdf::1')[0]!.tool).toBe('pen');
 	});
 
-	it('skips pages whose number cannot be parsed', () => {
+	it('loads inserted-page stroke keys without treating them as PDF page numbers', () => {
+		const store = new StrokeStore();
+		store.populateFromPayload('a.pdf', { 'jot:inserted-a': [pen('#jot')] });
+		expect(store.forKey('a.pdf::jot:inserted-a')[0]?.color).toBe('#jot');
+	});
+
+		it('skips pages whose number cannot be parsed', () => {
 		const store = new StrokeStore();
 		store.populateFromPayload('a.pdf', { 'not-a-number': [pen()] });
 		expect(store.hasFor('a.pdf')).toBe(false);
