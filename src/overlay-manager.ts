@@ -21,6 +21,7 @@ interface LeafBinding {
 	insertedPages: Map<string, PdfInsertedPageBinding>;
 	gaps: Map<number, HTMLElement>;
 	container: HTMLElement;
+	insertedSyncTimer: number | null;
 }
 
 export interface OverlayManagerCallbacks {
@@ -54,11 +55,14 @@ export class OverlayManager {
 		let binding = this.leaves.get(leaf);
 		if (!binding) {
 			let created!: LeafBinding;
-			const observer = new MutationObserver((records) => {
-				if (!this.mutationsNeedPdfSync(records)) return;
+			const observer = new MutationObserver(() => {
 				const currentPath = this.filePathForLeaf(leaf);
 				if (!currentPath) return;
-				this.syncLeaf(created, currentPath);
+				// Keep ordinary PDF.js rebuild/zoom recovery on the same narrow
+				// path used by the pre-hybrid implementation. Hybrid layout work
+				// is intentionally deferred until the mutation burst settles.
+				this.syncPdfPages(created, currentPath);
+				this.scheduleInsertedPageSync(leaf, created, currentPath);
 			});
 			created = {
 				containerObserver: observer,
@@ -66,18 +70,22 @@ export class OverlayManager {
 				insertedPages: new Map(),
 				gaps: new Map(),
 				container,
+				insertedSyncTimer: null,
 			};
 			observer.observe(container, { childList: true, subtree: true });
 			binding = created;
 			this.leaves.set(leaf, binding);
 		}
-		this.syncLeaf(binding, filePath);
+		this.syncPdfPages(binding, filePath);
+		this.syncInsertedPages(binding, filePath);
 	}
 
 	refreshPdf(pdfPath: string): void {
 		for (const [leaf, binding] of this.leaves) {
 			if (this.filePathForLeaf(leaf) !== pdfPath) continue;
-			this.syncLeaf(binding, pdfPath);
+			this.cancelInsertedPageSync(binding);
+			this.syncPdfPages(binding, pdfPath);
+			this.syncInsertedPages(binding, pdfPath);
 		}
 	}
 
@@ -184,9 +192,29 @@ export class OverlayManager {
 		}
 	}
 
-	private syncLeaf(binding: LeafBinding, filePath: string): void {
-		this.syncPdfPages(binding, filePath);
-		this.syncInsertedPages(binding, filePath);
+	private scheduleInsertedPageSync(
+		leaf: WorkspaceLeaf,
+		binding: LeafBinding,
+		pdfPath: string,
+	): void {
+		if (!this.insertedPageStore.hasFor(pdfPath)) return;
+		const win = binding.container.ownerDocument.defaultView;
+		if (!win) return;
+		if (binding.insertedSyncTimer !== null) {
+			win.clearTimeout(binding.insertedSyncTimer);
+		}
+		binding.insertedSyncTimer = win.setTimeout(() => {
+			binding.insertedSyncTimer = null;
+			const currentPath = this.filePathForLeaf(leaf);
+			if (!currentPath || !this.insertedPageStore.hasFor(currentPath)) return;
+			this.syncInsertedPages(binding, currentPath);
+		}, 300);
+	}
+
+	private cancelInsertedPageSync(binding: LeafBinding): void {
+		if (binding.insertedSyncTimer === null) return;
+		binding.container.ownerDocument.defaultView?.clearTimeout(binding.insertedSyncTimer);
+		binding.insertedSyncTimer = null;
 	}
 
 	private syncPdfPages(binding: LeafBinding, filePath: string): void {
@@ -323,22 +351,6 @@ export class OverlayManager {
 		}
 	}
 
-	private mutationsNeedPdfSync(records: MutationRecord[]): boolean {
-		for (const record of records) {
-			const target = record.target;
-			if (target.nodeType !== 1) return true;
-			const element = target as Element;
-			if (
-				element.closest('.jot-pdf-inserted-page') ||
-				element.closest('.jot-pdf-inserted-gap')
-			) {
-				continue;
-			}
-			return true;
-		}
-		return false;
-	}
-
 	private pdfPageElements(container: HTMLElement): HTMLElement[] {
 		return Array.from(container.querySelectorAll<HTMLElement>('.page')).filter(
 			(page) => !page.closest(`.${PDF_INSERTED_PAGE_CLASS}`),
@@ -366,6 +378,7 @@ export class OverlayManager {
 
 	private disposeLeaf(leaf: WorkspaceLeaf, binding: LeafBinding): void {
 		binding.containerObserver.disconnect();
+		this.cancelInsertedPageSync(binding);
 		for (const page of binding.pages.values()) page.dispose();
 		for (const page of binding.insertedPages.values()) page.dispose();
 		for (const gap of binding.gaps.values()) gap.remove();
