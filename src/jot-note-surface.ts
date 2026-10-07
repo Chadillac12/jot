@@ -24,11 +24,14 @@ export interface JotNoteSurfaceOptions {
 	eagerMountFirstPage?: boolean;
 	rootMargin?: string;
 	backingStoreLimits?: CanvasBackingStoreLimits;
+	fixedLogicalBackingStore?: boolean;
 }
 
 interface NotebookPageMount {
 	sheet: HTMLElement;
 	key: string;
+	sourceWidth: number;
+	sourceHeight: number;
 	persistent: HTMLCanvasElement | null;
 	live: HTMLCanvasElement | null;
 	resizeObserver: ResizeObserver | null;
@@ -192,6 +195,8 @@ export class JotNoteSurface implements InkSurfaceController {
 		const mount: NotebookPageMount = {
 			sheet,
 			key: documentPageKey(documentPath, page.id),
+			sourceWidth: page.width,
+			sourceHeight: page.height,
 			persistent: null,
 			live: null,
 			resizeObserver: null,
@@ -239,8 +244,8 @@ export class JotNoteSurface implements InkSurfaceController {
 
 		const applyResize = () => {
 			if (!mount.persistent || !mount.live) return;
-			const persistentChanged = this.sizeCanvas(mount.persistent, sheet);
-			const liveChanged = this.sizeCanvas(mount.live, sheet);
+			const persistentChanged = this.sizeCanvas(mount.persistent, sheet, mount);
+			const liveChanged = this.sizeCanvas(mount.live, sheet, mount);
 			if (!persistentChanged && !liveChanged && mount.painted) return;
 			mount.painted = true;
 			this.redrawPage(mount.persistent);
@@ -264,10 +269,12 @@ export class JotNoteSurface implements InkSurfaceController {
 			if (!completedSynchronously) mount.resizeFrame = frame;
 		};
 
-		const ResizeObserverCtor = doc.defaultView?.ResizeObserver;
-		if (ResizeObserverCtor) {
-			mount.resizeObserver = new ResizeObserverCtor(scheduleResize);
-			mount.resizeObserver.observe(sheet);
+		if (!this.options.fixedLogicalBackingStore) {
+			const ResizeObserverCtor = doc.defaultView?.ResizeObserver;
+			if (ResizeObserverCtor) {
+				mount.resizeObserver = new ResizeObserverCtor(scheduleResize);
+				mount.resizeObserver.observe(sheet);
+			}
 		}
 		scheduleResize();
 	}
@@ -314,11 +321,31 @@ export class JotNoteSurface implements InkSurfaceController {
 		return canvas;
 	}
 
-	private sizeCanvas(canvas: HTMLCanvasElement, sheet: HTMLElement): boolean {
-		const rect = sheet.getBoundingClientRect();
-		if (rect.width <= 0 || rect.height <= 0) return false;
+	private sizeCanvas(
+		canvas: HTMLCanvasElement,
+		sheet: HTMLElement,
+		mount: NotebookPageMount,
+	): boolean {
 		const win = sheet.ownerDocument.defaultView ?? window;
 		const requestedDpr = devicePixelRatioFor(win);
+
+		if (this.options.fixedLogicalBackingStore) {
+			const effectiveDpr = safeBackingStoreDpr(
+				mount.sourceWidth,
+				mount.sourceHeight,
+				requestedDpr,
+				this.options.backingStoreLimits,
+			);
+			return applyBackingStoreSize(
+				canvas,
+				mount.sourceWidth,
+				mount.sourceHeight,
+				effectiveDpr,
+			);
+		}
+
+		const rect = sheet.getBoundingClientRect();
+		if (rect.width <= 0 || rect.height <= 0) return false;
 		const effectiveDpr = safeBackingStoreDpr(
 			rect.width,
 			rect.height,
