@@ -10,6 +10,10 @@ import type { Stroke } from './stroke-math';
 import type { StrokeStore } from './stroke-store';
 
 export const PDF_INSERTED_PAGE_CLASS = 'jot-pdf-inserted-page';
+export const PDF_INSERTED_BACKING_STORE_LIMITS = {
+	maxDimension: 3072,
+	maxArea: 4_194_304,
+} as const;
 
 export interface PdfInsertedPageBindingCallbacks {
 	onPaperChange: (paper: PdfInsertedPage['paper']) => void;
@@ -74,7 +78,12 @@ export class PdfInsertedPageBinding {
 		this.host.className = 'jot-pdf-inserted-host';
 		this.root.appendChild(this.host);
 
-		this.surface = new JotNoteSurface(this.host, strokes, wireOverlay, observerRoot);
+		this.surface = new JotNoteSurface(this.host, strokes, wireOverlay, {
+			observerRoot,
+			eagerMountFirstPage: false,
+			rootMargin: '50% 0px 50% 0px',
+			backingStoreLimits: PDF_INSERTED_BACKING_STORE_LIMITS,
+		});
 		this.surface.render(this.asNotebook(), pdfPath);
 	}
 
@@ -95,10 +104,7 @@ export class PdfInsertedPageBinding {
 	}
 
 	setReferencePage(referencePage: HTMLElement | null): void {
-		if (referencePage === this.referencePage) {
-			this.syncWidth();
-			return;
-		}
+		if (referencePage === this.referencePage) return;
 		this.referenceObserver?.disconnect();
 		this.referenceObserver = null;
 		this.referencePage = referencePage;
