@@ -73,6 +73,19 @@ verification. It is engineering traceability for Jot; it is not FAA certificatio
 | P-13 | PDF.js zoom/rebuild mutations never run hybrid layout reconciliation synchronously | source-page sync in mutation callback; 300 ms debounced hybrid repair only when hybrid pages exist | `test/overlay-zoom-recovery.test.ts` |
 | P-14 | Hybrid handwritten pages never reallocate canvas backing stores during PDF zoom | fixed logical backing store + CSS-only scaling + no per-page ResizeObserver | `test/jot-note-surface.test.ts` |
 
+## Persistent diagnostics verification
+
+| ID | Requirement | Implementation | Verification |
+| --- | --- | --- | --- |
+| D-01 | Recording enablement survives an unclean process restart | persisted diagnostic state + auto-resume | `test/persistent-diagnostics.test.ts` |
+| D-02 | A killed session remains identifiable after restart | clean/unclean session sentinel + `lastCrashSession` | `test/persistent-diagnostics.test.ts` |
+| D-03 | Trace data survives without rewriting a growing file | append-only JSONL batched writes | recorder tests + code review |
+| D-04 | Export after a crash selects the preserved crashed session | crash-priority export selection | `test/persistent-diagnostics.test.ts` |
+| D-05 | Clearing traces does not silently disable active recording | clear-and-resume session rotation | `test/persistent-diagnostics.test.ts` |
+| D-06 | PDF traces capture native and Jot canvas dimensions | `PdfPageBinding` diagnostics | zoom tests + manual iPad reproduction |
+| D-07 | Disabled diagnostics do not enumerate hybrid layout or perform diagnostic-only PDF DOM scans | `DiagnosticSink.isEnabled` hot-path gates | `test/overlay-zoom-recovery.test.ts` + code review |
+| D-08 | Traces remain local unless explicitly exported | plugin diagnostic storage + explicit copy to vault folder | recorder tests + manual verification |
+
 ## Required release gate
 
 A candidate is releasable only when the exact versioned commit passes:
