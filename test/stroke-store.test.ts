@@ -106,8 +106,8 @@ describe('StrokeStore.populateFromPayload', () => {
 
 	it('loads inserted-page stroke keys without treating them as PDF page numbers', () => {
 		const store = new StrokeStore();
-		store.populateFromPayload('a.pdf', { 'jot:inserted-a': [pen('#jot')] });
-		expect(store.forKey('a.pdf::jot:inserted-a')[0]?.color).toBe('#jot');
+		store.populateFromPayload('a.pdf', { 'jot:inserted-a': [pen('#aabbcc')] });
+		expect(store.forKey('a.pdf::jot:inserted-a')[0]?.color).toBe('#aabbcc');
 	});
 
 		it('skips pages whose number cannot be parsed', () => {
