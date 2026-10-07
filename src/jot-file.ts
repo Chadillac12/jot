@@ -63,6 +63,7 @@ export function parseJotText(text: string): JotFileFormat | null {
 		if (!isRecord(parsed)) return null;
 		if (typeof parsed.version !== 'number' || !isRecord(parsed.pages)) return null;
 
+		if (parsed.version < 3 && parsed.insertedPages !== undefined) return null;
 		const insertedPages = parseInsertedPages(parsed.insertedPages);
 		if (insertedPages === null) return null;
 		const insertedIds = new Set(insertedPages.map((page) => insertedPageStorageId(page.id)));
@@ -197,12 +198,12 @@ function parseInsertedPages(value: unknown): PdfInsertedPage[] | null {
 			typeof id !== 'string' ||
 			id.length === 0 ||
 			id.length > 128 ||
-			id.includes(PAGE_KEY_SEPARATOR) ||
+			!/^[A-Za-z0-9_-]+$/.test(id) ||
 			ids.has(id)
 		) {
 			return null;
 		}
-		if (!Number.isInteger(slot) || (slot as number) < 0 || (slot as number) > 100_000) return null;
+		if (typeof slot !== 'number' || !Number.isInteger(slot) || slot < 0 || slot > 100_000) return null;
 		if (paper !== 'blank' && paper !== 'ruled' && paper !== 'grid' && paper !== 'dot') return null;
 		if (!isFiniteNumber(width) || !isFiniteNumber(height) || width <= 0 || height <= 0) return null;
 		if (width > 100_000 || height > 100_000) return null;
