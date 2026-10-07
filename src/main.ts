@@ -8,7 +8,7 @@ import { collectClearOperations, countStrokes, toUndoEntries } from './clear-ops
 import { FloatingPaletteButton } from './floating-palette-button';
 import { PointerEventHandler } from './pointer-event-handler';
 import { PersistentDiagnostics } from './persistent-diagnostics';
-import { isSidecarPath, pdfPathFromSidecar } from './jot-file';
+import { documentPathFromKey, isSidecarPath, pdfPathFromSidecar } from './jot-file';
 import { JOT_NOTE_EXTENSION, JOT_NOTE_VIEW_TYPE, createJotNote, serializeJotNote } from './jot-note-file';
 import { JotNoteView } from './jot-note-view';
 import { MergeService } from './merge-service';
@@ -542,6 +542,12 @@ export default class JotPlugin extends Plugin {
 			toolState: () => this.toolState,
 			handedness: () => this.settings.handedness,
 			paletteActivation: () => this.settings.paletteActivation,
+			allowInput: () => {
+				if (saveScheduler !== this.sidecar) return true;
+				const key = canvas.getAttribute('data-jot-key');
+				const pdfPath = key ? documentPathFromKey(key) : null;
+				return !pdfPath || !this.sidecar.isWriteBlocked(pdfPath);
+			},
 		});
 		handler.attach();
 		return () => handler.detach();
