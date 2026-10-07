@@ -301,107 +301,153 @@ describe('OverlayManager zoom recovery', () => {
 		}
 	});
 
-	it('allocates ordinary PDF overlay canvases only for pages near the viewport', () => {
-		type EntryCallback = IntersectionObserverCallback;
-		class IntersectionObserverVirtualizationMock {
-			static instances: IntersectionObserverVirtualizationMock[] = [];
-			target: Element | null = null;
-			constructor(private callback: EntryCallback) {
-				IntersectionObserverVirtualizationMock.instances.push(this);
+	it('keeps lightweight Pencil hit targets on all PDF pages while virtualizing heavy backing stores', async () => {
+		vi.useFakeTimers();
+		try {
+			type EntryCallback = IntersectionObserverCallback;
+			class IntersectionObserverVirtualizationMock {
+				static instances: IntersectionObserverVirtualizationMock[] = [];
+				target: Element | null = null;
+				constructor(private callback: EntryCallback) {
+					IntersectionObserverVirtualizationMock.instances.push(this);
+				}
+				observe(target: Element): void {
+					this.target = target;
+				}
+				unobserve(): void {}
+				disconnect(): void {}
+				takeRecords(): IntersectionObserverEntry[] {
+					return [];
+				}
+				root = null;
+				rootMargin = '75% 0px 75% 0px';
+				thresholds = [0];
+				fire(isIntersecting: boolean): void {
+					if (!this.target) return;
+					this.callback(
+						[
+							{
+								target: this.target,
+								isIntersecting,
+								intersectionRatio: isIntersecting ? 1 : 0,
+							} as IntersectionObserverEntry,
+						],
+						this as unknown as IntersectionObserver,
+					);
+				}
 			}
-			observe(target: Element): void {
-				this.target = target;
+			Object.defineProperty(window, 'IntersectionObserver', {
+				value: IntersectionObserverVirtualizationMock,
+				configurable: true,
+				writable: true,
+			});
+
+			const container = document.createElement('div');
+			for (let i = 1; i <= 53; i++) {
+				const page = document.createElement('div');
+				page.className = 'page';
+				page.setAttribute('data-page-number', String(i));
+				setRect(page, 1200, 900);
+				container.appendChild(page);
 			}
-			unobserve(): void {}
-			disconnect(): void {}
-			takeRecords(): IntersectionObserverEntry[] {
-				return [];
+			document.body.appendChild(container);
+
+			const leaf = {
+				view: {
+					containerEl: container,
+					file: { path: 'long.pdf' },
+					getViewType: () => 'pdf',
+				},
+			};
+			const app = {
+				workspace: {
+					getMostRecentLeaf: () => leaf,
+					iterateAllLeaves: (fn: (value: unknown) => void) => fn(leaf),
+				},
+			};
+			const wire = vi.fn(() => vi.fn());
+			const manager = new OverlayManager(app as any, new StrokeStore(), wire);
+
+			manager.attachToActivePdf();
+
+			expect(IntersectionObserverVirtualizationMock.instances).toHaveLength(53);
+			expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(0);
+			expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(53);
+			expect(wire).toHaveBeenCalledTimes(53);
+			for (const canvas of Array.from(
+				container.querySelectorAll<HTMLCanvasElement>('canvas.jot-live-overlay'),
+			)) {
+				expect(canvas.width).toBe(1);
+				expect(canvas.height).toBe(1);
+				expect(canvas.style.width).toBe('100%');
+				expect(canvas.style.height).toBe('100%');
 			}
-			root = null;
-			rootMargin = '75% 0px 75% 0px';
-			thresholds = [0];
-			fire(isIntersecting: boolean): void {
-				if (!this.target) return;
-				this.callback(
-					[
-						{
-							target: this.target,
-							isIntersecting,
-							intersectionRatio: isIntersecting ? 1 : 0,
-						} as IntersectionObserverEntry,
-					],
-					this as unknown as IntersectionObserver,
-				);
-			}
+
+			IntersectionObserverVirtualizationMock.instances[1]?.fire(true);
+			IntersectionObserverVirtualizationMock.instances[2]?.fire(true);
+			IntersectionObserverVirtualizationMock.instances[3]?.fire(true);
+			expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(3);
+			expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(53);
+
+			const secondPage = container.querySelector<HTMLElement>('[data-page-number="2"]')!;
+			const activePersistent = secondPage.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+			const activeLive = secondPage.querySelector<HTMLCanvasElement>('canvas.jot-live-overlay');
+			expect((activePersistent?.width ?? 0) * (activePersistent?.height ?? 0)).toBeLessThanOrEqual(
+				2_500_000,
+			);
+			expect((activeLive?.width ?? 0) * (activeLive?.height ?? 0)).toBeLessThanOrEqual(
+				2_500_000,
+			);
+			expect(activeLive?.width).toBeGreaterThan(1);
+
+			// A transient false intersection during zoom must not immediately
+			// remove the rendering surface.
+			IntersectionObserverVirtualizationMock.instances[1]?.fire(false);
+			await vi.advanceTimersByTimeAsync(749);
+			expect(secondPage.querySelector('canvas.jot-overlay')).not.toBeNull();
+
+			await vi.advanceTimersByTimeAsync(1);
+			expect(activePersistent?.width).toBe(1);
+			expect(activePersistent?.height).toBe(1);
+			expect(secondPage.querySelector('canvas.jot-overlay')).toBeNull();
+			expect(activeLive?.width).toBe(1);
+			expect(activeLive?.height).toBe(1);
+			expect(activeLive?.isConnected).toBe(true);
+
+			// Even when IntersectionObserver still considers the page outside,
+			// Pencil-down on the dormant 1x1 hit target promotes it before the
+			// normal PointerEventHandler runs.
+			const penDown = new PointerEvent('pointerdown', {
+				pointerId: 77,
+				pointerType: 'pen',
+				clientX: 20,
+				clientY: 20,
+				bubbles: true,
+			});
+			activeLive?.dispatchEvent(penDown);
+			expect(secondPage.querySelector('canvas.jot-overlay')).not.toBeNull();
+			expect(activeLive?.width).toBeGreaterThan(1);
+			expect(activeLive?.height).toBeGreaterThan(1);
+
+			activeLive?.dispatchEvent(
+				new PointerEvent('pointerup', {
+					pointerId: 77,
+					pointerType: 'pen',
+					clientX: 20,
+					clientY: 20,
+					bubbles: true,
+				}),
+			);
+			await vi.advanceTimersByTimeAsync(750);
+			expect(secondPage.querySelector('canvas.jot-overlay')).toBeNull();
+			expect(activeLive?.width).toBe(1);
+			expect(activeLive?.height).toBe(1);
+			expect(activeLive?.isConnected).toBe(true);
+		} finally {
+			vi.useRealTimers();
 		}
-		Object.defineProperty(window, 'IntersectionObserver', {
-			value: IntersectionObserverVirtualizationMock,
-			configurable: true,
-			writable: true,
-		});
-
-		const container = document.createElement('div');
-		for (let i = 1; i <= 53; i++) {
-			const page = document.createElement('div');
-			page.className = 'page';
-			page.setAttribute('data-page-number', String(i));
-			setRect(page, 1200, 900);
-			container.appendChild(page);
-		}
-		document.body.appendChild(container);
-
-		const leaf = {
-			view: {
-				containerEl: container,
-				file: { path: 'long.pdf' },
-				getViewType: () => 'pdf',
-			},
-		};
-		const app = {
-			workspace: {
-				getMostRecentLeaf: () => leaf,
-				iterateAllLeaves: (fn: (value: unknown) => void) => fn(leaf),
-			},
-		};
-		const wire = vi.fn(() => vi.fn());
-		const manager = new OverlayManager(app as any, new StrokeStore(), wire);
-
-		manager.attachToActivePdf();
-
-		expect(IntersectionObserverVirtualizationMock.instances).toHaveLength(53);
-		expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(0);
-		expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(0);
-
-		IntersectionObserverVirtualizationMock.instances[1]?.fire(true);
-		IntersectionObserverVirtualizationMock.instances[2]?.fire(true);
-		IntersectionObserverVirtualizationMock.instances[3]?.fire(true);
-		expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(3);
-		expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(3);
-		expect(wire).toHaveBeenCalledTimes(3);
-
-		const secondPage = container.querySelector<HTMLElement>('[data-page-number="2"]')!;
-		const activePersistent = secondPage.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
-		const activeLive = secondPage.querySelector<HTMLCanvasElement>('canvas.jot-live-overlay');
-		expect((activePersistent?.width ?? 0) * (activePersistent?.height ?? 0)).toBeLessThanOrEqual(
-			2_500_000,
-		);
-		expect((activeLive?.width ?? 0) * (activeLive?.height ?? 0)).toBeLessThanOrEqual(
-			2_500_000,
-		);
-
-		IntersectionObserverVirtualizationMock.instances[1]?.fire(false);
-		expect(activePersistent?.width).toBe(1);
-		expect(activePersistent?.height).toBe(1);
-		expect(activeLive?.width).toBe(1);
-		expect(activeLive?.height).toBe(1);
-		expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(2);
-		expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(2);
-
-		IntersectionObserverVirtualizationMock.instances[2]?.fire(false);
-		IntersectionObserverVirtualizationMock.instances[3]?.fire(false);
-		expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(0);
-		expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(0);
 	});
+
 
 	it('rebinds inserted page ink keys when the owning PDF path changes', () => {
 		const container = document.createElement('div');
