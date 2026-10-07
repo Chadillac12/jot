@@ -37,9 +37,15 @@ export class OverlayManager {
 	constructor(
 		private app: App,
 		private strokes: StrokeStore,
-		private insertedPageStore: PdfInsertedPageStore,
 		private wireOverlay: (canvas: HTMLCanvasElement) => (() => void) | void,
-		private callbacks: OverlayManagerCallbacks,
+		private insertedPageStore: PdfInsertedPageStore = new (class {
+			all(): PdfInsertedPage[] {
+				return [];
+			}
+		})() as PdfInsertedPageStore,
+		private callbacks: OverlayManagerCallbacks = {
+			onInsertedPagePaperChange: () => {},
+		},
 	) {}
 
 	attachToActivePdf(): void {
