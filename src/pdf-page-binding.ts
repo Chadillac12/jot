@@ -17,6 +17,7 @@ export const PDF_OVERLAY_CLASS = 'jot-overlay';
 export const PDF_LIVE_OVERLAY_CLASS = 'jot-live-overlay';
 export const PDF_PAGE_ANCHOR_CLASS = 'jot-page-anchor';
 export const PDF_PASSTHROUGH_CLASS = 'jot-passthrough';
+export const PDF_DORMANT_INPUT_CLASS = 'jot-live-overlay-dormant';
 
 export const PDF_OVERLAY_BACKING_STORE_LIMITS: CanvasBackingStoreLimits = {
 	maxDimension: 2048,
@@ -432,8 +433,7 @@ export class PdfPageBinding {
 		}
 		live.width = 1;
 		live.height = 1;
-		live.style.width = '100%';
-		live.style.height = '100%';
+		live.classList.add(PDF_DORMANT_INPUT_CLASS);
 	}
 
 	private releaseCanvas(canvas: HTMLCanvasElement): void {
@@ -558,6 +558,7 @@ export class PdfPageBinding {
 	}
 
 	private sizeCanvas(canvas: HTMLCanvasElement): boolean {
+		canvas.classList.remove(PDF_DORMANT_INPUT_CLASS);
 		const rect = this.page.getBoundingClientRect();
 		if (rect.width <= 0 || rect.height <= 0) return false;
 		const win = this.page.ownerDocument.defaultView;
