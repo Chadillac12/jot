@@ -285,9 +285,10 @@ describe('JotNoteSurface', () => {
 			eagerMountFirstPage: false,
 			rootMargin: '50% 0px 50% 0px',
 			backingStoreLimits: {
-				maxDimension: 3072,
-				maxArea: 4_000_000,
+				maxDimension: 2048,
+				maxArea: 2_500_000,
 			},
+			fixedLogicalBackingStore: true,
 		});
 
 		surface.render(createJotNote(), 'notes.pdf');
@@ -324,8 +325,29 @@ describe('JotNoteSurface', () => {
 		expect(canvases).toHaveLength(2);
 		expect(wire).toHaveBeenCalledTimes(1);
 		for (const canvas of canvases) {
-			expect(canvas.width * canvas.height).toBeLessThanOrEqual(4_000_000);
+			expect(canvas.width * canvas.height).toBeLessThanOrEqual(2_500_000);
 		}
+		expect(ResizeObserverMock.instances).toHaveLength(0);
+
+		const initialSizes = canvases.map((canvas) => [canvas.width, canvas.height]);
+		sheet.getBoundingClientRect = () =>
+			({
+				x: 0,
+				y: 0,
+				left: 0,
+				top: 0,
+				right: 600,
+				bottom: 800,
+				width: 600,
+				height: 800,
+				toJSON: () => ({}),
+			});
+		expect(
+			Array.from(host.querySelectorAll<HTMLCanvasElement>('canvas')).map((canvas) => [
+				canvas.width,
+				canvas.height,
+			]),
+		).toEqual(initialSizes);
 
 		callback(
 			[
