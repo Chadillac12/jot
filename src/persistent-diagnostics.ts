@@ -433,10 +433,12 @@ export class PersistentDiagnostics implements DiagnosticSink {
 			);
 			const files = [...listing.files].sort();
 			const removable = files.filter((path) => !protectedPaths.has(path));
-			while (files.length - Math.max(0, removable.length - 1) > MAX_RETAINED_SESSION_FILES && removable.length > 0) {
+			let excess = Math.max(0, files.length - MAX_RETAINED_SESSION_FILES);
+			while (excess > 0 && removable.length > 0) {
 				const path = removable.shift();
 				if (!path) break;
 				await this.adapter.remove(path);
+				excess -= 1;
 			}
 		} catch (error) {
 			console.warn('[jot] diagnostics prune failed', error);
