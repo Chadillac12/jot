@@ -5,7 +5,7 @@ import {
 	PDF_INSERTED_PAGE_CLASS,
 	PdfInsertedPageBinding,
 } from './pdf-inserted-page-binding';
-import type { PdfInsertedPageStore } from './pdf-inserted-page-store';
+import { PdfInsertedPageStore } from './pdf-inserted-page-store';
 import { PdfPageBinding } from './pdf-page-binding';
 import type { Stroke } from './stroke-math';
 import type { StrokeStore } from './stroke-store';
@@ -38,11 +38,7 @@ export class OverlayManager {
 		private app: App,
 		private strokes: StrokeStore,
 		private wireOverlay: (canvas: HTMLCanvasElement) => (() => void) | void,
-		private insertedPageStore: PdfInsertedPageStore = new (class {
-			all(): PdfInsertedPage[] {
-				return [];
-			}
-		})() as PdfInsertedPageStore,
+		private insertedPageStore: PdfInsertedPageStore = new PdfInsertedPageStore(),
 		private callbacks: OverlayManagerCallbacks = {
 			onInsertedPagePaperChange: () => {},
 		},
