@@ -254,26 +254,24 @@ export class OverlayManager {
 		}
 
 		const groups = new Map<number, PdfInsertedPage[]>();
-		const pageCount = actualPages[actualPages.length - 1]?.pageNumber ?? actualPages.length;
 		for (const page of layout) {
-			const slot = Math.max(0, Math.min(page.slot, pageCount));
-			const group = groups.get(slot) ?? [];
+			const group = groups.get(page.slot) ?? [];
 			group.push(page);
-			groups.set(slot, group);
+			groups.set(page.slot, group);
 		}
 
 		for (const [slot, pages] of groups) {
 			const reference =
-				slot > 0
-					? actualPages.find((page) => page.pageNumber === slot)?.element ??
-						actualPages[actualPages.length - 1]!.element
-					: actualPages[0]!.element;
+				slot === 0
+					? actualPages.find((page) => page.pageNumber === 1)?.element ?? null
+					: actualPages.find((page) => page.pageNumber === slot)?.element ?? null;
+			if (!reference) continue;
 			const target =
-				slot < pageCount
-					? actualPages.find((page) => page.pageNumber === slot + 1)?.element ?? null
-					: null;
-			const parent = (target ?? actualPages[actualPages.length - 1]!.element).parentElement;
-			if (!parent) continue;
+				slot === 0
+					? reference
+					: actualPages.find((page) => page.pageNumber === slot + 1)?.element ?? null;
+			const parent = reference.parentElement;
+			if (!parent || (target && target.parentElement !== parent)) continue;
 
 			let gap = binding.gaps.get(slot);
 			if (!gap) {
@@ -288,7 +286,7 @@ export class OverlayManager {
 					parent.insertBefore(gap, target);
 				}
 			} else {
-				let endTarget = actualPages[actualPages.length - 1]!.element.nextSibling;
+				let endTarget = reference.nextSibling;
 				while (
 					endTarget instanceof HTMLElement &&
 					endTarget.classList.contains(PDF_INSERTED_GAP_CLASS)
