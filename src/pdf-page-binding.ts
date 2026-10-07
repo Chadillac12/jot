@@ -330,6 +330,16 @@ export class PdfPageBinding {
 	private releaseCanvas(canvas: HTMLCanvasElement): void {
 		// Setting dimensions to 1x1 releases the large WebKit backing store
 		// immediately instead of waiting for GC on a detached canvas.
+		if (this.diagnostics.isEnabled()) {
+			this.diagnostics.record('pdf.overlay-canvas-released', {
+				key: this.keyValue,
+				layer: canvas.classList.contains(PDF_LIVE_OVERLAY_CLASS) ? 'live' : 'persistent',
+				width: canvas.width,
+				height: canvas.height,
+				area: canvas.width * canvas.height,
+				connected: canvas.isConnected,
+			});
+		}
 		canvas.width = 1;
 		canvas.height = 1;
 		canvas.remove();
