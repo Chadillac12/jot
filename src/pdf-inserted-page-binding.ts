@@ -105,12 +105,14 @@ export class PdfInsertedPageBinding {
 		this.surface.redrawKey(this.key);
 	}
 
-	appendStroke(canvas: HTMLCanvasElement, stroke: Stroke): void {
-		this.surface.appendPersistedStroke(canvas, stroke);
+	appendStroke(stroke: Stroke): void {
+		const canvas = this.persistentCanvas();
+		if (canvas) this.surface.appendPersistedStroke(canvas, stroke);
 	}
 
-	clearLive(canvas: HTMLCanvasElement): void {
-		this.surface.clearLivePage(canvas);
+	clearLive(): void {
+		const canvas = this.persistentCanvas();
+		if (canvas) this.surface.clearLivePage(canvas);
 	}
 
 	dispose(): void {
