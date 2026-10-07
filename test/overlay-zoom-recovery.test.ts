@@ -101,6 +101,104 @@ beforeEach(() => {
 });
 
 describe('OverlayManager zoom recovery', () => {
+	it('does zero hybrid reconciliation during ordinary PDF zoom mutations', async () => {
+		const container = document.createElement('div');
+		const page = document.createElement('div');
+		page.className = 'page';
+		page.setAttribute('data-page-number', '1');
+		setRect(page, 800, 1000);
+		container.appendChild(page);
+		document.body.appendChild(container);
+
+		const leaf = {
+			view: {
+				containerEl: container,
+				file: { path: 'plain.pdf' },
+				getViewType: () => 'pdf',
+			},
+		};
+		const app = {
+			workspace: {
+				getMostRecentLeaf: () => leaf,
+				iterateAllLeaves: (fn: (value: unknown) => void) => fn(leaf),
+			},
+		};
+		const layout = new PdfInsertedPageStore();
+		const all = vi.spyOn(layout, 'all');
+		const manager = new OverlayManager(
+			app as any,
+			new StrokeStore(),
+			vi.fn(() => vi.fn()),
+			layout,
+			{ onInsertedPagePaperChange: vi.fn() },
+		);
+
+		manager.attachToActivePdf();
+		expect(all).not.toHaveBeenCalled();
+
+		const pdfJsReplacement = document.createElement('span');
+		page.appendChild(pdfJsReplacement);
+		await flushMutations();
+
+		expect(all).not.toHaveBeenCalled();
+		expect(page.querySelectorAll('canvas.jot-overlay')).toHaveLength(1);
+		expect(page.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(1);
+	});
+
+	it('defers hybrid reconciliation until a PDF zoom mutation burst is quiet', async () => {
+		vi.useFakeTimers();
+		try {
+			const container = document.createElement('div');
+			const page = document.createElement('div');
+			page.className = 'page';
+			page.setAttribute('data-page-number', '1');
+			setRect(page, 800, 1000);
+			container.appendChild(page);
+			document.body.appendChild(container);
+
+			const leaf = {
+				view: {
+					containerEl: container,
+					file: { path: 'hybrid.pdf' },
+					getViewType: () => 'pdf',
+				},
+			};
+			const app = {
+				workspace: {
+					getMostRecentLeaf: () => leaf,
+					iterateAllLeaves: (fn: (value: unknown) => void) => fn(leaf),
+				},
+			};
+			const layout = new PdfInsertedPageStore();
+			layout.add('hybrid.pdf', 1, 'grid');
+			const all = vi.spyOn(layout, 'all');
+			const manager = new OverlayManager(
+				app as any,
+				new StrokeStore(),
+				vi.fn(() => vi.fn()),
+				layout,
+				{ onInsertedPagePaperChange: vi.fn() },
+			);
+
+			manager.attachToActivePdf();
+			expect(all).toHaveBeenCalledTimes(1);
+
+			page.appendChild(document.createElement('span'));
+			await flushMutations();
+
+			// Real PDF page recovery happens immediately, but hybrid layout does not.
+			expect(all).toHaveBeenCalledTimes(1);
+
+			await vi.advanceTimersByTimeAsync(299);
+			expect(all).toHaveBeenCalledTimes(1);
+
+			await vi.advanceTimersByTimeAsync(1);
+			expect(all).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('recreates and rewires a live ink layer removed during a PDF.js rebuild', async () => {
 		const { page, manager, wire } = makeHarness();
 		manager.attachToActivePdf();
