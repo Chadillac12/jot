@@ -396,7 +396,7 @@ describe('JotNoteSurface', () => {
 			expect(live.width).toBe(1);
 			expect(wire).toHaveBeenCalledTimes(1);
 			const intersection = (isIntersecting: boolean) => callback(
-				[{ target: sheet, isIntersecting, intersectionRatio: isIntersecting ? 1 : 0 } as IntersectionObserverEntry],
+				[{ target: sheet, isIntersecting, intersectionRatio: isIntersecting ? 1 : 0 } as unknown as IntersectionObserverEntry],
 				{} as IntersectionObserver,
 			);
 			intersection(true);
