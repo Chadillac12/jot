@@ -366,6 +366,62 @@ describe('JotNoteSurface', () => {
 		expect(host.querySelectorAll('canvas')).toHaveLength(0);
 	});
 
+	it('retains a hybrid Pencil target through zoom jitter and reactivates on pen-down', async () => {
+		vi.useFakeTimers();
+		try {
+			let callback: IntersectionObserverCallback = () => {};
+			class Observer {
+				constructor(cb: IntersectionObserverCallback) { callback = cb; }
+				observe(): void {}
+				unobserve(): void {}
+				disconnect(): void {}
+			}
+			Object.defineProperty(window, 'IntersectionObserver', {
+				value: Observer,
+				configurable: true,
+				writable: true,
+			});
+			const host = document.createElement('div');
+			document.body.appendChild(host);
+			const wire = vi.fn(() => vi.fn());
+			const surface = new JotNoteSurface(host, new StrokeStore(), wire, {
+				observerRoot: document.body,
+				eagerMountFirstPage: false,
+				fixedLogicalBackingStore: true,
+				deactivationGraceMs: 750,
+			});
+			surface.render(createJotNote(), 'hybrid.pdf');
+			const sheet = host.querySelector<HTMLElement>('.jot-note-sheet')!;
+			const live = host.querySelector<HTMLCanvasElement>('canvas.jot-note-live-ink')!;
+			expect(live.width).toBe(1);
+			expect(wire).toHaveBeenCalledTimes(1);
+			const intersection = (isIntersecting: boolean) => callback(
+				[{ target: sheet, isIntersecting, intersectionRatio: isIntersecting ? 1 : 0 } as IntersectionObserverEntry],
+				{} as IntersectionObserver,
+			);
+			intersection(true);
+			expect(host.querySelectorAll('canvas.jot-note-ink')).toHaveLength(1);
+			intersection(false);
+			await vi.advanceTimersByTimeAsync(749);
+			expect(host.querySelectorAll('canvas.jot-note-ink')).toHaveLength(1);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(host.querySelectorAll('canvas.jot-note-ink')).toHaveLength(0);
+			expect(live.isConnected).toBe(true);
+			expect(live.width).toBe(1);
+			live.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 4, pointerType: 'pen', bubbles: true }));
+			expect(host.querySelectorAll('canvas.jot-note-ink')).toHaveLength(1);
+			live.dispatchEvent(new PointerEvent('pointerup', { pointerId: 4, pointerType: 'pen', bubbles: true }));
+			await vi.advanceTimersByTimeAsync(750);
+			expect(host.querySelectorAll('canvas.jot-note-ink')).toHaveLength(0);
+			expect(live.isConnected).toBe(true);
+			expect(wire).toHaveBeenCalledTimes(1);
+			surface.disconnect();
+			expect(live.isConnected).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('caps both notebook canvas backing stores at the iPad-safe area', () => {
 		const host = document.createElement('div');
 		const surface = new JotNoteSurface(host, new StrokeStore(), vi.fn());
