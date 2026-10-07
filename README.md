@@ -101,6 +101,20 @@ Jot treats handwritten ink as user data:
 
 See [Architecture](docs/ARCHITECTURE.md) and [Hardening verification](docs/HARDENING_VERIFICATION.md) for the current design invariants and verification mapping.
 
+## iPad safety protections
+
+Jot preserves small, transparent Pencil hit targets when pages are outside the
+viewport instead of removing input handling during zoom. Heavy backing stores are
+released independently. If a PDF annotation sidecar cannot be read because of
+an I/O error, Jot blocks further ink input and writes on that PDF to protect the
+existing annotations. Correct the storage problem and reopen/reload the document
+rather than continuing to draw while saving is blocked.
+
+Large synced or corrupted ink documents are validated against mobile-safe resource
+budgets before rendering, and may open protected or read-only. Concurrent merges
+of the same PDF are blocked. Keep a backup when upgrading a working vault and
+verify PDFs/notebooks on the iPad before making this a production release.
+
 ## Development
 
 ```bash
