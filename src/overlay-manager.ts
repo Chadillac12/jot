@@ -171,6 +171,16 @@ export class OverlayManager {
 			.reduce((max, value) => Math.max(max, value), 0);
 	}
 
+	scrollInsertedPageIntoView(pdfPath: string, pageId: string): void {
+		for (const [leaf, binding] of this.leaves) {
+			if (this.filePathForLeaf(leaf) !== pdfPath) continue;
+			const root = binding.insertedPages.get(pageId)?.root;
+			if (!root) continue;
+			root.scrollIntoView({ block: 'center', behavior: 'smooth' });
+			return;
+		}
+	}
+
 	private syncLeaf(binding: LeafBinding, filePath: string): void {
 		this.syncPdfPages(binding, filePath);
 		this.syncInsertedPages(binding, filePath);
