@@ -106,7 +106,9 @@ export class MergeService {
 						Math.max(0, Math.min(originalPageCount - 1, slot > 0 ? slot - 1 : 0))
 					];
 				if (!reference) continue;
-				const page = pdfDoc.insertPage(slot, [reference.getWidth(), reference.getHeight()]);
+				const exportWidth = reference.getWidth();
+				const exportHeight = exportWidth * (insertedPage.height / insertedPage.width);
+				const page = pdfDoc.insertPage(slot, [exportWidth, exportHeight]);
 				drawPaperOnPdfPage(
 					page,
 					insertedPage.paper,
