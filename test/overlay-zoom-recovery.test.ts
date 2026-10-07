@@ -145,7 +145,7 @@ describe('OverlayManager zoom recovery', () => {
 		expect(page.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(1);
 	});
 
-	it('defers hybrid reconciliation until a PDF zoom mutation burst is quiet', async () => {
+	it('defers hybrid reconciliation only when PDF page topology changes', async () => {
 		vi.useFakeTimers();
 		try {
 			const container = document.createElement('div');
@@ -183,15 +183,24 @@ describe('OverlayManager zoom recovery', () => {
 			manager.attachToActivePdf();
 			expect(all).toHaveBeenCalledTimes(1);
 
+			// Descendant churn inside an existing page is zoom/render noise and
+			// must not schedule a whole-document hybrid reconciliation.
 			page.appendChild(document.createElement('span'));
 			await flushMutations();
-
-			// Real PDF page recovery happens immediately, but hybrid layout does not.
+			await vi.advanceTimersByTimeAsync(300);
 			expect(all).toHaveBeenCalledTimes(1);
 
+			// A real source-page topology change does require deferred repair.
+			const page2 = document.createElement('div');
+			page2.className = 'page';
+			page2.setAttribute('data-page-number', '2');
+			setRect(page2, 800, 1000);
+			container.appendChild(page2);
+			await flushMutations();
+
+			expect(all).toHaveBeenCalledTimes(1);
 			await vi.advanceTimersByTimeAsync(299);
 			expect(all).toHaveBeenCalledTimes(1);
-
 			await vi.advanceTimersByTimeAsync(1);
 			expect(all).toHaveBeenCalledTimes(2);
 		} finally {
@@ -199,35 +208,64 @@ describe('OverlayManager zoom recovery', () => {
 		}
 	});
 
-	it('recreates and rewires a live ink layer removed during a PDF.js rebuild', async () => {
-		const { page, manager, wire } = makeHarness();
-		manager.attachToActivePdf();
-		const persistent = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
-		const firstLive = page.querySelector<HTMLCanvasElement>('canvas.jot-live-overlay');
-		expect(persistent).not.toBeNull();
-		expect(firstLive).not.toBeNull();
-		expect(wire).toHaveBeenCalledTimes(1);
+	it('releases a detached live backing store and recovers only after the mutation burst settles', async () => {
+		vi.useFakeTimers();
+		try {
+			const { page, manager, wire } = makeHarness();
+			manager.attachToActivePdf();
+			const persistent = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+			const firstLive = page.querySelector<HTMLCanvasElement>('canvas.jot-live-overlay');
+			expect(persistent).not.toBeNull();
+			expect(firstLive).not.toBeNull();
+			expect(wire).toHaveBeenCalledTimes(1);
 
-		firstLive?.remove();
-		await flushMutations();
+			firstLive?.remove();
+			await flushMutations();
 
-		const replacement = page.querySelector<HTMLCanvasElement>('canvas.jot-live-overlay');
-		expect(replacement).not.toBeNull();
-		expect(replacement).not.toBe(firstLive);
-		expect(replacement?.getAttribute(OVERLAY_KEY_ATTR)).toBe('notes.pdf::1');
-		expect(wire).toHaveBeenCalledTimes(2);
+			expect(firstLive?.width).toBe(1);
+			expect(firstLive?.height).toBe(1);
+			expect(page.querySelector('canvas.jot-live-overlay')).toBeNull();
+			expect(wire).toHaveBeenCalledTimes(1);
+
+			await vi.advanceTimersByTimeAsync(149);
+			expect(page.querySelector('canvas.jot-live-overlay')).toBeNull();
+
+			await vi.advanceTimersByTimeAsync(1);
+			const replacement = page.querySelector<HTMLCanvasElement>('canvas.jot-live-overlay');
+			expect(replacement).not.toBeNull();
+			expect(replacement).not.toBe(firstLive);
+			expect(replacement?.getAttribute(OVERLAY_KEY_ATTR)).toBe('notes.pdf::1');
+			expect(wire).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
-	it('recreates the persistent layer without duplicating the live handler', async () => {
-		const { page, manager, wire } = makeHarness();
-		manager.attachToActivePdf();
-		const first = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
-		first?.remove();
-		await flushMutations();
+	it('releases a detached persistent backing store and recovers without duplicating the live handler', async () => {
+		vi.useFakeTimers();
+		try {
+			const { page, manager, wire } = makeHarness();
+			manager.attachToActivePdf();
+			const first = page.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+			expect(first).not.toBeNull();
 
-		expect(page.querySelectorAll('canvas.jot-overlay')).toHaveLength(1);
-		expect(page.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(1);
-		expect(wire).toHaveBeenCalledTimes(1);
+			first?.remove();
+			await flushMutations();
+
+			expect(first?.width).toBe(1);
+			expect(first?.height).toBe(1);
+			expect(page.querySelectorAll('canvas.jot-overlay')).toHaveLength(0);
+			expect(page.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(1);
+			expect(wire).toHaveBeenCalledTimes(1);
+
+			await vi.advanceTimersByTimeAsync(150);
+
+			expect(page.querySelectorAll('canvas.jot-overlay')).toHaveLength(1);
+			expect(page.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(1);
+			expect(wire).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('disposes page observers, canvases, and input handlers on disconnect', () => {
@@ -254,8 +292,102 @@ describe('OverlayManager zoom recovery', () => {
 		for (const canvas of [persistent, live]) {
 			expect(canvas?.style.width).toBe('2400px');
 			expect(canvas?.style.height).toBe('3200px');
-			expect((canvas?.width ?? 0) * (canvas?.height ?? 0)).toBeLessThanOrEqual(16_777_216);
+			expect((canvas?.width ?? 0) * (canvas?.height ?? 0)).toBeLessThanOrEqual(2_500_000);
 		}
+	});
+
+	it('allocates ordinary PDF overlay canvases only for pages near the viewport', () => {
+		type EntryCallback = IntersectionObserverCallback;
+		class IntersectionObserverVirtualizationMock {
+			static instances: IntersectionObserverVirtualizationMock[] = [];
+			target: Element | null = null;
+			constructor(private callback: EntryCallback) {
+				IntersectionObserverVirtualizationMock.instances.push(this);
+			}
+			observe(target: Element): void {
+				this.target = target;
+			}
+			unobserve(): void {}
+			disconnect(): void {}
+			takeRecords(): IntersectionObserverEntry[] {
+				return [];
+			}
+			root = null;
+			rootMargin = '75% 0px 75% 0px';
+			thresholds = [0];
+			fire(isIntersecting: boolean): void {
+				if (!this.target) return;
+				this.callback(
+					[
+						{
+							target: this.target,
+							isIntersecting,
+							intersectionRatio: isIntersecting ? 1 : 0,
+						} as IntersectionObserverEntry,
+					],
+					this as unknown as IntersectionObserver,
+				);
+			}
+		}
+		Object.defineProperty(window, 'IntersectionObserver', {
+			value: IntersectionObserverVirtualizationMock,
+			configurable: true,
+			writable: true,
+		});
+
+		const container = document.createElement('div');
+		for (let i = 1; i <= 5; i++) {
+			const page = document.createElement('div');
+			page.className = 'page';
+			page.setAttribute('data-page-number', String(i));
+			setRect(page, 1200, 900);
+			container.appendChild(page);
+		}
+		document.body.appendChild(container);
+
+		const leaf = {
+			view: {
+				containerEl: container,
+				file: { path: 'long.pdf' },
+				getViewType: () => 'pdf',
+			},
+		};
+		const app = {
+			workspace: {
+				getMostRecentLeaf: () => leaf,
+				iterateAllLeaves: (fn: (value: unknown) => void) => fn(leaf),
+			},
+		};
+		const wire = vi.fn(() => vi.fn());
+		const manager = new OverlayManager(app as any, new StrokeStore(), wire);
+
+		manager.attachToActivePdf();
+
+		expect(IntersectionObserverVirtualizationMock.instances).toHaveLength(5);
+		expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(0);
+		expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(0);
+
+		IntersectionObserverVirtualizationMock.instances[1]?.fire(true);
+		expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(1);
+		expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(1);
+		expect(wire).toHaveBeenCalledTimes(1);
+
+		const activePersistent = container.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+		const activeLive = container.querySelector<HTMLCanvasElement>('canvas.jot-live-overlay');
+		expect((activePersistent?.width ?? 0) * (activePersistent?.height ?? 0)).toBeLessThanOrEqual(
+			2_500_000,
+		);
+		expect((activeLive?.width ?? 0) * (activeLive?.height ?? 0)).toBeLessThanOrEqual(
+			2_500_000,
+		);
+
+		IntersectionObserverVirtualizationMock.instances[1]?.fire(false);
+		expect(activePersistent?.width).toBe(1);
+		expect(activePersistent?.height).toBe(1);
+		expect(activeLive?.width).toBe(1);
+		expect(activeLive?.height).toBe(1);
+		expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(0);
+		expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(0);
 	});
 
 	it('rebinds inserted page ink keys when the owning PDF path changes', () => {
