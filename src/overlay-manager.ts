@@ -60,7 +60,7 @@ export class OverlayManager {
 			pdfPath: filePath,
 			existingLeafBinding: this.leaves.has(leaf),
 			domPdfPages: this.pdfPageElements(container).length,
-			insertedLayoutPages: this.insertedPageStore.all(filePath).length,
+			hasInsertedLayout: this.insertedPageStore.hasFor(filePath),
 		});
 
 		let binding = this.leaves.get(leaf);
@@ -233,7 +233,7 @@ export class OverlayManager {
 		this.diagnostics.record('hybrid.sync-scheduled', {
 			pdfPath,
 			delayMs: 300,
-			insertedLayoutPages: this.insertedPageStore.all(pdfPath).length,
+			hasInsertedLayout: this.insertedPageStore.hasFor(pdfPath),
 			boundInsertedPages: binding.insertedPages.size,
 		});
 		if (!win) return;
