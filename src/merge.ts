@@ -89,8 +89,8 @@ export function drawPaperOnPdfPage(
 	if (paper === 'blank') return;
 	const pageW = page.getWidth();
 	const pageH = page.getHeight();
-	const xSpacing = pageW * (64 / sourceWidth);
-	const ySpacing = pageH * (64 / sourceHeight);
+	const xSpacing = Math.max(pageW / 128, pageW * (64 / sourceWidth));
+	const ySpacing = Math.max(pageH / 128, pageH * (64 / sourceHeight));
 	const guide = rgb(63 / 255, 99 / 255, 148 / 255);
 
 	if (paper === 'ruled' || paper === 'grid') {
