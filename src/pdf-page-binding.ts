@@ -51,30 +51,34 @@ export class PdfPageBinding {
 
 		this.mutationObserver = new MutationObserver((records) => {
 			if (this.disposed) return;
-			let addedNodes = 0;
-			let removedNodes = 0;
-			for (const record of records) {
-				addedNodes += record.addedNodes.length;
-				removedNodes += record.removedNodes.length;
+			if (this.diagnostics.isEnabled()) {
+				let addedNodes = 0;
+				let removedNodes = 0;
+				for (const record of records) {
+					addedNodes += record.addedNodes.length;
+					removedNodes += record.removedNodes.length;
+				}
+				this.diagnostics.record('pdf.page-mutation', {
+					key: this.keyValue,
+					records: records.length,
+					addedNodes,
+					removedNodes,
+				});
 			}
-			this.diagnostics.record('pdf.page-mutation', {
-				key: this.keyValue,
-				records: records.length,
-				addedNodes,
-				removedNodes,
-			});
 			this.ensureCanvases();
 			this.disablePdfInteractionLayers();
 		});
 		this.mutationObserver.observe(this.page, { childList: true, subtree: true });
 
 		this.resizeObserver = new ResizeObserver(() => {
-			const rect = this.page.getBoundingClientRect();
-			this.diagnostics.record('pdf.page-resize-observed', {
-				key: this.keyValue,
-				cssWidth: rect.width,
-				cssHeight: rect.height,
-			});
+			if (this.diagnostics.isEnabled()) {
+				const rect = this.page.getBoundingClientRect();
+				this.diagnostics.record('pdf.page-resize-observed', {
+					key: this.keyValue,
+					cssWidth: rect.width,
+					cssHeight: rect.height,
+				});
+			}
 			this.scheduleResize();
 		});
 		this.resizeObserver.observe(this.page);
@@ -229,34 +233,36 @@ export class PdfPageBinding {
 
 	private resizeAndRedraw(): void {
 		this.ensureCanvases();
-		const rect = this.page.getBoundingClientRect();
-		const nativeCanvas = Array.from(
-			this.page.querySelectorAll<HTMLCanvasElement>('canvas'),
-		).find(
-			(canvas) =>
-				!canvas.classList.contains(PDF_OVERLAY_CLASS) &&
-				!canvas.classList.contains(PDF_LIVE_OVERLAY_CLASS),
-		);
 		const persistentChanged = this.persistent ? this.sizeCanvas(this.persistent) : false;
 		const liveChanged = this.live ? this.sizeCanvas(this.live) : false;
-		this.diagnostics.record('pdf.page-resize-applied', {
-			key: this.keyValue,
-			cssWidth: rect.width,
-			cssHeight: rect.height,
-			nativeCanvasWidth: nativeCanvas?.width ?? null,
-			nativeCanvasHeight: nativeCanvas?.height ?? null,
-			nativeCanvasArea: nativeCanvas ? nativeCanvas.width * nativeCanvas.height : null,
-			persistentWidth: this.persistent?.width ?? null,
-			persistentHeight: this.persistent?.height ?? null,
-			persistentArea: this.persistent
-				? this.persistent.width * this.persistent.height
-				: null,
-			liveWidth: this.live?.width ?? null,
-			liveHeight: this.live?.height ?? null,
-			liveArea: this.live ? this.live.width * this.live.height : null,
-			persistentChanged,
-			liveChanged,
-		});
+		if (this.diagnostics.isEnabled()) {
+			const rect = this.page.getBoundingClientRect();
+			const nativeCanvas = Array.from(
+				this.page.querySelectorAll<HTMLCanvasElement>('canvas'),
+			).find(
+				(canvas) =>
+					!canvas.classList.contains(PDF_OVERLAY_CLASS) &&
+					!canvas.classList.contains(PDF_LIVE_OVERLAY_CLASS),
+			);
+			this.diagnostics.record('pdf.page-resize-applied', {
+				key: this.keyValue,
+				cssWidth: rect.width,
+				cssHeight: rect.height,
+				nativeCanvasWidth: nativeCanvas?.width ?? null,
+				nativeCanvasHeight: nativeCanvas?.height ?? null,
+				nativeCanvasArea: nativeCanvas ? nativeCanvas.width * nativeCanvas.height : null,
+				persistentWidth: this.persistent?.width ?? null,
+				persistentHeight: this.persistent?.height ?? null,
+				persistentArea: this.persistent
+					? this.persistent.width * this.persistent.height
+					: null,
+				liveWidth: this.live?.width ?? null,
+				liveHeight: this.live?.height ?? null,
+				liveArea: this.live ? this.live.width * this.live.height : null,
+				persistentChanged,
+				liveChanged,
+			});
+		}
 		if (persistentChanged) this.redraw();
 		if (liveChanged) this.clearLive();
 	}
