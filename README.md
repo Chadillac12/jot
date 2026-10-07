@@ -17,8 +17,9 @@ Status: **early beta**. Back up important notes and use prerelease builds delibe
 - Optional two-finger hold and floating palette button
 - Undo/redo
 - Standalone multi-page `.jot` notebooks with blank, ruled, grid, and dot paper
-- PDF annotations stored in sidecar JSON for vault sync
-- Transactional, verified PDF merge/overwrite
+- Handwritten Jot pages inserted before/after PDF pages without modifying the source PDF
+- PDF annotations and inserted-page layout stored together in sidecar JSON for vault sync
+- Transactional, verified PDF merge/overwrite that can flatten inserted Jot pages
 - Conflict protection and recovery copies for unsafe sidecar changes
 
 <p>
@@ -44,8 +45,10 @@ For important notes, test a new prerelease on disposable data before relying on 
 2. Write directly with Apple Pencil.
 3. To open the palette with Pencil, make one quick tap, lift, then tap nearby again and hold briefly.
 4. Use the palette to choose pen, highlighter, eraser, color, or width.
-5. Run **Jot: Merge notes into PDF** to bake annotations into the PDF or an annotated copy.
-6. Run **Jot: Clear annotations on this PDF** to remove the sidecar annotations.
+5. Run **Jot: Add handwritten page before current PDF page** or **Jot: Add handwritten page after current PDF page** to insert a writable blank/ruled/grid/dot page into the PDF reading flow.
+6. Change an inserted page's **Paper** dropdown at any time. The source PDF is not changed; the page layout and ink stay in the `.jot.json` sidecar.
+7. Run **Jot: Merge notes into PDF** to bake annotations and inserted handwritten pages into the PDF or an annotated copy.
+8. Run **Jot: Clear annotations on this PDF** to remove ink while leaving inserted page structure intact.
 
 Normal Pencil contact is writing-only; Jot does not use ordinary Pencil long-press as a palette gesture.
 
@@ -69,6 +72,8 @@ Jot treats handwritten ink as user data:
 - conflicting external edits are preserved instead of silently overwritten,
 - destructive PDF overwrite uses a verified temporary PDF and rollback backup,
 - persisted pen strokes include a versioned rendering profile so their appearance does not depend on later settings changes.
+- inserted PDF Jot pages are persisted transactionally in sidecar v3 and keep stable page IDs across reloads and PDF renames,
+- the source PDF is not rewritten merely because a handwritten page is inserted; only an explicit merge/export creates physical PDF pages.
 
 See [Architecture](docs/ARCHITECTURE.md) and [Hardening verification](docs/HARDENING_VERIFICATION.md) for the current design invariants and verification mapping.
 
