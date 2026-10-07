@@ -231,6 +231,15 @@ describe('buildJotPayload', () => {
 		]);
 		expect(payload?.pages['jot:inserted-a']).toHaveLength(1);
 	});
+
+	it('does not serialize orphan ink for an inserted page that no longer exists', () => {
+		strokes.clear();
+		strokes.set('a.pdf::1', [penStroke('#abc')]);
+		strokes.set('a.pdf::jot:removed-page', [penStroke('#def')]);
+		const payload = buildJotPayload('a.pdf', strokes, []);
+		expect(payload?.pages['1']).toHaveLength(1);
+		expect(payload?.pages['jot:removed-page']).toBeUndefined();
+	});
 });
 
 describe('hasStrokesForPdf', () => {
