@@ -87,9 +87,13 @@ export class SidecarStore {
 	}
 
 	scheduleSave(pdfPath: string): void {
-		this.sessions.get(pdfPath).markDirty();
+		const session = this.sessions.get(pdfPath);
+		const wasDirty = session.isDirty;
+		session.markDirty();
 		if (this.isWriteBlocked(pdfPath)) {
-			this.callbacks.onSaveError?.(pdfPath, new Error('Existing annotation sidecar could not be read; writes blocked to protect the original.'));
+			if (!wasDirty) {
+				this.callbacks.onSaveError?.(pdfPath, new Error('Existing annotation sidecar could not be read; writes blocked to protect the original.'));
+			}
 			return;
 		}
 		this.clearTimer(this.saveTimers, pdfPath);
