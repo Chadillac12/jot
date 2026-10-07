@@ -155,6 +155,56 @@ describe('OverlayManager zoom recovery', () => {
 		}
 	});
 
+	it('rebinds inserted page ink keys when the owning PDF path changes', () => {
+		const container = document.createElement('div');
+		const page = document.createElement('div');
+		page.className = 'page';
+		page.setAttribute('data-page-number', '1');
+		setRect(page, 800, 1000);
+		container.appendChild(page);
+		document.body.appendChild(container);
+
+		const view = {
+			containerEl: container,
+			file: { path: 'Old/notes.pdf' },
+			getViewType: () => 'pdf',
+		};
+		const leaf = { view };
+		const app = {
+			workspace: {
+				getMostRecentLeaf: () => leaf,
+				iterateAllLeaves: (fn: (value: unknown) => void) => fn(leaf),
+			},
+		};
+		const layout = new PdfInsertedPageStore();
+		const inserted = layout.add('Old/notes.pdf', 1, 'ruled');
+		const manager = new OverlayManager(
+			app as any,
+			new StrokeStore(),
+			vi.fn(() => vi.fn()),
+			layout,
+			{ onInsertedPagePaperChange: vi.fn() },
+		);
+
+		manager.attachToActivePdf();
+		expect(
+			container
+				.querySelector<HTMLCanvasElement>('.jot-pdf-inserted-page canvas.jot-note-ink')
+				?.getAttribute(OVERLAY_KEY_ATTR),
+		).toBe(`Old/notes.pdf::jot:${inserted.id}`);
+
+		layout.rekeyDocumentPath('Old/notes.pdf', 'New/notes.pdf');
+		view.file.path = 'New/notes.pdf';
+		manager.refreshPdf('New/notes.pdf');
+
+		expect(container.querySelectorAll('.jot-pdf-inserted-page')).toHaveLength(1);
+		expect(
+			container
+				.querySelector<HTMLCanvasElement>('.jot-pdf-inserted-page canvas.jot-note-ink')
+				?.getAttribute(OVERLAY_KEY_ATTR),
+		).toBe(`New/notes.pdf::jot:${inserted.id}`);
+	});
+
 	it('places an inserted Jot page between PDF pages without duplicating it on resync', () => {
 		const container = document.createElement('div');
 		const page1 = document.createElement('div');
