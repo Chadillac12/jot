@@ -18,6 +18,7 @@ export interface MergeServiceCallbacks {
 }
 
 export class MergeService {
+	private readonly inFlight = new Set<string>();
 	constructor(
 		private app: App,
 		private adapter: DataAdapter,
@@ -45,6 +46,11 @@ export class MergeService {
 	}
 
 	private async run(pdfPath: string, choice: MergeChoice, copyTarget: string): Promise<void> {
+		if (this.inFlight.has(pdfPath)) {
+			new Notice('Jot: a PDF merge is already in progress.');
+			return;
+		}
+		this.inFlight.add(pdfPath);
 		try {
 			if (!(await this.sidecar.flush(pdfPath))) {
 				throw new Error('annotations could not be flushed before merge');
@@ -67,6 +73,8 @@ export class MergeService {
 				`Jot: merge failed — ${error instanceof Error ? error.message : 'see console'}`,
 				8000,
 			);
+		} finally {
+			this.inFlight.delete(pdfPath);
 		}
 	}
 
