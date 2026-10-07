@@ -253,6 +253,93 @@ describe('JotNoteSurface', () => {
 		expect(disconnect).toHaveBeenCalledTimes(1);
 	});
 
+	it('can keep a hybrid page unmounted until it intersects and enforce a smaller zoom budget', () => {
+		let callback: IntersectionObserverCallback = () => {};
+		const observe = vi.fn();
+		const disconnect = vi.fn();
+		class IntersectionObserverMock {
+			constructor(cb: IntersectionObserverCallback) {
+				callback = cb;
+			}
+			observe = observe;
+			unobserve = vi.fn();
+			disconnect = disconnect;
+			takeRecords = vi.fn(() => []);
+			root = null;
+			rootMargin = '50% 0px 50% 0px';
+			thresholds = [0];
+		}
+		Object.defineProperty(window, 'IntersectionObserver', {
+			value: IntersectionObserverMock,
+			configurable: true,
+			writable: true,
+		});
+
+		const viewport = document.createElement('div');
+		const host = document.createElement('div');
+		viewport.appendChild(host);
+		document.body.appendChild(viewport);
+		const wire = vi.fn(() => vi.fn());
+		const surface = new JotNoteSurface(host, new StrokeStore(), wire, {
+			observerRoot: viewport,
+			eagerMountFirstPage: false,
+			rootMargin: '50% 0px 50% 0px',
+			backingStoreLimits: {
+				maxDimension: 3072,
+				maxArea: 4_194_304,
+			},
+		});
+
+		surface.render(createJotNote(), 'notes.pdf');
+		const sheet = host.querySelector<HTMLElement>('.jot-note-sheet')!;
+		sheet.getBoundingClientRect = () =>
+			({
+				x: 0,
+				y: 0,
+				left: 0,
+				top: 0,
+				right: 2400,
+				bottom: 3200,
+				width: 2400,
+				height: 3200,
+				toJSON: () => ({}),
+			});
+
+		expect(observe).toHaveBeenCalledTimes(1);
+		expect(host.querySelectorAll('canvas')).toHaveLength(0);
+		expect(wire).not.toHaveBeenCalled();
+
+		callback(
+			[
+				{
+					target: sheet,
+					isIntersecting: true,
+					intersectionRatio: 1,
+				} as unknown as IntersectionObserverEntry,
+			],
+			{} as IntersectionObserver,
+		);
+
+		const canvases = Array.from(host.querySelectorAll<HTMLCanvasElement>('canvas'));
+		expect(canvases).toHaveLength(2);
+		expect(wire).toHaveBeenCalledTimes(1);
+		for (const canvas of canvases) {
+			expect(canvas.width * canvas.height).toBeLessThanOrEqual(4_194_304);
+		}
+
+		callback(
+			[
+				{
+					target: sheet,
+					isIntersecting: false,
+					intersectionRatio: 0,
+				} as unknown as IntersectionObserverEntry,
+			],
+			{} as IntersectionObserver,
+		);
+		expect(host.querySelectorAll('canvas')).toHaveLength(0);
+	});
+
 	it('caps both notebook canvas backing stores at the iPad-safe area', () => {
 		const host = document.createElement('div');
 		const surface = new JotNoteSurface(host, new StrokeStore(), vi.fn());
