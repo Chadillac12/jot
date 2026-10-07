@@ -70,6 +70,7 @@ verification. It is engineering traceability for Jot; it is not FAA certificatio
 | P-10 | Flatten/export preserves inserted page order, aspect ratio, paper and ink | `MergeService`, `drawPaperOnPdfPage` | PDF transaction tests + release/manual export verification |
 | P-11 | Overwrite removes sidecar/layout only after output PDF verifies | existing `PdfTransactionWriter` + SidecarStore discard | `test/pdf-transaction.test.ts` + manual overwrite verification |
 | P-12 | Paper export work is bounded for pathological persisted dimensions | bounded guide density | build/test gate + code review |
+| P-13 | PDF.js zoom/rebuild mutations never run hybrid layout reconciliation synchronously | source-page sync in mutation callback; 300 ms debounced hybrid repair only when hybrid pages exist | `test/overlay-zoom-recovery.test.ts` |
 
 ## Required release gate
 
