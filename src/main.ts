@@ -664,7 +664,12 @@ export default class JotPlugin extends Plugin {
 
 	private async handleNotebookRename(oldPath: string, newPath: string): Promise<void> {
 		if (!this.notebooks.peek(oldPath)) return;
-		await this.renameNotebookSession(oldPath, newPath);
+		try {
+			await this.renameNotebookSession(oldPath, newPath);
+		} catch (error) {
+			console.error(`${PLUGIN_LOG} notebook rename recovery failed:`, error);
+			new Notice('Jot: notebook rename recovery failed. Unsaved ink remains in memory; keep Obsidian open and resolve storage errors before retrying.', 10000);
+		}
 	}
 
 	async renameNotebookSession(
@@ -695,7 +700,12 @@ export default class JotPlugin extends Plugin {
 
 		const destination = this.notebooks.peek(newPath);
 		if (destination && source !== destination) {
-			if (destination.state.isDirty) await this.preserveNotebookConflict(destination);
+			if (destination.state.isDirty) {
+				const recoveryPath = await this.preserveNotebookConflict(destination);
+				if (!recoveryPath) {
+					throw new Error('Refusing to displace dirty notebook: no durable recovery copy exists.');
+				}
+			}
 			this.clearNotebookRetry(newPath);
 			const displaced = this.notebooks.displace(newPath);
 			displaced?.protectFromPathReplacement(
