@@ -1,7 +1,9 @@
 import { App, DataAdapter, Notice } from 'obsidian';
 import { PDFDocument } from 'pdf-lib';
+import { insertedPageKey } from './jot-file';
+import { ExportChoiceModal, drawPaperOnPdfPage, drawStrokesOnPdfPage } from './merge';
+import type { PdfInsertedPageStore } from './pdf-inserted-page-store';
 import { PdfTransactionWriter } from './pdf-transaction';
-import { ExportChoiceModal, drawStrokesOnPdfPage } from './merge';
 import type { SidecarStore } from './sidecar-store';
 import type { StrokeStore } from './stroke-store';
 import type { UndoHistory } from './undo';
@@ -20,6 +22,7 @@ export class MergeService {
 		private app: App,
 		private adapter: DataAdapter,
 		private strokes: StrokeStore,
+		private insertedPages: PdfInsertedPageStore,
 		private sidecar: SidecarStore,
 		private history: UndoHistory,
 		private callbacks: MergeServiceCallbacks,
@@ -30,8 +33,8 @@ export class MergeService {
 			new Notice('Jot: merge blocked because annotations could not be safely synchronized.');
 			return;
 		}
-		if (!this.strokes.hasFor(pdfPath)) {
-			new Notice('Jot: no notes on this PDF to merge.');
+		if (!this.strokes.hasFor(pdfPath) && !this.insertedPages.hasFor(pdfPath)) {
+			new Notice('Jot: no notes or inserted pages on this PDF to merge.');
 			return;
 		}
 		const copyTarget = await this.uniqueAnnotatedPath(pdfPath);
@@ -82,10 +85,42 @@ export class MergeService {
 			if (strokes.length === 0) continue;
 			drawStrokesOnPdfPage(page, strokes);
 		}
+
+		const inserted = this.insertedPages.all(pdfPath);
+		const groups = new Map<number, typeof inserted>();
+		for (const page of inserted) {
+			const slot = Math.max(0, Math.min(page.slot, pages.length));
+			const group = groups.get(slot) ?? [];
+			group.push(page);
+			groups.set(slot, group);
+		}
+		const slots = [...groups.keys()].sort((a, b) => b - a);
+		for (const slot of slots) {
+			const group = groups.get(slot) ?? [];
+			for (let index = group.length - 1; index >= 0; index--) {
+				const insertedPage = group[index];
+				if (!insertedPage) continue;
+				const reference =
+					pages[Math.max(0, Math.min(pages.length - 1, slot > 0 ? slot - 1 : 0))];
+				if (!reference) continue;
+				const page = pdfDoc.insertPage(slot, [reference.getWidth(), reference.getHeight()]);
+				drawPaperOnPdfPage(
+					page,
+					insertedPage.paper,
+					insertedPage.width,
+					insertedPage.height,
+				);
+				drawStrokesOnPdfPage(
+					page,
+					this.strokes.forKey(insertedPageKey(pdfPath, insertedPage.id)),
+				);
+			}
+		}
+
 		const out = await pdfDoc.save();
 		const buffer = new ArrayBuffer(out.byteLength);
 		new Uint8Array(buffer).set(out);
-		const expectedPages = pages.length;
+		const expectedPages = pages.length + inserted.length;
 
 		const writer = new PdfTransactionWriter(this.adapter);
 		if (choice === 'copy') {
