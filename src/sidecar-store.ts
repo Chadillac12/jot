@@ -1,6 +1,7 @@
 import type { DataAdapter } from 'obsidian';
 import { DocumentSessionManager } from './document-session';
 import { isSupportedVersion, jotPathFor, parseJotText } from './jot-file';
+import { PdfInsertedPageStore } from './pdf-inserted-page-store';
 import type { StrokeStore } from './stroke-store';
 
 const SAVE_DEBOUNCE_MS = 750;
@@ -32,6 +33,7 @@ export class SidecarStore {
 		private strokes: StrokeStore,
 		private sessions: DocumentSessionManager = new DocumentSessionManager(),
 		private callbacks: SidecarStoreCallbacks = {},
+		private insertedPages: PdfInsertedPageStore = new PdfInsertedPageStore(),
 	) {}
 
 	async load(pdfPath: string): Promise<SidecarLoadStatus> {
@@ -43,6 +45,7 @@ export class SidecarStore {
 			if (!(await this.adapter.exists(path))) {
 				this.protectedOriginals.delete(pdfPath);
 				this.strokes.clearFor(pdfPath);
+				this.insertedPages.clear(pdfPath);
 				session.completeLoad();
 				return 'missing';
 			}
@@ -61,7 +64,9 @@ export class SidecarStore {
 			// Parse and validate fully before touching the live StrokeStore.
 			this.protectedOriginals.delete(pdfPath);
 			this.strokes.clearFor(pdfPath);
+			this.insertedPages.clear(pdfPath);
 			this.strokes.populateFromPayload(pdfPath, parsed.pages);
+			this.insertedPages.replace(pdfPath, parsed.insertedPages ?? []);
 			session.completeLoad();
 			return 'loaded';
 		} catch (error) {
@@ -162,8 +167,9 @@ export class SidecarStore {
 			this.protectedOriginals.set(newPdfPath, protectedText);
 		}
 
-		// The PDF path has already changed in the vault. Session identity must
-		// follow that rename even if sidecar migration later fails.
+		// The PDF path has already changed in the vault. In-memory page layout
+		// and session identity must follow even if sidecar migration later fails.
+		this.insertedPages.rekeyDocumentPath(oldPdfPath, newPdfPath);
 		const session = this.sessions.rename(oldPdfPath, newPdfPath);
 		let displacedDestination: string | null = null;
 		let displacedConflictPath: string | null = null;
@@ -236,6 +242,7 @@ export class SidecarStore {
 		this.protectedOriginals.delete(pdfPath);
 		try {
 			if (await this.adapter.exists(path)) await this.transactionalDelete(path);
+			this.insertedPages.clear(pdfPath);
 			this.sessions.drop(pdfPath);
 			return true;
 		} catch (error) {
@@ -253,7 +260,7 @@ export class SidecarStore {
 		if (saveRevision === null) return true;
 
 		const path = jotPathFor(pdfPath);
-		const payload = this.strokes.buildPayload(pdfPath);
+		const payload = this.strokes.buildPayload(pdfPath, this.insertedPages.all(pdfPath));
 		try {
 			const protectedText = this.protectedOriginals.get(pdfPath);
 			if (protectedText !== undefined) {
