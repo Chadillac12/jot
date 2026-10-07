@@ -4,6 +4,8 @@ import {
 	JOT_FORMAT_VERSION,
 	buildJotPayload,
 	dropStrokesForPdf,
+	insertedPageKey,
+	insertedPageStorageId,
 	hasStrokesForPdf,
 	isSidecarPath,
 	isSupportedVersion,
@@ -59,6 +61,10 @@ describe('pageKey and pdfPathFromKey', () => {
 	it('splits on the last separator so paths containing :: survive', () => {
 		expect(documentPathFromKey('a::b.pdf::7')).toBe('a::b.pdf');
 	});
+	it('builds stable storage and document keys for inserted pages', () => {
+		expect(insertedPageStorageId('abc')).toBe('jot:abc');
+		expect(insertedPageKey('a.pdf', 'abc')).toBe('a.pdf::jot:abc');
+	});
 });
 
 describe('parseJotText', () => {
@@ -84,6 +90,56 @@ describe('parseJotText', () => {
 	it('returns the parsed payload for a valid sidecar file', () => {
 		const result = parseJotText(JSON.stringify({ version: 2, pages: { '1': [] } }));
 		expect(result).toEqual({ version: 2, pages: { '1': [] } });
+	});
+
+	it('parses inserted page metadata and ink in sidecar v3', () => {
+		const result = parseJotText(
+			JSON.stringify({
+				version: JOT_FORMAT_VERSION,
+				pages: { '1': [], 'jot:inserted-a': [penStroke('#abc')] },
+				insertedPages: [
+					{
+						id: 'inserted-a',
+						slot: 1,
+						paper: 'grid',
+						width: 1536,
+						height: 2048,
+					},
+				],
+			}),
+		);
+		expect(result?.insertedPages?.[0]).toMatchObject({
+			id: 'inserted-a',
+			slot: 1,
+			paper: 'grid',
+		});
+		expect(result?.pages['jot:inserted-a']).toHaveLength(1);
+	});
+
+	it('rejects orphan inserted-page ink keys', () => {
+		expect(
+			parseJotText(
+				JSON.stringify({
+					version: JOT_FORMAT_VERSION,
+					pages: { 'jot:missing': [] },
+					insertedPages: [],
+				}),
+			),
+		).toBeNull();
+	});
+
+	it('rejects v2 sidecars that claim v3 inserted-page fields', () => {
+		expect(
+			parseJotText(
+				JSON.stringify({
+					version: 2,
+					pages: {},
+					insertedPages: [
+						{ id: 'inserted-a', slot: 1, paper: 'grid', width: 1536, height: 2048 },
+					],
+				}),
+			),
+		).toBeNull();
 	});
 });
 
@@ -156,6 +212,24 @@ describe('buildJotPayload', () => {
 		strokes.clear();
 		strokes.set('a.pdf::1', [penStroke()]);
 		expect(buildJotPayload('a.pdf', strokes)!.version).toBe(JOT_FORMAT_VERSION);
+	});
+
+	it('persists a blank inserted page even before it has ink', () => {
+		strokes.clear();
+		const payload = buildJotPayload('a.pdf', strokes, [
+			{ id: 'inserted-a', slot: 2, paper: 'ruled', width: 1536, height: 2048 },
+		]);
+		expect(payload?.insertedPages).toHaveLength(1);
+		expect(payload?.pages).toEqual({});
+	});
+
+	it('persists inserted-page ink under its stable jot: page id', () => {
+		strokes.clear();
+		strokes.set('a.pdf::jot:inserted-a', [penStroke()]);
+		const payload = buildJotPayload('a.pdf', strokes, [
+			{ id: 'inserted-a', slot: 2, paper: 'ruled', width: 1536, height: 2048 },
+		]);
+		expect(payload?.pages['jot:inserted-a']).toHaveLength(1);
 	});
 });
 
