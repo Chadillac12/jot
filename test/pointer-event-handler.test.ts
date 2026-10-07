@@ -46,6 +46,7 @@ function makeContext(): CanvasRenderingContext2D {
 function makeHarness(
 	activation: PaletteActivation = 'pencil-double-tap-hold',
 	pointerCaptureFails = false,
+	allowInput?: () => boolean,
 ): Harness {
 	const canvas = document.createElement('canvas');
 	canvas.setAttribute('data-jot-key', 'notes.pdf::1');
@@ -98,6 +99,7 @@ function makeHarness(
 		toolState: () => ({ tool: 'pen', color: '#000000', width: 0.0025 }),
 		handedness: () => 'right',
 		paletteActivation: () => currentActivation.value,
+		allowInput,
 	}).attach();
 
 	return { canvas, palette, strokes, sidecar, undo, activation: currentActivation };
@@ -151,6 +153,18 @@ describe('PointerEventHandler palette activation', () => {
 
 		expect(start).not.toHaveBeenCalled();
 		expect(document.querySelector('.jot-hold-indicator')).toBeNull();
+	});
+
+	it('does not accept Pencil input while a persisted annotation file is protected', () => {
+		let allowed = false;
+		const { canvas, strokes } = makeHarness('pencil-double-tap-hold', false, () => allowed);
+		pointer(canvas, 'pointerdown', 'pen', 1, 20, 20);
+		pointer(canvas, 'pointerup', 'pen', 1, 20, 20);
+		expect(strokes.forKey('notes.pdf::1')).toHaveLength(0);
+		allowed = true;
+		pointer(canvas, 'pointerdown', 'pen', 2, 30, 30);
+		pointer(canvas, 'pointerup', 'pen', 2, 30, 30);
+		expect(strokes.forKey('notes.pdf::1')).toHaveLength(1);
 	});
 
 	it('continues writing when WKWebView pointer capture fails', () => {
