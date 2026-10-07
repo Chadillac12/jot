@@ -1,5 +1,9 @@
 export class App {}
 
+export class Notice {
+	constructor(_message: string, _timeout?: number) {}
+}
+
 export class ColorComponent {}
 
 export class PluginSettingTab {
