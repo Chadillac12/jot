@@ -2,6 +2,7 @@ import type { DataAdapter } from 'obsidian';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DocumentSessionManager } from '../src/document-session';
 import { JOT_FORMAT_VERSION } from '../src/jot-file';
+import { PdfInsertedPageStore } from '../src/pdf-inserted-page-store';
 import { SidecarStore } from '../src/sidecar-store';
 import { StrokeStore } from '../src/stroke-store';
 
@@ -77,11 +78,18 @@ function makeStore(fs = makeFs()) {
 	const sessions = new DocumentSessionManager();
 	const onSaveError = vi.fn();
 	const onSaveRecovered = vi.fn();
-	const store = new SidecarStore(fs.adapter, strokes, sessions, {
-		onSaveError,
-		onSaveRecovered,
-	});
-	return { fs, strokes, sessions, store, onSaveError, onSaveRecovered };
+	const insertedPages = new PdfInsertedPageStore();
+	const store = new SidecarStore(
+		fs.adapter,
+		strokes,
+		sessions,
+		{
+			onSaveError,
+			onSaveRecovered,
+		},
+		insertedPages,
+	);
+	return { fs, strokes, sessions, insertedPages, store, onSaveError, onSaveRecovered };
 }
 
 describe('SidecarStore session loading', () => {
@@ -102,6 +110,23 @@ describe('SidecarStore session loading', () => {
 		expect(h.strokes.forPage('a.pdf', 1)[0]?.color).toBe('#00ff00');
 	});
 
+	it('loads inserted Jot pages and their ink from sidecar v3', async () => {
+		const payload = JSON.stringify({
+			version: JOT_FORMAT_VERSION,
+			pages: { 'jot:inserted-a': [stroke('#abcdef')] },
+			insertedPages: [
+				{ id: 'inserted-a', slot: 1, paper: 'grid', width: 1536, height: 2048 },
+			],
+		});
+		const h = makeStore(makeFs({ 'a.pdf.jot.json': payload }));
+
+		expect(await h.store.load('a.pdf')).toBe('loaded');
+		expect(h.insertedPages.all('a.pdf')).toEqual([
+			{ id: 'inserted-a', slot: 1, paper: 'grid', width: 1536, height: 2048 },
+		]);
+		expect(h.strokes.forKey('a.pdf::jot:inserted-a')[0]?.color).toBe('#abcdef');
+	});
+
 	it('protects malformed sidecars without clearing current memory', async () => {
 		const h = makeStore(makeFs({ 'a.pdf.jot.json': '{bad' }));
 		h.strokes.setForKey('a.pdf::1', [stroke('#112233')]);
@@ -115,6 +140,21 @@ describe('SidecarStore session loading', () => {
 describe('SidecarStore lifecycle persistence', () => {
 	beforeEach(() => vi.useFakeTimers());
 	afterEach(() => vi.useRealTimers());
+
+	it('persists an inserted blank Jot page even before ink is added', async () => {
+		const h = makeStore();
+		h.insertedPages.add('a.pdf', 2, 'ruled');
+		h.store.scheduleSave('a.pdf');
+		await vi.advanceTimersByTimeAsync(750);
+
+		const saved = JSON.parse(h.fs.files['a.pdf.jot.json'] ?? '{}') as {
+			version?: number;
+			insertedPages?: Array<{ slot: number; paper: string }>;
+		};
+		expect(saved.version).toBe(JOT_FORMAT_VERSION);
+		expect(saved.insertedPages).toHaveLength(1);
+		expect(saved.insertedPages?.[0]).toMatchObject({ slot: 2, paper: 'ruled' });
+	});
 
 	it('debounces edits but transactionally commits after the quiet period', async () => {
 		const h = makeStore();
@@ -187,6 +227,20 @@ describe('SidecarStore lifecycle persistence', () => {
 		await Promise.all([first, second]);
 		expect(h.fs.files['a.pdf.jot.json']).toContain('#222222');
 		expect(h.sessions.get('a.pdf').state).toBe('clean');
+	});
+
+	it('keeps the sidecar when strokes are cleared but inserted pages remain', async () => {
+		const h = makeStore();
+		h.insertedPages.add('a.pdf', 0, 'grid');
+		h.strokes.setForKey('a.pdf::1', [stroke()]);
+		h.store.scheduleSave('a.pdf');
+		await h.store.flush('a.pdf');
+
+		h.strokes.clearFor('a.pdf');
+		h.store.scheduleSave('a.pdf');
+		await h.store.flush('a.pdf');
+
+		expect(h.fs.files['a.pdf.jot.json']).toContain('"insertedPages"');
 	});
 
 	it('clearing all strokes transactionally removes the sidecar', async () => {
