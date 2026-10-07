@@ -1,12 +1,21 @@
 import { DEFAULT_STROKE_RENDER_PROFILE, type Stroke, type StrokeRenderProfile } from './stroke-math';
 
 export const JOT_SUFFIX = '.jot.json';
-export const JOT_FORMAT_VERSION = 2;
+export const JOT_FORMAT_VERSION = 3;
 export const PAGE_KEY_SEPARATOR = '::';
+
+export interface PdfInsertedPage {
+	id: string;
+	slot: number;
+	paper: 'blank' | 'ruled' | 'grid' | 'dot';
+	width: number;
+	height: number;
+}
 
 export interface JotFileFormat {
 	version: number;
 	pages: Record<string, Stroke[]>;
+	insertedPages?: PdfInsertedPage[];
 }
 
 export function jotPathFor(pdfPath: string): string {
@@ -30,6 +39,14 @@ export function pageKey(pdfPath: string, pageNumber: number): string {
 	return documentPageKey(pdfPath, pageNumber);
 }
 
+export function insertedPageStorageId(id: string): string {
+	return `jot:${id}`;
+}
+
+export function insertedPageKey(pdfPath: string, id: string): string {
+	return documentPageKey(pdfPath, insertedPageStorageId(id));
+}
+
 export function documentPathFromKey(key: string): string | null {
 	const separatorIndex = key.lastIndexOf(PAGE_KEY_SEPARATOR);
 	return separatorIndex < 0 ? null : key.slice(0, separatorIndex);
@@ -46,9 +63,15 @@ export function parseJotText(text: string): JotFileFormat | null {
 		if (!isRecord(parsed)) return null;
 		if (typeof parsed.version !== 'number' || !isRecord(parsed.pages)) return null;
 
+		const insertedPages = parseInsertedPages(parsed.insertedPages);
+		if (insertedPages === null) return null;
+		const insertedIds = new Set(insertedPages.map((page) => insertedPageStorageId(page.id)));
+
 		const pages: Record<string, Stroke[]> = {};
 		for (const [pageId, rawStrokes] of Object.entries(parsed.pages)) {
-			if (!/^\d+$/.test(pageId) || !Array.isArray(rawStrokes)) return null;
+			const isPdfPage = /^\d+$/.test(pageId);
+			const isInsertedPage = insertedIds.has(pageId);
+			if ((!isPdfPage && !isInsertedPage) || !Array.isArray(rawStrokes)) return null;
 			const strokes: Stroke[] = [];
 			for (const rawStroke of rawStrokes) {
 				const stroke = parseStoredStroke(rawStroke);
@@ -57,14 +80,16 @@ export function parseJotText(text: string): JotFileFormat | null {
 			}
 			pages[pageId] = strokes;
 		}
-		return { version: parsed.version, pages };
+		return insertedPages.length > 0
+			? { version: parsed.version, pages, insertedPages }
+			: { version: parsed.version, pages };
 	} catch {
 		return null;
 	}
 }
 
 export function isSupportedVersion(version: number): boolean {
-	return version === JOT_FORMAT_VERSION || version === 1;
+	return version === JOT_FORMAT_VERSION || version === 2 || version === 1;
 }
 
 /**
@@ -145,6 +170,7 @@ export function dropStrokesForPdf(pdfPath: string, strokesByKey: Map<string, Str
 export function buildJotPayload(
 	pdfPath: string,
 	strokesByKey: Map<string, Stroke[]>,
+	insertedPages: PdfInsertedPage[] = [],
 ): JotFileFormat | null {
 	const prefix = pdfPath + PAGE_KEY_SEPARATOR;
 	const pages: Record<string, Stroke[]> = {};
@@ -153,8 +179,39 @@ export function buildJotPayload(
 		if (strokes.length === 0) continue;
 		pages[key.slice(prefix.length)] = strokes;
 	}
-	if (Object.keys(pages).length === 0) return null;
-	return { version: JOT_FORMAT_VERSION, pages };
+	if (Object.keys(pages).length === 0 && insertedPages.length === 0) return null;
+	return insertedPages.length > 0
+		? { version: JOT_FORMAT_VERSION, pages, insertedPages: insertedPages.map((page) => ({ ...page })) }
+		: { version: JOT_FORMAT_VERSION, pages };
+}
+
+function parseInsertedPages(value: unknown): PdfInsertedPage[] | null {
+	if (value === undefined) return [];
+	if (!Array.isArray(value) || value.length > 500) return null;
+	const pages: PdfInsertedPage[] = [];
+	const ids = new Set<string>();
+	for (const raw of value) {
+		if (!isRecord(raw)) return null;
+		const { id, slot, paper, width, height } = raw;
+		if (
+			typeof id !== 'string' ||
+			id.length === 0 ||
+			id.length > 128 ||
+			id.includes(PAGE_KEY_SEPARATOR) ||
+			ids.has(id)
+		) {
+			return null;
+		}
+		if (!Number.isInteger(slot) || (slot as number) < 0 || (slot as number) > 100_000) return null;
+		if (paper !== 'blank' && paper !== 'ruled' && paper !== 'grid' && paper !== 'dot') return null;
+		if (!isFiniteNumber(width) || !isFiniteNumber(height) || width <= 0 || height <= 0) return null;
+		if (width > 100_000 || height > 100_000) return null;
+		const aspect = width / height;
+		if (aspect < 0.05 || aspect > 20) return null;
+		ids.add(id);
+		pages.push({ id, slot, paper, width, height });
+	}
+	return pages;
 }
 
 function parseRenderProfile(value: unknown): StrokeRenderProfile | null {
