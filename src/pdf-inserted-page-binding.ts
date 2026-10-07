@@ -1,5 +1,10 @@
 import { JOT_NOTE_FORMAT_VERSION, type JotNoteFile } from './jot-note-file';
-import { insertedPageKey, insertedPageStorageId, type PdfInsertedPage } from './jot-file';
+import {
+	documentPathFromKey,
+	insertedPageKey,
+	insertedPageStorageId,
+	type PdfInsertedPage,
+} from './jot-file';
 import { JotNoteSurface } from './jot-note-surface';
 import type { Stroke } from './stroke-math';
 import type { StrokeStore } from './stroke-store';
@@ -77,7 +82,7 @@ export class PdfInsertedPageBinding {
 			page.width !== this.page.width || page.height !== this.page.height;
 		if (dimensionsChanged) {
 			this.page = { ...page };
-			this.surface.render(this.asNotebook(), this.documentPathFromKey());
+			this.surface.render(this.asNotebook(), documentPathFromKey(this.key) ?? this.key);
 		} else if (page.paper !== this.page.paper) {
 			this.surface.setPaperStyle(page.paper);
 			this.page = { ...page };
@@ -144,12 +149,6 @@ export class PdfInsertedPageBinding {
 		}
 		const explicitWidth = reference.style.width;
 		if (explicitWidth) this.root.style.width = explicitWidth;
-	}
-
-	private documentPathFromKey(): string {
-		const marker = '::jot:';
-		const index = this.key.lastIndexOf(marker);
-		return index >= 0 ? this.key.slice(0, index) : this.key;
 	}
 
 	private asNotebook(): JotNoteFile {
