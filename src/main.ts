@@ -67,8 +67,8 @@ export default class JotPlugin extends Plugin {
 		this.overlays = new OverlayManager(
 			this.app,
 			this.strokes,
-			this.insertedPdfPages,
 			(canvas) => this.wirePointerEvents(canvas),
+			this.insertedPdfPages,
 			{
 				onInsertedPagePaperChange: (pdfPath, pageId, paper) => {
 					if (!this.insertedPdfPages.updatePaper(pdfPath, pageId, paper)) return;
