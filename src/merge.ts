@@ -34,6 +34,17 @@ export function drawStrokesOnPdfPage(page: PDFPage, strokes: Stroke[]) {
 		const color = rgb(c.r, c.g, c.b);
 		if (stroke.tool === 'highlighter') {
 			const thickness = baseWidth * HIGHLIGHTER_WIDTH_FACTOR;
+			if (stroke.points.length === 1) {
+				const point = stroke.points[0]!;
+				page.drawCircle({
+					x: point.x * pageW,
+					y: pageH - point.y * pageH,
+					size: thickness / 2,
+					color,
+					opacity: HIGHLIGHTER_ALPHA,
+				});
+				continue;
+			}
 			for (let i = 1; i < stroke.points.length; i++) {
 				const a = stroke.points[i - 1];
 				const b = stroke.points[i];
@@ -65,6 +76,62 @@ export function drawStrokesOnPdfPage(page: PDFPage, strokes: Stroke[]) {
 				color,
 				opacity: 1,
 			});
+		}
+	}
+}
+
+export function drawPaperOnPdfPage(
+	page: PDFPage,
+	paper: 'blank' | 'ruled' | 'grid' | 'dot',
+	sourceWidth = 1536,
+	sourceHeight = 2048,
+): void {
+	if (paper === 'blank') return;
+	const pageW = page.getWidth();
+	const pageH = page.getHeight();
+	const xSpacing = pageW * (64 / sourceWidth);
+	const ySpacing = pageH * (64 / sourceHeight);
+	const guide = rgb(63 / 255, 99 / 255, 148 / 255);
+
+	if (paper === 'ruled' || paper === 'grid') {
+		const opacity = paper === 'grid' ? 0.14 : 0.18;
+		for (let y = pageH - ySpacing; y > 0; y -= ySpacing) {
+			page.drawLine({
+				start: { x: 0, y },
+				end: { x: pageW, y },
+				thickness: 0.6,
+				color: guide,
+				opacity,
+			});
+		}
+	}
+
+	if (paper === 'grid') {
+		for (let x = xSpacing; x < pageW; x += xSpacing) {
+			page.drawLine({
+				start: { x, y: 0 },
+				end: { x, y: pageH },
+				thickness: 0.6,
+				color: guide,
+				opacity: 0.14,
+			});
+		}
+		return;
+	}
+
+	if (paper === 'dot') {
+		const dot = rgb(63 / 255, 78 / 255, 102 / 255);
+		const radius = Math.max(0.4, Math.min(1.2, pageW * (1.2 / sourceWidth)));
+		for (let y = pageH - ySpacing; y > 0; y -= ySpacing) {
+			for (let x = xSpacing; x < pageW; x += xSpacing) {
+				page.drawCircle({
+					x,
+					y,
+					size: radius,
+					color: dot,
+					opacity: 0.32,
+				});
+			}
 		}
 	}
 }
