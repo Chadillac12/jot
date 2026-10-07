@@ -54,7 +54,8 @@ export class OverlayManager {
 		let binding = this.leaves.get(leaf);
 		if (!binding) {
 			let created!: LeafBinding;
-			const observer = new MutationObserver(() => {
+			const observer = new MutationObserver((records) => {
+				if (!this.mutationsNeedPdfSync(records)) return;
 				const currentPath = this.filePathForLeaf(leaf);
 				if (!currentPath) return;
 				this.syncLeaf(created, currentPath);
@@ -320,6 +321,21 @@ export class OverlayManager {
 			gap.remove();
 			binding.gaps.delete(slot);
 		}
+	}
+
+	private mutationsNeedPdfSync(records: MutationRecord[]): boolean {
+		for (const record of records) {
+			const target = record.target;
+			if (!(target instanceof Element)) return true;
+			if (
+				target.closest('.jot-pdf-inserted-page') ||
+				target.closest('.jot-pdf-inserted-gap')
+			) {
+				continue;
+			}
+			return true;
+		}
+		return false;
 	}
 
 	private pdfPageElements(container: HTMLElement): HTMLElement[] {
