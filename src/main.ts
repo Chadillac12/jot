@@ -31,6 +31,9 @@ export default class JotPlugin extends Plugin {
 	private notebooks = new NotebookSessionManager(this.sessions);
 	private insertedPdfPages = new PdfInsertedPageStore();
 	private lastActivePdfPath: string | null = null;
+	private pdfOpenGeneration = 0;
+	private pdfAttachTimer: number | null = null;
+	private pluginUnloading = false;
 	private notebookRetryTimers = new Map<string, number>();
 	private notebookConflictRecoveries = new Map<string, number>();
 	private notebookRenameChain: Promise<void> = Promise.resolve();
@@ -236,6 +239,8 @@ export default class JotPlugin extends Plugin {
 
 		this.registerEvent(
 			this.app.workspace.on('file-open', async (file: TFile | null) => {
+				const generation = ++this.pdfOpenGeneration;
+				this.cancelDelayedPdfAttach();
 				const nextPdf = file?.extension === 'pdf' ? file.path : null;
 				this.diagnostics.record('workspace.file-open', {
 					path: file?.path ?? null,
@@ -246,13 +251,19 @@ export default class JotPlugin extends Plugin {
 				if (this.lastActivePdfPath && this.lastActivePdfPath !== nextPdf) {
 					await this.sidecar.flush(this.lastActivePdfPath);
 				}
+				if (this.pluginUnloading || generation !== this.pdfOpenGeneration) return;
 				this.lastActivePdfPath = nextPdf;
 				if (!nextPdf) {
 					this.refreshFloatingPaletteButton();
 					return;
 				}
 				await this.ensureLoaded(nextPdf);
-				window.setTimeout(() => {
+				if (this.pluginUnloading || generation !== this.pdfOpenGeneration) return;
+				const timerWindow = this.app.workspace.containerEl.ownerDocument.defaultView ?? window;
+				this.pdfAttachTimer = timerWindow.setTimeout(() => {
+					this.pdfAttachTimer = null;
+					if (this.pluginUnloading || generation !== this.pdfOpenGeneration) return;
+					if (this.overlays.getActivePdfFilePath() !== nextPdf) return;
 					this.overlays.attachToActivePdf();
 					this.refreshFloatingPaletteButton();
 				}, 300);
@@ -350,13 +361,18 @@ export default class JotPlugin extends Plugin {
 				this.refreshFloatingPaletteButton();
 				return;
 			}
+			const generation = this.pdfOpenGeneration;
 			await this.ensureLoaded(filePath);
+			if (this.pluginUnloading || generation !== this.pdfOpenGeneration) return;
 			this.overlays.attachToActivePdf();
 			this.refreshFloatingPaletteButton();
 		});
 	}
 
 	onunload() {
+		this.pluginUnloading = true;
+		this.pdfOpenGeneration += 1;
+		this.cancelDelayedPdfAttach();
 		// Obsidian's unload hook is synchronous, so this is a best-effort final
 		// flush. Normal file switches, visibility loss, page hide, renames, merges,
 		// and notebook closes flush before the lifecycle transition itself.
@@ -426,6 +442,12 @@ export default class JotPlugin extends Plugin {
 			const file = this.app.vault.getAbstractFileByPath(session.path);
 			if (file instanceof TFile) void this.saveNotebookSession(file, session);
 		}
+	}
+
+	private cancelDelayedPdfAttach(): void {
+		if (this.pdfAttachTimer === null) return;
+		(this.app.workspace.containerEl.ownerDocument.defaultView ?? window).clearTimeout(this.pdfAttachTimer);
+		this.pdfAttachTimer = null;
 	}
 
 	private async ensureLoaded(pdfPath: string): Promise<SidecarLoadStatus> {
