@@ -174,11 +174,14 @@ export function buildJotPayload(
 	insertedPages: PdfInsertedPage[] = [],
 ): JotFileFormat | null {
 	const prefix = pdfPath + PAGE_KEY_SEPARATOR;
+	const insertedIds = new Set(insertedPages.map((page) => insertedPageStorageId(page.id)));
 	const pages: Record<string, Stroke[]> = {};
 	for (const [key, strokes] of strokesByKey.entries()) {
 		if (!key.startsWith(prefix)) continue;
 		if (strokes.length === 0) continue;
-		pages[key.slice(prefix.length)] = strokes;
+		const pageId = key.slice(prefix.length);
+		if (!/^\d+$/.test(pageId) && !insertedIds.has(pageId)) continue;
+		pages[pageId] = strokes;
 	}
 	if (Object.keys(pages).length === 0 && insertedPages.length === 0) return null;
 	return insertedPages.length > 0
