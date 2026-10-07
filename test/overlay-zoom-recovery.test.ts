@@ -227,6 +227,11 @@ describe('OverlayManager zoom recovery', () => {
 			expect(page.querySelector('canvas.jot-live-overlay')).toBeNull();
 			expect(wire).toHaveBeenCalledTimes(1);
 
+			await vi.advanceTimersByTimeAsync(100);
+			page.appendChild(document.createElement('div'));
+			await flushMutations();
+
+			// The recovery delay restarts after additional PDF.js child churn.
 			await vi.advanceTimersByTimeAsync(149);
 			expect(page.querySelector('canvas.jot-live-overlay')).toBeNull();
 
@@ -336,7 +341,7 @@ describe('OverlayManager zoom recovery', () => {
 		});
 
 		const container = document.createElement('div');
-		for (let i = 1; i <= 5; i++) {
+		for (let i = 1; i <= 53; i++) {
 			const page = document.createElement('div');
 			page.className = 'page';
 			page.setAttribute('data-page-number', String(i));
@@ -363,17 +368,20 @@ describe('OverlayManager zoom recovery', () => {
 
 		manager.attachToActivePdf();
 
-		expect(IntersectionObserverVirtualizationMock.instances).toHaveLength(5);
+		expect(IntersectionObserverVirtualizationMock.instances).toHaveLength(53);
 		expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(0);
 		expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(0);
 
 		IntersectionObserverVirtualizationMock.instances[1]?.fire(true);
-		expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(1);
-		expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(1);
-		expect(wire).toHaveBeenCalledTimes(1);
+		IntersectionObserverVirtualizationMock.instances[2]?.fire(true);
+		IntersectionObserverVirtualizationMock.instances[3]?.fire(true);
+		expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(3);
+		expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(3);
+		expect(wire).toHaveBeenCalledTimes(3);
 
-		const activePersistent = container.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
-		const activeLive = container.querySelector<HTMLCanvasElement>('canvas.jot-live-overlay');
+		const secondPage = container.querySelector<HTMLElement>('[data-page-number="2"]')!;
+		const activePersistent = secondPage.querySelector<HTMLCanvasElement>('canvas.jot-overlay');
+		const activeLive = secondPage.querySelector<HTMLCanvasElement>('canvas.jot-live-overlay');
 		expect((activePersistent?.width ?? 0) * (activePersistent?.height ?? 0)).toBeLessThanOrEqual(
 			2_500_000,
 		);
@@ -386,6 +394,11 @@ describe('OverlayManager zoom recovery', () => {
 		expect(activePersistent?.height).toBe(1);
 		expect(activeLive?.width).toBe(1);
 		expect(activeLive?.height).toBe(1);
+		expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(2);
+		expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(2);
+
+		IntersectionObserverVirtualizationMock.instances[2]?.fire(false);
+		IntersectionObserverVirtualizationMock.instances[3]?.fire(false);
 		expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(0);
 		expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(0);
 	});
