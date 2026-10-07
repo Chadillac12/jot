@@ -99,7 +99,11 @@ page roots into gap containers between PDF.js page elements. Each hybrid page is
 same `JotNoteSurface` used for standalone notebooks, so paper rendering, Pencil input, backing
 store limits, deterministic stroke rendering, and page virtualization have one implementation.
 Hybrid surfaces use the PDF view as their IntersectionObserver root so offscreen inserted pages
-release their canvas backing stores.
+release their canvas backing stores. While mounted, hybrid canvases use a fixed logical backing
+store derived from the inserted page dimensions and a conservative memory budget; PDF zoom changes
+only their CSS display size. The backing-store width/height therefore never churn during a zoom
+gesture, eliminating repeated WebKit canvas allocation pressure while preserving normalized Pencil
+coordinates.
 
 PDF.js page elements remain authoritative for source page numbering; inserted pages never receive
 the PDF.js `.page` class and never renumber source pages.
