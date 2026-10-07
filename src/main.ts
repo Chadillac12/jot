@@ -94,7 +94,10 @@ export default class JotPlugin extends Plugin {
 					const status = await this.ensureLoaded(pdfPath);
 					return status === 'loaded' || status === 'missing';
 				},
-				redrawOverlays: () => this.overlays.redrawOverlaysForActivePdf(),
+				refreshOverlays: (pdfPath) => {
+					this.overlays.refreshPdf(pdfPath);
+					this.overlays.redrawOverlaysForPdf(pdfPath);
+				},
 			},
 		);
 		this.registerView(
