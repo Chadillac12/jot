@@ -77,7 +77,9 @@ export class OverlayManager {
 			this.leaves.set(leaf, binding);
 		}
 		this.syncPdfPages(binding, filePath);
-		this.syncInsertedPages(binding, filePath);
+		if (this.needsInsertedPageSync(binding, filePath)) {
+			this.syncInsertedPages(binding, filePath);
+		}
 	}
 
 	refreshPdf(pdfPath: string): void {
@@ -85,7 +87,9 @@ export class OverlayManager {
 			if (this.filePathForLeaf(leaf) !== pdfPath) continue;
 			this.cancelInsertedPageSync(binding);
 			this.syncPdfPages(binding, pdfPath);
-			this.syncInsertedPages(binding, pdfPath);
+			if (this.needsInsertedPageSync(binding, pdfPath)) {
+				this.syncInsertedPages(binding, pdfPath);
+			}
 		}
 	}
 
@@ -197,7 +201,7 @@ export class OverlayManager {
 		binding: LeafBinding,
 		pdfPath: string,
 	): void {
-		if (!this.insertedPageStore.hasFor(pdfPath)) return;
+		if (!this.needsInsertedPageSync(binding, pdfPath)) return;
 		const win = binding.container.ownerDocument.defaultView;
 		if (!win) return;
 		if (binding.insertedSyncTimer !== null) {
@@ -206,7 +210,7 @@ export class OverlayManager {
 		binding.insertedSyncTimer = win.setTimeout(() => {
 			binding.insertedSyncTimer = null;
 			const currentPath = this.filePathForLeaf(leaf);
-			if (!currentPath || !this.insertedPageStore.hasFor(currentPath)) return;
+			if (!currentPath || !this.needsInsertedPageSync(binding, currentPath)) return;
 			this.syncInsertedPages(binding, currentPath);
 		}, 300);
 	}
@@ -215,6 +219,14 @@ export class OverlayManager {
 		if (binding.insertedSyncTimer === null) return;
 		binding.container.ownerDocument.defaultView?.clearTimeout(binding.insertedSyncTimer);
 		binding.insertedSyncTimer = null;
+	}
+
+	private needsInsertedPageSync(binding: LeafBinding, pdfPath: string): boolean {
+		return (
+			this.insertedPageStore.hasFor(pdfPath) ||
+			binding.insertedPages.size > 0 ||
+			binding.gaps.size > 0
+		);
 	}
 
 	private syncPdfPages(binding: LeafBinding, filePath: string): void {
