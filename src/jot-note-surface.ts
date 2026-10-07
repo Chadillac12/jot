@@ -22,6 +22,8 @@ const PAPER_CLASS = 'jot-note-paper';
 const PERSISTENT_CLASS = 'jot-note-ink';
 const LIVE_CLASS = 'jot-note-live-ink';
 const CANVAS_ERROR_CLASS = 'jot-note-canvas-error';
+const LIVE_DORMANT_CLASS = 'jot-note-live-dormant';
+const DEACTIVATION_GRACE_MS = 750;
 
 export interface JotNoteSurfaceOptions {
 	observerRoot?: Element;
@@ -29,6 +31,7 @@ export interface JotNoteSurfaceOptions {
 	rootMargin?: string;
 	backingStoreLimits?: CanvasBackingStoreLimits;
 	fixedLogicalBackingStore?: boolean;
+	deactivationGraceMs?: number;
 	diagnostics?: DiagnosticSink;
 }
 
@@ -41,6 +44,12 @@ interface NotebookPageMount {
 	live: HTMLCanvasElement | null;
 	resizeObserver: ResizeObserver | null;
 	resizeFrame: number | null;
+	deactivationTimer: number | null;
+	retryTimer: number | null;
+	nearViewport: boolean;
+	pointerActive: boolean;
+	onPointerDown: (event: PointerEvent) => void;
+	onPointerEnd: (event: PointerEvent) => void;
 	painted: boolean;
 	disposeInput: (() => void) | null;
 	errorEl: HTMLElement | null;
@@ -101,7 +110,7 @@ export class JotNoteSurface implements InkSurfaceController {
 	disconnect(): void {
 		this.intersectionObserver?.disconnect();
 		this.intersectionObserver = null;
-		for (const sheet of [...this.pageMounts.keys()]) this.unmountPage(sheet);
+		for (const sheet of [...this.pageMounts.keys()]) this.unmountPage(sheet, true);
 		this.pageMounts.clear();
 	}
 
@@ -158,13 +167,22 @@ export class JotNoteSurface implements InkSurfaceController {
 							key: this.pageMounts.get(sheet)?.key ?? null,
 							ratio: entry.intersectionRatio,
 						});
+						const mount = this.pageMounts.get(sheet);
+						if (mount) {
+							mount.nearViewport = true;
+							this.cancelDeactivation(mount);
+						}
 						this.mountPage(sheet);
 					} else {
 						this.diagnostics().record('jot-surface.intersection-unmount', {
 							key: this.pageMounts.get(sheet)?.key ?? null,
 							ratio: entry.intersectionRatio,
 						});
-						this.unmountPage(sheet);
+						const mount = this.pageMounts.get(sheet);
+						if (mount) {
+							mount.nearViewport = false;
+							this.scheduleDeactivation(mount);
+						}
 					}
 				}
 			},
@@ -219,12 +237,28 @@ export class JotNoteSurface implements InkSurfaceController {
 			live: null,
 			resizeObserver: null,
 			resizeFrame: null,
+			deactivationTimer: null,
+			retryTimer: null,
+			nearViewport: false,
+			pointerActive: false,
+			onPointerDown: (event) => {
+				if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
+				mount.pointerActive = true;
+				this.cancelDeactivation(mount);
+				this.mountPage(sheet);
+			},
+			onPointerEnd: (event) => {
+				if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
+				mount.pointerActive = false;
+				if (!mount.nearViewport) this.scheduleDeactivation(mount);
+			},
 			painted: false,
 			disposeInput: null,
 			errorEl: null,
 		};
 		this.pageMounts.set(sheet, mount);
 		this.host.appendChild(wrapper);
+		this.ensureInputTarget(mount);
 
 		if (this.intersectionObserver) {
 			this.intersectionObserver.observe(sheet);
@@ -238,7 +272,7 @@ export class JotNoteSurface implements InkSurfaceController {
 
 	private mountPage(sheet: HTMLElement): void {
 		const mount = this.pageMounts.get(sheet);
-		if (!mount || mount.persistent || mount.live) return;
+		if (!mount || mount.persistent) return;
 		this.diagnostics().record('jot-surface.mount-page', {
 			key: mount.key,
 			sourceWidth: mount.sourceWidth,
@@ -248,23 +282,25 @@ export class JotNoteSurface implements InkSurfaceController {
 
 		const doc = sheet.ownerDocument;
 		const persistent = this.makeCanvas(doc, PERSISTENT_CLASS, mount.key);
-		const live = this.makeCanvas(doc, LIVE_CLASS, mount.key);
-		sheet.appendChild(persistent);
-		sheet.appendChild(live);
+		this.ensureInputTarget(mount);
+		const live = mount.live;
+		if (!live) return;
+		sheet.insertBefore(persistent, live);
 		mount.persistent = persistent;
-		mount.live = live;
 
 		const persistentCtx = persistent.getContext('2d');
 		const liveCtx = live.getContext('2d');
 		if (!persistentCtx || !liveCtx) {
+			this.releaseCanvas(persistent);
+			mount.persistent = null;
 			this.showCanvasUnavailable(mount);
+			this.scheduleContextRetry(mount);
 			return;
 		}
 		mount.errorEl?.remove();
 		mount.errorEl = null;
 
-		const disposeInput = this.wireOverlay(live);
-		mount.disposeInput = disposeInput ?? null;
+		live.classList.remove(LIVE_DORMANT_CLASS);
 
 		const applyResize = () => {
 			if (!mount.persistent || !mount.live) return;
@@ -303,9 +339,66 @@ export class JotNoteSurface implements InkSurfaceController {
 		scheduleResize();
 	}
 
-	private unmountPage(sheet: HTMLElement): void {
+	private ensureInputTarget(mount: NotebookPageMount): void {
+		if (mount.live) return;
+		const canvas = this.makeCanvas(mount.sheet.ownerDocument, LIVE_CLASS, mount.key);
+		mount.live = canvas;
+		mount.sheet.appendChild(canvas);
+		canvas.addEventListener('pointerdown', mount.onPointerDown, true);
+		for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+			canvas.addEventListener(event, mount.onPointerEnd, true);
+		}
+		const ctx = canvas.getContext('2d');
+		if (ctx) mount.disposeInput = this.wireOverlay(canvas) ?? null;
+		else this.showCanvasUnavailable(mount);
+		this.makeInputDormant(mount);
+	}
+
+	private makeInputDormant(mount: NotebookPageMount): void {
+		const live = mount.live;
+		if (!live) return;
+		live.width = 1;
+		live.height = 1;
+		live.style.removeProperty('width');
+		live.style.removeProperty('height');
+		live.classList.add(LIVE_DORMANT_CLASS);
+	}
+
+	private scheduleDeactivation(mount: NotebookPageMount): void {
+		if (mount.nearViewport || mount.pointerActive || !mount.persistent) return;
+		this.cancelDeactivation(mount);
+		const win = mount.sheet.ownerDocument.defaultView;
+		if (!win) return;
+		mount.deactivationTimer = win.setTimeout(() => {
+			mount.deactivationTimer = null;
+			if (!mount.nearViewport && !mount.pointerActive) this.unmountPage(mount.sheet);
+		}, this.options.deactivationGraceMs ?? DEACTIVATION_GRACE_MS);
+	}
+
+	private cancelDeactivation(mount: NotebookPageMount): void {
+		if (mount.deactivationTimer === null) return;
+		mount.sheet.ownerDocument.defaultView?.clearTimeout(mount.deactivationTimer);
+		mount.deactivationTimer = null;
+	}
+
+	private scheduleContextRetry(mount: NotebookPageMount): void {
+		if (mount.retryTimer !== null) return;
+		const win = mount.sheet.ownerDocument.defaultView;
+		if (!win) return;
+		mount.retryTimer = win.setTimeout(() => {
+			mount.retryTimer = null;
+			if (this.pageMounts.get(mount.sheet) !== mount) return;
+			if (mount.nearViewport || mount.pointerActive) this.mountPage(mount.sheet);
+		}, 1000);
+	}
+
+	private unmountPage(sheet: HTMLElement, final = false): void {
 		const mount = this.pageMounts.get(sheet);
 		if (!mount) return;
+		this.cancelDeactivation(mount);
+		const win = sheet.ownerDocument.defaultView;
+		if (mount.retryTimer !== null) win?.clearTimeout(mount.retryTimer);
+		mount.retryTimer = null;
 		this.diagnostics().record('jot-surface.unmount-page', {
 			key: mount.key,
 			persistentWidth: mount.persistent?.width ?? null,
@@ -313,20 +406,28 @@ export class JotNoteSurface implements InkSurfaceController {
 			liveWidth: mount.live?.width ?? null,
 			liveHeight: mount.live?.height ?? null,
 		});
-		mount.disposeInput?.();
-		mount.disposeInput = null;
 		mount.resizeObserver?.disconnect();
 		mount.resizeObserver = null;
-
-		const win = sheet.ownerDocument.defaultView;
 		if (win && mount.resizeFrame !== null) win.cancelAnimationFrame(mount.resizeFrame);
 		mount.resizeFrame = null;
 		mount.painted = false;
-
 		if (mount.persistent) this.releaseCanvas(mount.persistent);
-		if (mount.live) this.releaseCanvas(mount.live);
 		mount.persistent = null;
-		mount.live = null;
+		if (final) {
+			if (mount.live) {
+				mount.live.removeEventListener('pointerdown', mount.onPointerDown, true);
+				for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+					mount.live.removeEventListener(event, mount.onPointerEnd, true);
+				}
+			}
+			mount.disposeInput?.();
+			mount.disposeInput = null;
+			if (mount.live) this.releaseCanvas(mount.live);
+			mount.live = null;
+			mount.errorEl?.remove();
+		} else {
+			this.makeInputDormant(mount);
+		}
 	}
 
 	private showCanvasUnavailable(mount: NotebookPageMount): void {
@@ -359,6 +460,7 @@ export class JotNoteSurface implements InkSurfaceController {
 	): boolean {
 		const win = sheet.ownerDocument.defaultView ?? window;
 		const requestedDpr = devicePixelRatioFor(win);
+		canvas.classList.remove(LIVE_DORMANT_CLASS);
 
 		if (this.options.fixedLogicalBackingStore) {
 			const effectiveDpr = safeBackingStoreDpr(
