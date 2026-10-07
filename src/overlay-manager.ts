@@ -445,7 +445,10 @@ export class OverlayManager {
 
 	private mutationsTouchPdfPageTopology(records: MutationRecord[]): boolean {
 		for (const record of records) {
-			for (const node of [...record.addedNodes, ...record.removedNodes]) {
+			for (const node of [
+				...Array.from(record.addedNodes),
+				...Array.from(record.removedNodes),
+			]) {
 				if (this.nodeContainsSourcePdfPage(node)) return true;
 			}
 		}
