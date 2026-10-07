@@ -1,5 +1,10 @@
 import type { Stroke } from './stroke-math';
-import { parseStoredStroke } from './jot-file';
+import {
+	MAX_INK_JSON_CHARACTERS,
+	MAX_INK_POINTS_PER_DOCUMENT,
+	MAX_INK_STROKES_PER_DOCUMENT,
+	parseStoredStroke,
+} from './jot-file';
 
 export const JOT_NOTE_EXTENSION = 'jot';
 export const JOT_NOTE_VIEW_TYPE = 'jot-note';
@@ -68,6 +73,9 @@ export function parseJotNoteText(text: string): JotNoteFile | null {
 }
 
 export function parseJotNoteTextResult(text: string): JotNoteParseResult {
+	if (text.length > MAX_INK_JSON_CHARACTERS) {
+		return { ok: false, reason: 'invalid-schema', message: 'This notebook exceeds the mobile-safe ink size budget and was opened read-only.' };
+	}
 	if (text.trim().length === 0) return { ok: true, note: createJotNote() };
 
 	let raw: unknown;
@@ -110,8 +118,21 @@ export function parseJotNoteTextResult(text: string): JotNoteParseResult {
 
 	const pages: JotNotePage[] = [];
 	const ids = new Set<string>();
+	let totalStrokes = 0;
+	let totalPoints = 0;
 	for (let index = 0; index < raw.pages.length; index++) {
-		const page = parsePage(raw.pages[index], index);
+		const rawPage = raw.pages[index];
+		if (!isRecord(rawPage) || !Array.isArray(rawPage.strokes)) return { ok: false, reason: 'invalid-schema', message: 'Invalid notebook page data.' };
+		totalStrokes += rawPage.strokes.length;
+		for (const stroke of rawPage.strokes) {
+			if (!isRecord(stroke) || !Array.isArray(stroke.points)) return { ok: false, reason: 'invalid-schema', message: 'Invalid notebook stroke data.' };
+			totalPoints += stroke.points.length;
+			if (totalPoints > MAX_INK_POINTS_PER_DOCUMENT) break;
+		}
+		if (totalStrokes > MAX_INK_STROKES_PER_DOCUMENT || totalPoints > MAX_INK_POINTS_PER_DOCUMENT) {
+			return { ok: false, reason: 'invalid-schema', message: 'This notebook exceeds the mobile-safe ink resource budget and was opened read-only.' };
+		}
+		const page = parsePage(rawPage, index);
 		if (!page || ids.has(page.id)) {
 			return {
 				ok: false,
