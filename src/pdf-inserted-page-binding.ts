@@ -6,6 +6,10 @@ import {
 	type PdfInsertedPage,
 } from './jot-file';
 import { JotNoteSurface } from './jot-note-surface';
+import {
+	NULL_DIAGNOSTICS,
+	type DiagnosticSink,
+} from './persistent-diagnostics';
 import type { Stroke } from './stroke-math';
 import type { StrokeStore } from './stroke-store';
 
@@ -36,9 +40,18 @@ export class PdfInsertedPageBinding {
 		private callbacks: PdfInsertedPageBindingCallbacks,
 		doc: Document,
 		observerRoot: Element,
+		private diagnostics: DiagnosticSink = NULL_DIAGNOSTICS,
 	) {
 		this.page = { ...page };
 		this.key = insertedPageKey(pdfPath, page.id);
+		this.diagnostics.record('hybrid.binding-create', {
+			pdfPath,
+			pageId: page.id,
+			slot: page.slot,
+			paper: page.paper,
+			width: page.width,
+			height: page.height,
+		});
 		this.root = doc.createElement('section');
 		this.root.className = PDF_INSERTED_PAGE_CLASS;
 		this.root.dataset.jotInsertedPageId = page.id;
@@ -84,6 +97,7 @@ export class PdfInsertedPageBinding {
 			rootMargin: '50% 0px 50% 0px',
 			backingStoreLimits: PDF_INSERTED_BACKING_STORE_LIMITS,
 			fixedLogicalBackingStore: true,
+			diagnostics: this.diagnostics,
 		});
 		this.surface.render(this.asNotebook(), pdfPath);
 	}
@@ -100,12 +114,25 @@ export class PdfInsertedPageBinding {
 		} else {
 			this.page = { ...page };
 		}
+		this.diagnostics.record('hybrid.binding-update', {
+			key: this.key,
+			slot: page.slot,
+			paper: page.paper,
+			width: page.width,
+			height: page.height,
+			dimensionsChanged,
+		});
 		const select = this.root.querySelector<HTMLSelectElement>('.jot-pdf-inserted-paper-select');
 		if (select && select.value !== page.paper) select.value = page.paper;
 	}
 
 	setReferencePage(referencePage: HTMLElement | null): void {
 		if (referencePage === this.referencePage) return;
+		this.diagnostics.record('hybrid.reference-page-change', {
+			key: this.key,
+			fromPage: this.referencePage?.getAttribute('data-page-number') ?? null,
+			toPage: referencePage?.getAttribute('data-page-number') ?? null,
+		});
 		this.referenceObserver?.disconnect();
 		this.referenceObserver = null;
 		this.referencePage = referencePage;
@@ -140,6 +167,7 @@ export class PdfInsertedPageBinding {
 	}
 
 	dispose(): void {
+		this.diagnostics.record('hybrid.binding-dispose', { key: this.key });
 		this.referenceObserver?.disconnect();
 		this.referenceObserver = null;
 		this.referencePage = null;
@@ -152,11 +180,29 @@ export class PdfInsertedPageBinding {
 		if (!reference) return;
 		const rect = reference.getBoundingClientRect();
 		if (rect.width > 0) {
-			this.root.style.width = `${rect.width}px`;
+			const width = `${rect.width}px`;
+			const changed = this.root.style.width !== width;
+			this.root.style.width = width;
+			this.diagnostics.record('hybrid.reference-width-sync', {
+				key: this.key,
+				referencePage: reference.getAttribute('data-page-number'),
+				width: rect.width,
+				height: rect.height,
+				changed,
+			});
 			return;
 		}
 		const explicitWidth = reference.style.width;
-		if (explicitWidth) this.root.style.width = explicitWidth;
+		if (explicitWidth) {
+			const changed = this.root.style.width !== explicitWidth;
+			this.root.style.width = explicitWidth;
+			this.diagnostics.record('hybrid.reference-width-sync', {
+				key: this.key,
+				referencePage: reference.getAttribute('data-page-number'),
+				explicitWidth,
+				changed,
+			});
+		}
 	}
 
 	private asNotebook(): JotNoteFile {
