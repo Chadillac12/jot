@@ -31,6 +31,7 @@ export class PdfInsertedPageBinding {
 		wireOverlay: (canvas: HTMLCanvasElement) => (() => void) | void,
 		private callbacks: PdfInsertedPageBindingCallbacks,
 		doc: Document,
+		observerRoot: Element,
 	) {
 		this.page = { ...page };
 		this.key = insertedPageKey(pdfPath, page.id);
@@ -73,7 +74,7 @@ export class PdfInsertedPageBinding {
 		this.host.className = 'jot-pdf-inserted-host';
 		this.root.appendChild(this.host);
 
-		this.surface = new JotNoteSurface(this.host, strokes, wireOverlay);
+		this.surface = new JotNoteSurface(this.host, strokes, wireOverlay, observerRoot);
 		this.surface.render(this.asNotebook(), pdfPath);
 	}
 
