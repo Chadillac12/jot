@@ -20,9 +20,9 @@ export class PdfInsertedPageBinding {
 	private referenceObserver: ResizeObserver | null = null;
 
 	constructor(
-		private pdfPath: string,
+		pdfPath: string,
 		page: PdfInsertedPage,
-		private strokes: StrokeStore,
+		strokes: StrokeStore,
 		wireOverlay: (canvas: HTMLCanvasElement) => (() => void) | void,
 		private callbacks: PdfInsertedPageBindingCallbacks,
 		doc: Document,
@@ -73,8 +73,19 @@ export class PdfInsertedPageBinding {
 	}
 
 	update(page: PdfInsertedPage): void {
-		if (page.paper !== this.page.paper) this.surface.setPaperStyle(page.paper);
-		this.page = { ...page };
+		const dimensionsChanged =
+			page.width !== this.page.width || page.height !== this.page.height;
+		if (dimensionsChanged) {
+			this.page = { ...page };
+			this.surface.render(this.asNotebook(), this.documentPathFromKey());
+		} else if (page.paper !== this.page.paper) {
+			this.surface.setPaperStyle(page.paper);
+			this.page = { ...page };
+		} else {
+			this.page = { ...page };
+		}
+		const select = this.root.querySelector<HTMLSelectElement>('.jot-pdf-inserted-paper-select');
+		if (select && select.value !== page.paper) select.value = page.paper;
 	}
 
 	setReferencePage(referencePage: HTMLElement | null): void {
@@ -133,6 +144,12 @@ export class PdfInsertedPageBinding {
 		}
 		const explicitWidth = reference.style.width;
 		if (explicitWidth) this.root.style.width = explicitWidth;
+	}
+
+	private documentPathFromKey(): string {
+		const marker = '::jot:';
+		const index = this.key.lastIndexOf(marker);
+		return index >= 0 ? this.key.slice(0, index) : this.key;
 	}
 
 	private asNotebook(): JotNoteFile {
