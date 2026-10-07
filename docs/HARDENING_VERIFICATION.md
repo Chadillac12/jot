@@ -93,6 +93,27 @@ verification. It is engineering traceability for Jot; it is not FAA certificatio
 | D-07 | Disabled diagnostics do not enumerate hybrid layout or perform diagnostic-only PDF DOM scans | `DiagnosticSink.isEnabled` hot-path gates | `test/overlay-zoom-recovery.test.ts` + code review |
 | D-08 | Traces remain local unless explicitly exported | plugin diagnostic storage + explicit copy to vault folder | recorder tests + manual verification |
 
+## iPad.8 hardening verification
+
+| ID | Safety invariant | Regression |
+| --- | --- | --- |
+| H8-01 | A failed PDF sidecar read blocks all writes until a safe reload | `test/sidecar-store.test.ts` |
+| H8-02 | Protected PDF sidecars cannot accept new Pencil strokes | `test/pointer-event-handler.test.ts` |
+| H8-03 | Dormant PDF input hitboxes discard stale inline dimensions | `test/overlay-zoom-recovery.test.ts` |
+| H8-04 | Removing a live PDF canvas mid-pointer does not strand heavy buffers | `test/overlay-zoom-recovery.test.ts` |
+| H8-05 | Hybrid and notebook Pencil hit targets survive zoom/observer false events | `test/jot-note-surface.test.ts` |
+| H8-06 | Standalone notebook input disposer is returned to its surface | `src/jot-note-view.ts` ownership review |
+| H8-07 | Concurrent merges on the same PDF are rejected | `test/merge-concurrency.test.ts` |
+| H8-08 | Failed dirty-notebook recovery cannot lead to session displacement | `src/main.ts` guard and failure review |
+| H8-09 | Huge/corrupt ink data fails safely before unbounded allocation | `test/ink-resource-budget.test.ts` |
+| H8-10 | Delayed PDF observer attachment is cancelled on file transitions/unload | `src/main.ts` generation guard review |
+| H8-11 | Duplicate own-save notifications are ignored, external changed bytes are not | `test/sidecar-store.test.ts` |
+| H8-12 | Normal unawaited unload intent is not classified as a crash | `test/persistent-diagnostics.test.ts` |
+| H8-13 | Failed notebook canvas context creation can retry input attachment | `src/jot-note-surface.ts` recovery review |
+
+The automated checks do not replace real iPad acceptance testing of Pencil, zoom,
+scroll, background/foreground, sidecar sync, PDF merge, and app restart.
+
 ## Required release gate
 
 A candidate is releasable only when the exact versioned commit passes:
