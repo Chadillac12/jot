@@ -13,6 +13,7 @@ import { JotNoteView } from './jot-note-view';
 import { MergeService } from './merge-service';
 import { NotebookExternalConflictError, NotebookSessionManager, type NotebookDocumentSession } from './notebook-session';
 import { OverlayManager } from './overlay-manager';
+import { PdfInsertedPageStore } from './pdf-inserted-page-store';
 import { SidecarStore, type SidecarLoadStatus } from './sidecar-store';
 import { StrokeStore } from './stroke-store';
 import { setInkRenderTuning } from './stroke-render';
@@ -27,6 +28,7 @@ export default class JotPlugin extends Plugin {
 	private strokes = new StrokeStore();
 	private sessions = new DocumentSessionManager();
 	private notebooks = new NotebookSessionManager(this.sessions);
+	private insertedPdfPages = new PdfInsertedPageStore();
 	private lastActivePdfPath: string | null = null;
 	private notebookRetryTimers = new Map<string, number>();
 	private notebookConflictRecoveries = new Map<string, number>();
@@ -60,9 +62,20 @@ export default class JotPlugin extends Plugin {
 					new Notice(`Jot: save recovered for ${path}.`);
 				},
 			},
+			this.insertedPdfPages,
 		);
-		this.overlays = new OverlayManager(this.app, this.strokes, (canvas) =>
-			this.wirePointerEvents(canvas),
+		this.overlays = new OverlayManager(
+			this.app,
+			this.strokes,
+			this.insertedPdfPages,
+			(canvas) => this.wirePointerEvents(canvas),
+			{
+				onInsertedPagePaperChange: (pdfPath, pageId, paper) => {
+					if (!this.insertedPdfPages.updatePaper(pdfPath, pageId, paper)) return;
+					this.sidecar.scheduleSave(pdfPath);
+					this.overlays.refreshPdf(pdfPath);
+				},
+			},
 		);
 		this.undoController = new UndoController(this.history, this.strokes, this.overlays, {
 			activeDocumentPath: () => this.overlays.getActivePdfFilePath(),
@@ -72,6 +85,7 @@ export default class JotPlugin extends Plugin {
 			this.app,
 			this.app.vault.adapter,
 			this.strokes,
+			this.insertedPdfPages,
 			this.sidecar,
 			this.history,
 			{
@@ -93,6 +107,28 @@ export default class JotPlugin extends Plugin {
 			id: 'new-handwritten-note',
 			name: 'Create handwritten note',
 			callback: () => void this.createJotNoteFile(),
+		});
+		this.addCommand({
+			id: 'add-handwritten-page-after-pdf-page',
+			name: 'Add handwritten page after current PDF page',
+			checkCallback: (checking) => {
+				if (!this.overlays.getActivePdfFilePath() || this.overlays.getActivePdfPageNumber() === null) {
+					return false;
+				}
+				if (!checking) this.addInsertedPdfPage('after');
+				return true;
+			},
+		});
+		this.addCommand({
+			id: 'add-handwritten-page-before-pdf-page',
+			name: 'Add handwritten page before current PDF page',
+			checkCallback: (checking) => {
+				if (!this.overlays.getActivePdfFilePath() || this.overlays.getActivePdfPageNumber() === null) {
+					return false;
+				}
+				if (!checking) this.addInsertedPdfPage('before');
+				return true;
+			},
 		});
 		this.addCommand({
 			id: 'merge-notes-into-pdf',
@@ -290,6 +326,7 @@ export default class JotPlugin extends Plugin {
 				8000,
 			);
 		}
+		this.overlays.refreshPdf(pdfPath);
 		this.overlays.redrawOverlaysForPdf(pdfPath);
 	}
 
@@ -564,6 +601,20 @@ export default class JotPlugin extends Plugin {
 		const noteView = this.activeJotNoteView();
 		if (noteView) return noteView.containerEl;
 		return this.overlays?.getActivePdfLeaf()?.view.containerEl ?? null;
+	}
+
+	private addInsertedPdfPage(position: 'before' | 'after'): void {
+		const pdfPath = this.overlays.getActivePdfFilePath();
+		const pageNumber = this.overlays.getActivePdfPageNumber();
+		if (!pdfPath || pageNumber === null) return;
+		const slot = position === 'after' ? pageNumber : Math.max(0, pageNumber - 1);
+		const page = this.insertedPdfPages.add(pdfPath, slot, 'ruled');
+		this.sidecar.scheduleSave(pdfPath);
+		this.overlays.refreshPdf(pdfPath);
+		this.overlays.scrollInsertedPageIntoView(pdfPath, page.id);
+		new Notice(
+			`Jot: added handwritten page ${position} PDF page ${pageNumber}.`,
+		);
 	}
 
 	private async createJotNoteFile(): Promise<void> {
