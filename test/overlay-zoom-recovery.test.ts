@@ -81,6 +81,11 @@ beforeEach(() => {
 	(globalThis as any).activeDocument = document;
 	(globalThis as any).ResizeObserver = ResizeObserverMock;
 	(globalThis as any).window.devicePixelRatio = 2;
+	Object.defineProperty(window, 'IntersectionObserver', {
+		value: undefined,
+		configurable: true,
+		writable: true,
+	});
 	window.requestAnimationFrame = (callback: FrameRequestCallback) => {
 		callback(0);
 		return 1;
