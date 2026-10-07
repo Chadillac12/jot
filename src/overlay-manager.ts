@@ -71,6 +71,7 @@ export class OverlayManager {
 			const observer = new MutationObserver((records) => {
 				const currentPath = this.filePathForLeaf(leaf);
 				if (!currentPath) return;
+				const pageTopologyChanged = this.mutationsTouchPdfPageTopology(records);
 				if (this.diagnostics.isEnabled()) {
 					let addedNodes = 0;
 					let removedNodes = 0;
@@ -83,14 +84,12 @@ export class OverlayManager {
 						records: records.length,
 						addedNodes,
 						removedNodes,
-						domPdfPages: this.pdfPageElements(created.container).length,
+						pageTopologyChanged,
 						boundPdfPages: created.pages.size,
 						boundInsertedPages: created.insertedPages.size,
 					});
 				}
-				// Keep ordinary PDF.js rebuild/zoom recovery on the same narrow
-				// path used by the pre-hybrid implementation. Hybrid layout work
-				// is intentionally deferred until the mutation burst settles.
+				if (!pageTopologyChanged) return;
 				this.syncPdfPages(created, currentPath);
 				this.scheduleInsertedPageSync(leaf, created, currentPath);
 			});
@@ -298,6 +297,10 @@ export class OverlayManager {
 				this.strokes,
 				this.wireOverlay,
 				this.diagnostics,
+				{
+					observerRoot: binding.container,
+					rootMargin: '75% 0px 75% 0px',
+				},
 			);
 			created.mount();
 			binding.pages.set(page, created);
@@ -438,6 +441,30 @@ export class OverlayManager {
 			gaps: binding.gaps.size,
 			domPdfPages: actualPages.length,
 		});
+	}
+
+	private mutationsTouchPdfPageTopology(records: MutationRecord[]): boolean {
+		for (const record of records) {
+			for (const node of [...record.addedNodes, ...record.removedNodes]) {
+				if (this.nodeContainsSourcePdfPage(node)) return true;
+			}
+		}
+		return false;
+	}
+
+	private nodeContainsSourcePdfPage(node: Node): boolean {
+		if (node.nodeType !== 1) return false;
+		const element = node as Element;
+		if (
+			element.matches('.page') &&
+			!element.closest('.jot-pdf-inserted-page')
+		) {
+			return true;
+		}
+		for (const page of Array.from(element.querySelectorAll<HTMLElement>('.page'))) {
+			if (!page.closest('.jot-pdf-inserted-page')) return true;
+		}
+		return false;
 	}
 
 	private pdfPageElements(container: HTMLElement): HTMLElement[] {
