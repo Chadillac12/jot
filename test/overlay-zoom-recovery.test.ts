@@ -9,6 +9,7 @@
 */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OverlayManager, OVERLAY_KEY_ATTR } from '../src/overlay-manager';
+import { PdfInsertedPageStore } from '../src/pdf-inserted-page-store';
 import { StrokeStore } from '../src/stroke-store';
 
 vi.mock('obsidian', () => ({}));
@@ -153,4 +154,63 @@ describe('OverlayManager zoom recovery', () => {
 			expect((canvas?.width ?? 0) * (canvas?.height ?? 0)).toBeLessThanOrEqual(16_777_216);
 		}
 	});
+
+	it('places an inserted Jot page between PDF pages without duplicating it on resync', () => {
+		const container = document.createElement('div');
+		const page1 = document.createElement('div');
+		page1.className = 'page';
+		page1.setAttribute('data-page-number', '1');
+		setRect(page1, 800, 1000);
+		const page2 = document.createElement('div');
+		page2.className = 'page';
+		page2.setAttribute('data-page-number', '2');
+		setRect(page2, 800, 1000);
+		container.append(page1, page2);
+		document.body.appendChild(container);
+
+		const leaf = {
+			view: {
+				containerEl: container,
+				file: { path: 'notes.pdf' },
+				getViewType: () => 'pdf',
+			},
+		};
+		const app = {
+			workspace: {
+				getMostRecentLeaf: () => leaf,
+				iterateAllLeaves: (fn: (value: unknown) => void) => fn(leaf),
+			},
+		};
+		const layout = new PdfInsertedPageStore();
+		const inserted = layout.add('notes.pdf', 1, 'grid');
+		const wire = vi.fn(() => vi.fn());
+		const manager = new OverlayManager(
+			app as any,
+			new StrokeStore(),
+			wire,
+			layout,
+			{ onInsertedPagePaperChange: vi.fn() },
+		);
+
+		manager.attachToActivePdf();
+
+		const gap = container.querySelector<HTMLElement>('.jot-pdf-inserted-gap');
+		const insertedRoot = container.querySelector<HTMLElement>('.jot-pdf-inserted-page');
+		expect(gap).not.toBeNull();
+		expect(gap?.previousSibling).toBe(page1);
+		expect(gap?.nextSibling).toBe(page2);
+		expect(insertedRoot?.dataset.jotInsertedPageId).toBe(inserted.id);
+		expect(
+			insertedRoot
+				?.querySelector<HTMLCanvasElement>('canvas.jot-note-ink')
+				?.getAttribute(OVERLAY_KEY_ATTR),
+		).toBe(`notes.pdf::jot:${inserted.id}`);
+
+		const wireCalls = wire.mock.calls.length;
+		manager.refreshPdf('notes.pdf');
+
+		expect(container.querySelectorAll('.jot-pdf-inserted-page')).toHaveLength(1);
+		expect(wire.mock.calls.length).toBe(wireCalls);
+	});
+
 });
