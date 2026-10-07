@@ -14,6 +14,11 @@
 	z-index: 1001;
 }
 
+.jot-live-overlay.jot-live-overlay-dormant {
+	width: 100%;
+	height: 100%;
+}
+
 .jot-page-anchor {
 	position: relative;
 }
