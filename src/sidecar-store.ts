@@ -24,7 +24,7 @@ export interface SidecarStoreCallbacks {
 export class SidecarStore {
 	private saveTimers = new Map<string, number>();
 	private retryTimers = new Map<string, number>();
-	private recentSelfSaves = new Map<string, number>();
+	private recentSelfSaves = new Map<string, { at: number; content: string }>();
 	private protectedOriginals = new Map<string, string>();
 	// An unreadable existing sidecar must never be overwritten by partial in-memory ink.
 	private unreadableLoads = new Set<string>();
@@ -238,16 +238,20 @@ export class SidecarStore {
 		}
 	}
 
-	isOwnRecentSave(path: string): boolean {
-		const writtenAt = this.recentSelfSaves.get(path);
-		if (writtenAt === undefined) return false;
-		if (Date.now() - writtenAt >= SELF_SAVE_SUPPRESS_MS) {
+	async isOwnRecentSave(path: string): Promise<boolean> {
+		const marker = this.recentSelfSaves.get(path);
+		if (!marker) return false;
+		if (Date.now() - marker.at >= SELF_SAVE_SUPPRESS_MS) {
 			this.recentSelfSaves.delete(path);
 			return false;
 		}
-		// One atomic rename may emit multiple Obsidian watcher notifications.
-		// Preserve the suppression marker throughout the bounded window.
-		return true;
+		try {
+			// Multiple watcher events from one atomic commit may be duplicates.
+			// A real external edit with different bytes must never be ignored.
+			return (await this.adapter.read(path)) === marker.content;
+		} catch {
+			return false;
+		}
 	}
 
 	/** @deprecated Use flushAll(); retained while older callers migrate. */
@@ -296,7 +300,7 @@ export class SidecarStore {
 				const text = JSON.stringify(payload, null, 2);
 				await this.atomicWriteText(path, text, true);
 				this.protectedOriginals.delete(pdfPath);
-				this.recentSelfSaves.set(path, Date.now());
+				this.recentSelfSaves.set(path, { at: Date.now(), content: text });
 			}
 
 			session.completeSave(saveRevision);
