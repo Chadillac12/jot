@@ -6,6 +6,10 @@ import {
 	safeBackingStoreDpr,
 } from './canvas-surface';
 import { INK_KEY_ATTR, type InkSurfaceController } from './ink-surface';
+import {
+	NULL_DIAGNOSTICS,
+	type DiagnosticSink,
+} from './persistent-diagnostics';
 import { documentPageKey } from './jot-file';
 import type { JotNoteFile, JotNotePage } from './jot-note-file';
 import { drawStroke } from './stroke-render';
@@ -25,6 +29,7 @@ export interface JotNoteSurfaceOptions {
 	rootMargin?: string;
 	backingStoreLimits?: CanvasBackingStoreLimits;
 	fixedLogicalBackingStore?: boolean;
+	diagnostics?: DiagnosticSink;
 }
 
 interface NotebookPageMount {
@@ -53,6 +58,11 @@ export class JotNoteSurface implements InkSurfaceController {
 	) {}
 
 	render(note: JotNoteFile, documentPath: string): void {
+		this.diagnostics().record('jot-surface.render', {
+			documentPath,
+			pages: note.pages.length,
+			fixedLogicalBackingStore: this.options.fixedLogicalBackingStore ?? false,
+		});
 		this.disconnect();
 		this.host.replaceChildren();
 		this.intersectionObserver = this.createIntersectionObserver();
@@ -144,8 +154,16 @@ export class JotNoteSurface implements InkSurfaceController {
 				for (const entry of entries) {
 					const sheet = entry.target as HTMLElement;
 					if (entry.isIntersecting || entry.intersectionRatio > 0) {
+						this.diagnostics().record('jot-surface.intersection-mount', {
+							key: this.pageMounts.get(sheet)?.key ?? null,
+							ratio: entry.intersectionRatio,
+						});
 						this.mountPage(sheet);
 					} else {
+						this.diagnostics().record('jot-surface.intersection-unmount', {
+							key: this.pageMounts.get(sheet)?.key ?? null,
+							ratio: entry.intersectionRatio,
+						});
 						this.unmountPage(sheet);
 					}
 				}
@@ -221,6 +239,12 @@ export class JotNoteSurface implements InkSurfaceController {
 	private mountPage(sheet: HTMLElement): void {
 		const mount = this.pageMounts.get(sheet);
 		if (!mount || mount.persistent || mount.live) return;
+		this.diagnostics().record('jot-surface.mount-page', {
+			key: mount.key,
+			sourceWidth: mount.sourceWidth,
+			sourceHeight: mount.sourceHeight,
+			fixedLogicalBackingStore: this.options.fixedLogicalBackingStore ?? false,
+		});
 
 		const doc = sheet.ownerDocument;
 		const persistent = this.makeCanvas(doc, PERSISTENT_CLASS, mount.key);
@@ -282,6 +306,13 @@ export class JotNoteSurface implements InkSurfaceController {
 	private unmountPage(sheet: HTMLElement): void {
 		const mount = this.pageMounts.get(sheet);
 		if (!mount) return;
+		this.diagnostics().record('jot-surface.unmount-page', {
+			key: mount.key,
+			persistentWidth: mount.persistent?.width ?? null,
+			persistentHeight: mount.persistent?.height ?? null,
+			liveWidth: mount.live?.width ?? null,
+			liveHeight: mount.live?.height ?? null,
+		});
 		mount.disposeInput?.();
 		mount.disposeInput = null;
 		mount.resizeObserver?.disconnect();
@@ -336,12 +367,25 @@ export class JotNoteSurface implements InkSurfaceController {
 				requestedDpr,
 				this.options.backingStoreLimits,
 			);
-			return applyBackingStoreSize(
+			const changed = applyBackingStoreSize(
 				canvas,
 				mount.sourceWidth,
 				mount.sourceHeight,
 				effectiveDpr,
 			);
+			if (changed) {
+				const rect = sheet.getBoundingClientRect();
+				this.diagnostics().record('jot-surface.fixed-canvas-sized', {
+					key: mount.key,
+					cssWidth: rect.width,
+					cssHeight: rect.height,
+					canvasWidth: canvas.width,
+					canvasHeight: canvas.height,
+					canvasArea: canvas.width * canvas.height,
+					effectiveDpr,
+				});
+			}
+			return changed;
 		}
 
 		const rect = sheet.getBoundingClientRect();
@@ -368,5 +412,9 @@ export class JotNoteSurface implements InkSurfaceController {
 		return (
 			canvas.parentElement?.querySelector<HTMLCanvasElement>(`canvas.${LIVE_CLASS}`) ?? null
 		);
+	}
+
+	private diagnostics(): DiagnosticSink {
+		return this.options.diagnostics ?? NULL_DIAGNOSTICS;
 	}
 }
