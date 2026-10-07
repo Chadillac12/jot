@@ -222,7 +222,7 @@ describe('JotNoteSurface', () => {
 
 		const sheets = Array.from(host.querySelectorAll<HTMLElement>('.jot-note-sheet'));
 		expect(observe).toHaveBeenCalledTimes(3);
-		expect(host.querySelectorAll('canvas')).toHaveLength(2);
+		expect(host.querySelectorAll('canvas')).toHaveLength(4);
 
 		callback(
 			[
@@ -246,10 +246,12 @@ describe('JotNoteSurface', () => {
 			],
 			{} as IntersectionObserver,
 		);
-		expect(host.querySelectorAll('canvas')).toHaveLength(2);
-		expect(disposers[0]).toHaveBeenCalledTimes(1);
+		expect(host.querySelectorAll('canvas')).toHaveLength(5);
+		expect(disposers[0]).not.toHaveBeenCalled();
 
 		surface.disconnect();
+		expect(disposers[0]).toHaveBeenCalledTimes(1);
+		expect(host.querySelectorAll('canvas')).toHaveLength(0);
 		expect(disconnect).toHaveBeenCalledTimes(1);
 	});
 
@@ -307,8 +309,8 @@ describe('JotNoteSurface', () => {
 			});
 
 		expect(observe).toHaveBeenCalledTimes(1);
-		expect(host.querySelectorAll('canvas')).toHaveLength(0);
-		expect(wire).not.toHaveBeenCalled();
+		expect(host.querySelectorAll('canvas')).toHaveLength(1);
+		expect(wire).toHaveBeenCalledTimes(1);
 
 		callback(
 			[
@@ -359,6 +361,8 @@ describe('JotNoteSurface', () => {
 			],
 			{} as IntersectionObserver,
 		);
+		expect(host.querySelectorAll('canvas')).toHaveLength(2);
+		surface.disconnect();
 		expect(host.querySelectorAll('canvas')).toHaveLength(0);
 	});
 
