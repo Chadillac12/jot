@@ -164,6 +164,27 @@ describe('PersistentDiagnostics', () => {
 		expect(restartedState.activeSessionPath).not.toBe(completedPath);
 	});
 
+	it('treats synchronous unload intent as clean even before its async state write completes', async () => {
+		const fs = new MemoryAdapter();
+		const first = new PersistentDiagnostics(
+			fs.asAdapter(),
+			'.obsidian/plugins/jot',
+			'1.2.3-test',
+		);
+		await first.initialize();
+		await first.start();
+		// Obsidian does not await onunload(). The sentinel must be available
+		// synchronously to the next session without assuming the write finished.
+		const finishing = first.markCleanShutdown();
+		const restarted = new PersistentDiagnostics(
+			fs.asAdapter(),
+			'.obsidian/plugins/jot',
+			'1.2.3-test',
+		);
+		expect((await restarted.initialize()).recoveredCrash).toBe(false);
+		await finishing;
+	});
+
 	it('exports the preserved crash session ahead of the newly resumed live session', async () => {
 		const fs = new MemoryAdapter();
 		const first = new PersistentDiagnostics(
