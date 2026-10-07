@@ -72,6 +72,10 @@ verification. It is engineering traceability for Jot; it is not FAA certificatio
 | P-12 | Paper export work is bounded for pathological persisted dimensions | bounded guide density | build/test gate + code review |
 | P-13 | PDF.js zoom/rebuild mutations never run hybrid layout reconciliation synchronously | source-page sync in mutation callback; 300 ms debounced hybrid repair only when hybrid pages exist | `test/overlay-zoom-recovery.test.ts` |
 | P-14 | Hybrid handwritten pages never reallocate canvas backing stores during PDF zoom | fixed logical backing store + CSS-only scaling + no per-page ResizeObserver | `test/jot-note-surface.test.ts` |
+| P-15 | Long PDFs do not allocate annotation backing stores for every source page | viewport-scoped `PdfPageBinding` canvases | 53-page virtualization regression in `test/overlay-zoom-recovery.test.ts` |
+| P-16 | Detached PDF overlay canvases release WebKit backing stores before replacement | explicit 1x1 release before remove/drop | delayed-recovery regression in `test/overlay-zoom-recovery.test.ts` |
+| P-17 | PDF.js layer rebuilds cannot cause synchronous overlay recreation storms | 150 ms quiet-period recovery with timer reset on continued churn | mutation-burst regression in `test/overlay-zoom-recovery.test.ts` |
+| P-18 | PDF descendant churn does not cause whole-document source-page rescans | container observer reacts only to source `.page` topology changes | hybrid/ordinary zoom isolation regressions |
 
 ## Persistent diagnostics verification
 
