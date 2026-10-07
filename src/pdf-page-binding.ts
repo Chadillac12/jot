@@ -1,5 +1,6 @@
 import {
 	applyBackingStoreSize,
+	type CanvasBackingStoreLimits,
 	devicePixelRatioFor,
 	readCanvasSurface,
 	safeBackingStoreDpr,
@@ -17,13 +18,30 @@ export const PDF_LIVE_OVERLAY_CLASS = 'jot-live-overlay';
 export const PDF_PAGE_ANCHOR_CLASS = 'jot-page-anchor';
 export const PDF_PASSTHROUGH_CLASS = 'jot-passthrough';
 
+export const PDF_OVERLAY_BACKING_STORE_LIMITS: CanvasBackingStoreLimits = {
+	maxDimension: 2048,
+	maxArea: 2_500_000,
+};
+
+const PDF_OVERLAY_RECOVERY_DELAY_MS = 150;
+
+export interface PdfPageBindingOptions {
+	observerRoot?: Element;
+	rootMargin?: string;
+	backingStoreLimits?: CanvasBackingStoreLimits;
+	recoveryDelayMs?: number;
+}
+
 export class PdfPageBinding {
 	private persistent: HTMLCanvasElement | null = null;
 	private live: HTMLCanvasElement | null = null;
 	private liveDisposer: (() => void) | null = null;
 	private mutationObserver: MutationObserver | null = null;
 	private resizeObserver: ResizeObserver | null = null;
+	private intersectionObserver: IntersectionObserver | null = null;
 	private resizeFrame: number | null = null;
+	private recoveryTimer: number | null = null;
+	private active = false;
 	private disposed = false;
 
 	constructor(
@@ -32,6 +50,7 @@ export class PdfPageBinding {
 		private strokes: StrokeStore,
 		private wireLiveCanvas: (canvas: HTMLCanvasElement) => (() => void) | void,
 		private diagnostics: DiagnosticSink = NULL_DIAGNOSTICS,
+		private options: PdfPageBindingOptions = {},
 	) {}
 
 	get key(): string {
@@ -45,9 +64,6 @@ export class PdfPageBinding {
 			pageNumber: this.page.getAttribute('data-page-number'),
 		});
 		this.page.classList.add(PDF_PAGE_ANCHOR_CLASS);
-		this.ensureCanvases();
-		this.disablePdfInteractionLayers();
-		this.resizeAndRedraw();
 
 		this.mutationObserver = new MutationObserver((records) => {
 			if (this.disposed) return;
@@ -63,12 +79,19 @@ export class PdfPageBinding {
 					records: records.length,
 					addedNodes,
 					removedNodes,
+					active: this.active,
 				});
 			}
-			this.ensureCanvases();
 			this.disablePdfInteractionLayers();
+			if (!this.active) return;
+			if (!this.trackedCanvasesAttached()) {
+				this.releaseDetachedCanvases();
+				this.scheduleRecovery();
+			}
 		});
-		this.mutationObserver.observe(this.page, { childList: true, subtree: true });
+		// PDF.js replaces direct page layers during zoom. Watching the entire
+		// subtree made Jot react to thousands of irrelevant descendant changes.
+		this.mutationObserver.observe(this.page, { childList: true });
 
 		this.resizeObserver = new ResizeObserver(() => {
 			if (this.diagnostics.isEnabled()) {
@@ -77,11 +100,38 @@ export class PdfPageBinding {
 					key: this.keyValue,
 					cssWidth: rect.width,
 					cssHeight: rect.height,
+					active: this.active,
 				});
 			}
-			this.scheduleResize();
+			if (this.active) this.scheduleResize();
 		});
 		this.resizeObserver.observe(this.page);
+
+		const win = this.page.ownerDocument.defaultView;
+		const IntersectionObserverCtor = win?.IntersectionObserver;
+		if (IntersectionObserverCtor && this.options.observerRoot) {
+			this.intersectionObserver = new IntersectionObserverCtor(
+				(entries) => {
+					for (const entry of entries) {
+						if (entry.target !== this.page) continue;
+						if (entry.isIntersecting || entry.intersectionRatio > 0) {
+							this.activate();
+						} else {
+							this.deactivate();
+						}
+					}
+				},
+				{
+					root: this.options.observerRoot,
+					rootMargin: this.options.rootMargin ?? '75% 0px 75% 0px',
+					threshold: 0,
+				},
+			);
+			this.intersectionObserver.observe(this.page);
+		} else {
+			// Compatibility fallback for older/limited environments.
+			this.activate();
+		}
 	}
 
 	refreshKey(key: string): void {
@@ -92,8 +142,10 @@ export class PdfPageBinding {
 			previousKey,
 			key,
 		});
-		this.replaceCanvases();
-		this.resizeAndRedraw();
+		if (this.active) {
+			this.replaceCanvases();
+			this.resizeAndRedraw();
+		}
 	}
 
 	redraw(): void {
@@ -138,6 +190,7 @@ export class PdfPageBinding {
 		this.disposed = true;
 		this.diagnostics.record('pdf.page-binding-dispose', {
 			key: this.keyValue,
+			active: this.active,
 			persistentWidth: this.persistent?.width ?? null,
 			persistentHeight: this.persistent?.height ?? null,
 			liveWidth: this.live?.width ?? null,
@@ -145,28 +198,30 @@ export class PdfPageBinding {
 		});
 		this.mutationObserver?.disconnect();
 		this.resizeObserver?.disconnect();
+		this.intersectionObserver?.disconnect();
 		this.mutationObserver = null;
 		this.resizeObserver = null;
-		const win = this.page.ownerDocument.defaultView;
-		if (this.resizeFrame !== null && win) win.cancelAnimationFrame(this.resizeFrame);
-		this.resizeFrame = null;
-		this.liveDisposer?.();
-		this.liveDisposer = null;
-		this.persistent?.remove();
-		this.live?.remove();
-		this.persistent = null;
-		this.live = null;
+		this.intersectionObserver = null;
+		this.cancelResize();
+		this.cancelRecovery();
+		this.releaseCanvases();
+		this.active = false;
 		this.page.classList.remove(PDF_PAGE_ANCHOR_CLASS);
 		this.page.querySelector<HTMLElement>('.textLayer')?.classList.remove(PDF_PASSTHROUGH_CLASS);
 		this.page.querySelector<HTMLElement>('.annotationLayer')?.classList.remove(PDF_PASSTHROUGH_CLASS);
 	}
 
 	private ensureCanvases(): void {
-		if (this.disposed) return;
+		if (this.disposed || !this.active) return;
+
 		const persistent = this.page.querySelector<HTMLCanvasElement>(`canvas.${PDF_OVERLAY_CLASS}`);
+		if (this.persistent && this.persistent !== persistent) {
+			this.releaseCanvas(this.persistent);
+			this.persistent = null;
+		}
 		if (!persistent || persistent.getAttribute(INK_KEY_ATTR) !== this.keyValue) {
 			const replaced = persistent !== null;
-			persistent?.remove();
+			if (persistent) this.releaseCanvas(persistent);
 			this.persistent = this.createCanvas(PDF_OVERLAY_CLASS);
 			this.page.appendChild(this.persistent);
 			this.diagnostics.record('pdf.overlay-canvas-created', {
@@ -179,11 +234,17 @@ export class PdfPageBinding {
 		}
 
 		const live = this.page.querySelector<HTMLCanvasElement>(`canvas.${PDF_LIVE_OVERLAY_CLASS}`);
+		if (this.live && this.live !== live) {
+			this.liveDisposer?.();
+			this.liveDisposer = null;
+			this.releaseCanvas(this.live);
+			this.live = null;
+		}
 		if (!live || live.getAttribute(INK_KEY_ATTR) !== this.keyValue) {
 			const replaced = live !== null;
 			this.liveDisposer?.();
 			this.liveDisposer = null;
-			live?.remove();
+			if (live) this.releaseCanvas(live);
 			this.live = this.createCanvas(PDF_LIVE_OVERLAY_CLASS);
 			this.page.appendChild(this.live);
 			this.liveDisposer = this.wireLiveCanvas(this.live) ?? null;
@@ -201,12 +262,7 @@ export class PdfPageBinding {
 	}
 
 	private replaceCanvases(): void {
-		this.liveDisposer?.();
-		this.liveDisposer = null;
-		this.persistent?.remove();
-		this.live?.remove();
-		this.persistent = null;
-		this.live = null;
+		this.releaseCanvases();
 		this.ensureCanvases();
 	}
 
@@ -217,8 +273,100 @@ export class PdfPageBinding {
 		return canvas;
 	}
 
+	private activate(): void {
+		if (this.disposed || this.active) return;
+		this.active = true;
+		this.diagnostics.record('pdf.page-activate', { key: this.keyValue });
+		this.ensureCanvases();
+		this.disablePdfInteractionLayers();
+		this.resizeAndRedraw();
+	}
+
+	private deactivate(): void {
+		if (!this.active) return;
+		this.active = false;
+		this.diagnostics.record('pdf.page-deactivate', { key: this.keyValue });
+		this.cancelResize();
+		this.cancelRecovery();
+		this.releaseCanvases();
+	}
+
+	private trackedCanvasesAttached(): boolean {
+		return (
+			this.persistent !== null &&
+			this.live !== null &&
+			this.persistent.isConnected &&
+			this.live.isConnected &&
+			this.page.contains(this.persistent) &&
+			this.page.contains(this.live)
+		);
+	}
+
+	private releaseDetachedCanvases(): void {
+		if (
+			this.persistent &&
+			(!this.persistent.isConnected || !this.page.contains(this.persistent))
+		) {
+			this.releaseCanvas(this.persistent);
+			this.persistent = null;
+		}
+		if (this.live && (!this.live.isConnected || !this.page.contains(this.live))) {
+			this.liveDisposer?.();
+			this.liveDisposer = null;
+			this.releaseCanvas(this.live);
+			this.live = null;
+		}
+	}
+
+	private releaseCanvases(): void {
+		this.liveDisposer?.();
+		this.liveDisposer = null;
+		if (this.persistent) this.releaseCanvas(this.persistent);
+		if (this.live) this.releaseCanvas(this.live);
+		this.persistent = null;
+		this.live = null;
+	}
+
+	private releaseCanvas(canvas: HTMLCanvasElement): void {
+		// Setting dimensions to 1x1 releases the large WebKit backing store
+		// immediately instead of waiting for GC on a detached canvas.
+		canvas.width = 1;
+		canvas.height = 1;
+		canvas.remove();
+	}
+
+	private scheduleRecovery(): void {
+		if (this.disposed || !this.active) return;
+		const win = this.page.ownerDocument.defaultView;
+		if (!win) {
+			this.ensureCanvases();
+			this.resizeAndRedraw();
+			return;
+		}
+		if (this.recoveryTimer !== null) win.clearTimeout(this.recoveryTimer);
+		const delay = this.options.recoveryDelayMs ?? PDF_OVERLAY_RECOVERY_DELAY_MS;
+		this.diagnostics.record('pdf.overlay-recovery-scheduled', {
+			key: this.keyValue,
+			delayMs: delay,
+		});
+		this.recoveryTimer = win.setTimeout(() => {
+			this.recoveryTimer = null;
+			if (this.disposed || !this.active || !this.page.isConnected) return;
+			this.diagnostics.record('pdf.overlay-recovery-fired', { key: this.keyValue });
+			this.ensureCanvases();
+			this.disablePdfInteractionLayers();
+			this.resizeAndRedraw();
+		}, delay);
+	}
+
+	private cancelRecovery(): void {
+		if (this.recoveryTimer === null) return;
+		this.page.ownerDocument.defaultView?.clearTimeout(this.recoveryTimer);
+		this.recoveryTimer = null;
+	}
+
 	private scheduleResize(): void {
-		if (this.disposed || this.resizeFrame !== null) return;
+		if (this.disposed || !this.active || this.resizeFrame !== null) return;
 		const win = this.page.ownerDocument.defaultView;
 		this.diagnostics.record('pdf.page-resize-scheduled', { key: this.keyValue });
 		if (!win) {
@@ -231,8 +379,19 @@ export class PdfPageBinding {
 		});
 	}
 
+	private cancelResize(): void {
+		const win = this.page.ownerDocument.defaultView;
+		if (this.resizeFrame !== null && win) win.cancelAnimationFrame(this.resizeFrame);
+		this.resizeFrame = null;
+	}
+
 	private resizeAndRedraw(): void {
-		this.ensureCanvases();
+		if (this.disposed || !this.active) return;
+		if (!this.trackedCanvasesAttached()) {
+			this.releaseDetachedCanvases();
+			this.scheduleRecovery();
+			return;
+		}
 		const persistentChanged = this.persistent ? this.sizeCanvas(this.persistent) : false;
 		const liveChanged = this.live ? this.sizeCanvas(this.live) : false;
 		if (this.diagnostics.isEnabled()) {
@@ -272,7 +431,12 @@ export class PdfPageBinding {
 		if (rect.width <= 0 || rect.height <= 0) return false;
 		const win = this.page.ownerDocument.defaultView;
 		const requestedDpr = devicePixelRatioFor(win ?? { devicePixelRatio: 1 });
-		const effectiveDpr = safeBackingStoreDpr(rect.width, rect.height, requestedDpr);
+		const effectiveDpr = safeBackingStoreDpr(
+			rect.width,
+			rect.height,
+			requestedDpr,
+			this.options.backingStoreLimits ?? PDF_OVERLAY_BACKING_STORE_LIMITS,
+		);
 		const changed = applyBackingStoreSize(canvas, rect.width, rect.height, effectiveDpr);
 		const width = `${rect.width}px`;
 		const height = `${rect.height}px`;
