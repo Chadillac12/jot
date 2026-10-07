@@ -112,6 +112,12 @@ export class PersistentDiagnostics implements DiagnosticSink {
 		try {
 			await this.ensureStorage();
 			this.state = await this.readState();
+			// Obsidian unload is synchronous: the async clean-state write may not finish.
+			// A best-effort synchronous marker prevents false crash classification.
+			const previousSessionId = this.state.activeSessionId;
+			if (previousSessionId && this.hasSynchronousCleanMarker(previousSessionId)) {
+				this.state.cleanShutdown = true;
+			}
 			const recoveredCrash =
 				this.state.enabled &&
 				!this.state.cleanShutdown &&
@@ -145,6 +151,7 @@ export class PersistentDiagnostics implements DiagnosticSink {
 				await this.writeState();
 			}
 			await this.pruneOldSessions();
+			if (previousSessionId) this.clearSynchronousCleanMarker(previousSessionId);
 			return { recording: this.isEnabled(), recoveredCrash };
 		} catch (error) {
 			console.error('[jot] diagnostics initialization failed', error);
@@ -231,6 +238,8 @@ export class PersistentDiagnostics implements DiagnosticSink {
 
 	async markCleanShutdown(): Promise<void> {
 		if (!this.isEnabled()) return;
+		// Must happen before the first await. WKWebView may terminate during unload.
+		if (this.state.activeSessionId) this.writeSynchronousCleanMarker(this.state.activeSessionId);
 		this.record('plugin.clean-shutdown');
 		await this.flush();
 		this.state.cleanShutdown = true;
@@ -399,6 +408,39 @@ export class PersistentDiagnostics implements DiagnosticSink {
 			await this.writeState();
 		} catch (error) {
 			console.error('[jot] diagnostics state write failed', error);
+		}
+	}
+
+	private synchronousMarkerKey(sessionId: string): string {
+		return `jot-diagnostics-clean-${sessionId}`;
+	}
+
+	private hasSynchronousCleanMarker(sessionId: string): boolean {
+		try {
+			return typeof window !== 'undefined' &&
+				window.localStorage.getItem(this.synchronousMarkerKey(sessionId)) === '1';
+		} catch {
+			return false;
+		}
+	}
+
+	private writeSynchronousCleanMarker(sessionId: string): void {
+		try {
+			if (typeof window !== 'undefined') {
+				window.localStorage.setItem(this.synchronousMarkerKey(sessionId), '1');
+			}
+		} catch {
+			// Storage may be disabled: the async state file is the fallback.
+		}
+	}
+
+	private clearSynchronousCleanMarker(sessionId: string): void {
+		try {
+			if (typeof window !== 'undefined') {
+				window.localStorage.removeItem(this.synchronousMarkerKey(sessionId));
+			}
+		} catch {
+			// Best effort only.
 		}
 	}
 
