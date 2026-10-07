@@ -295,14 +295,7 @@ export default class JotPlugin extends Plugin {
 		this.registerEvent(
 			this.app.vault.on('modify', (file) => {
 				if (!isSidecarPath(file.path)) return;
-				if (this.sidecar.isOwnRecentSave(file.path)) return;
-				const pdfPath = pdfPathFromSidecar(file.path);
-				if (!pdfPath) return;
-				if (this.sidecar.hasUnsavedChanges(pdfPath)) {
-					void this.resolveExternalSidecarConflict(pdfPath);
-					return;
-				}
-				void this.reloadSidecar(pdfPath);
+				void this.handleSidecarModification(file.path);
 			}),
 		);
 		this.registerEvent(
@@ -465,6 +458,17 @@ export default class JotPlugin extends Plugin {
 			);
 		}
 		return status;
+	}
+
+	private async handleSidecarModification(path: string): Promise<void> {
+		if (this.pluginUnloading || await this.sidecar.isOwnRecentSave(path)) return;
+		const pdfPath = pdfPathFromSidecar(path);
+		if (!pdfPath) return;
+		if (this.sidecar.hasUnsavedChanges(pdfPath)) {
+			await this.resolveExternalSidecarConflict(pdfPath);
+			return;
+		}
+		await this.reloadSidecar(pdfPath);
 	}
 
 	private async reloadSidecar(pdfPath: string) {
