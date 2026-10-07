@@ -77,9 +77,10 @@ export class MergeService {
 	): Promise<string> {
 		const bytes = await this.adapter.readBinary(pdfPath);
 		const pdfDoc = await PDFDocument.load(bytes);
-		const pages = pdfDoc.getPages();
-		for (let i = 0; i < pages.length; i++) {
-			const page = pages[i];
+		const originalPages = [...pdfDoc.getPages()];
+		const originalPageCount = originalPages.length;
+		for (let i = 0; i < originalPages.length; i++) {
+			const page = originalPages[i];
 			if (!page) continue;
 			const strokes = this.strokes.forPage(pdfPath, i + 1);
 			if (strokes.length === 0) continue;
@@ -89,7 +90,7 @@ export class MergeService {
 		const inserted = this.insertedPages.all(pdfPath);
 		const groups = new Map<number, typeof inserted>();
 		for (const page of inserted) {
-			const slot = Math.max(0, Math.min(page.slot, pages.length));
+			const slot = Math.max(0, Math.min(page.slot, originalPageCount));
 			const group = groups.get(slot) ?? [];
 			group.push(page);
 			groups.set(slot, group);
@@ -101,7 +102,9 @@ export class MergeService {
 				const insertedPage = group[index];
 				if (!insertedPage) continue;
 				const reference =
-					pages[Math.max(0, Math.min(pages.length - 1, slot > 0 ? slot - 1 : 0))];
+					originalPages[
+						Math.max(0, Math.min(originalPageCount - 1, slot > 0 ? slot - 1 : 0))
+					];
 				if (!reference) continue;
 				const page = pdfDoc.insertPage(slot, [reference.getWidth(), reference.getHeight()]);
 				drawPaperOnPdfPage(
@@ -120,7 +123,7 @@ export class MergeService {
 		const out = await pdfDoc.save();
 		const buffer = new ArrayBuffer(out.byteLength);
 		new Uint8Array(buffer).set(out);
-		const expectedPages = pages.length + inserted.length;
+		const expectedPages = originalPageCount + inserted.length;
 
 		const writer = new PdfTransactionWriter(this.adapter);
 		if (choice === 'copy') {
