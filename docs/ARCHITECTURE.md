@@ -251,6 +251,37 @@ Dirty data is flushed on normal document transitions and best-effort flushed whe
 hidden, page-hidden, or the plugin unloads. Obsidian's unload hook is synchronous, so protection
 must not rely on unload alone.
 
+## Hardening invariants for iPad.8
+
+A PDF sidecar that fails to load because of a storage/I/O exception is **write-protected**,
+not treated as an empty annotation document. New PDF Pencil strokes are blocked while
+the unreadable-load guard is active, and every save/flush rejects without touching the
+original sidecar. A successful clean reload clears the guard; protection does not
+silently discard dirty in-memory strokes.
+
+Source PDF, inserted Jot, and standalone Jot pages now follow the same input-lifetime
+rule: lightweight Pencil hit targets remain connected in dormant state, while expensive
+persistent render backing stores are virtualized. IntersectionObserver false events
+use 750 ms hysteresis; pointer-down promotes a dormant page before the input handler
+runs; pointer-up/cancel permits deactivation. Detached PDF pointer targets clear any
+stranded pointer pin. Dormant surfaces reset inline dimensions so the CSS hitbox matches
+the current page after zoom. Notebook input handler disposers belong to their surfaces.
+
+The PDF merge service refuses a second operation for a source path while the first
+merge is in flight, including copy operations; this protects deterministic temp/backup
+paths. A dirty notebook destination may only be displaced on rename after its recovery
+copy is confirmed durable.
+
+Parsing enforces bounded JSON characters, total strokes/points, and points per stroke
+before allocating render models. Oversized notebooks open read-only; oversized PDF
+sidecars follow the protected-original path. Save failures remain retryable and
+observable. PDF delayed attachment uses a cancellable generation token, and self-save
+watcher events are matched against the actual written bytes rather than being ignored
+solely because they occur within a time window.
+
+Persistent diagnostics also record synchronous best-effort clean-unload intent to
+reduce false crash recovery classification when WKWebView ends an async unload early.
+
 ## Release configuration management
 
 Published release versions are immutable. The release workflow fails if a release with the same
