@@ -49,7 +49,7 @@ export default class JotPlugin extends Plugin {
 	async onload() {
 		this.diagnostics = new PersistentDiagnostics(
 			this.app.vault.adapter,
-			this.manifest.dir ?? '.obsidian/plugins/jot',
+			this.manifest.dir ?? `${this.app.vault.configDir}/plugins/jot`,
 			this.manifest.version,
 		);
 		const diagnosticInit = await this.diagnostics.initialize();
