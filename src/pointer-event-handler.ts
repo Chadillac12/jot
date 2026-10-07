@@ -58,6 +58,7 @@ export interface PointerEventHandlerDeps {
 	toolState: () => ToolState;
 	handedness: () => Handedness;
 	paletteActivation: () => PaletteActivation;
+	allowInput?: () => boolean;
 }
 
 export class PointerEventHandler {
@@ -163,6 +164,7 @@ export class PointerEventHandler {
 			return;
 		}
 		if (e.pointerType !== 'pen' && e.pointerType !== 'mouse') return;
+		if (this.deps.allowInput && !this.deps.allowInput()) return;
 		if (this.deps.palette.isOpen()) return;
 
 		this.cancelLiveFrame();
