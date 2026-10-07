@@ -1,3 +1,4 @@
+/* eslint-disable obsidianmd/hardcoded-config-path */
 import { describe, expect, it } from 'vitest';
 import type { DataAdapter } from 'obsidian';
 import { PersistentDiagnostics } from '../src/persistent-diagnostics';
