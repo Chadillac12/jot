@@ -57,7 +57,14 @@ export function pdfPathFromKey(key: string): string | null {
 	return documentPathFromKey(key);
 }
 
+// Bounded parsing prevents corrupt or hostile synced documents from exhausting WKWebView.
+export const MAX_INK_JSON_CHARACTERS = 16_000_000;
+export const MAX_INK_POINTS_PER_DOCUMENT = 500_000;
+export const MAX_INK_STROKES_PER_DOCUMENT = 75_000;
+export const MAX_POINTS_PER_STROKE = 20_000;
+
 export function parseJotText(text: string): JotFileFormat | null {
+	if (text.length > MAX_INK_JSON_CHARACTERS) return null;
 	try {
 		const parsed: unknown = JSON.parse(text);
 		if (!isRecord(parsed)) return null;
@@ -69,12 +76,19 @@ export function parseJotText(text: string): JotFileFormat | null {
 		const insertedIds = new Set(insertedPages.map((page) => insertedPageStorageId(page.id)));
 
 		const pages: Record<string, Stroke[]> = {};
+		let totalStrokes = 0;
+		let totalPoints = 0;
 		for (const [pageId, rawStrokes] of Object.entries(parsed.pages)) {
 			const isPdfPage = /^\d+$/.test(pageId);
 			const isInsertedPage = insertedIds.has(pageId);
 			if ((!isPdfPage && !isInsertedPage) || !Array.isArray(rawStrokes)) return null;
+			totalStrokes += rawStrokes.length;
+			if (totalStrokes > MAX_INK_STROKES_PER_DOCUMENT) return null;
 			const strokes: Stroke[] = [];
 			for (const rawStroke of rawStrokes) {
+				if (!isRecord(rawStroke) || !Array.isArray(rawStroke.points)) return null;
+				totalPoints += rawStroke.points.length;
+				if (totalPoints > MAX_INK_POINTS_PER_DOCUMENT) return null;
 				const stroke = parseStoredStroke(rawStroke);
 				if (!stroke) return null;
 				strokes.push(stroke);
@@ -100,6 +114,7 @@ export function isSupportedVersion(version: number): boolean {
  */
 export function parseStoredStroke(value: unknown): Stroke | null {
 	if (!isRecord(value) || !Array.isArray(value.points)) return null;
+	if (value.points.length > MAX_POINTS_PER_STROKE) return null;
 	const points = [];
 	for (const rawPoint of value.points) {
 		if (!isRecord(rawPoint)) return null;
