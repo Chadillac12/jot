@@ -7,6 +7,7 @@ import { ConfirmClearModal } from './clear';
 import { collectClearOperations, countStrokes, toUndoEntries } from './clear-ops';
 import { FloatingPaletteButton } from './floating-palette-button';
 import { PointerEventHandler } from './pointer-event-handler';
+import { PersistentDiagnostics } from './persistent-diagnostics';
 import { isSidecarPath, pdfPathFromSidecar } from './jot-file';
 import { JOT_NOTE_EXTENSION, JOT_NOTE_VIEW_TYPE, createJotNote, serializeJotNote } from './jot-note-file';
 import { JotNoteView } from './jot-note-view';
@@ -43,8 +44,27 @@ export default class JotPlugin extends Plugin {
 	settings: JotSettings = { ...DEFAULT_SETTINGS };
 	private history = new UndoHistory();
 	private undoController!: UndoController;
+	private diagnostics!: PersistentDiagnostics;
 
 	async onload() {
+		this.diagnostics = new PersistentDiagnostics(
+			this.app.vault.adapter,
+			this.manifest.dir ?? '.obsidian/plugins/jot',
+			this.manifest.version,
+		);
+		const diagnosticInit = await this.diagnostics.initialize();
+		if (diagnosticInit.recoveredCrash) {
+			new Notice(
+				'Jot: the previous diagnostic session ended unexpectedly. Its trace was preserved and recording resumed.',
+				8000,
+			);
+		}
+		this.diagnostics.record('plugin.load', {
+			version: this.manifest.version,
+			diagnosticsAutoResumed: diagnosticInit.recording,
+			recoveredCrash: diagnosticInit.recoveredCrash,
+		});
+
 		await this.loadSettings();
 		this.applyInkSettings();
 		this.sidecar = new SidecarStore(
@@ -76,6 +96,7 @@ export default class JotPlugin extends Plugin {
 					this.overlays.refreshPdf(pdfPath);
 				},
 			},
+			this.diagnostics,
 		);
 		this.undoController = new UndoController(this.history, this.strokes, this.overlays, {
 			activeDocumentPath: () => this.overlays.getActivePdfFilePath(),
@@ -163,6 +184,26 @@ export default class JotPlugin extends Plugin {
 				return true;
 			},
 		});
+		this.addCommand({
+			id: 'start-persistent-diagnostics',
+			name: 'Start persistent diagnostics',
+			callback: () => void this.startPersistentDiagnostics(),
+		});
+		this.addCommand({
+			id: 'stop-persistent-diagnostics',
+			name: 'Stop persistent diagnostics',
+			callback: () => void this.stopPersistentDiagnostics(),
+		});
+		this.addCommand({
+			id: 'export-last-diagnostics',
+			name: 'Export last diagnostic recording',
+			callback: () => void this.exportLastDiagnostics(),
+		});
+		this.addCommand({
+			id: 'clear-diagnostic-recordings',
+			name: 'Clear diagnostic recordings',
+			callback: () => void this.clearDiagnosticRecordings(),
+		});
 		this.palette = new Palette(
 			this.toolState,
 			(state) => {
@@ -196,6 +237,12 @@ export default class JotPlugin extends Plugin {
 		this.registerEvent(
 			this.app.workspace.on('file-open', async (file: TFile | null) => {
 				const nextPdf = file?.extension === 'pdf' ? file.path : null;
+				this.diagnostics.record('workspace.file-open', {
+					path: file?.path ?? null,
+					extension: file?.extension ?? null,
+					nextPdf,
+					previousPdf: this.lastActivePdfPath,
+				});
 				if (this.lastActivePdfPath && this.lastActivePdfPath !== nextPdf) {
 					await this.sidecar.flush(this.lastActivePdfPath);
 				}
@@ -214,6 +261,10 @@ export default class JotPlugin extends Plugin {
 
 		this.registerEvent(
 			this.app.workspace.on('layout-change', () => {
+				this.diagnostics.record('workspace.layout-change', {
+					activePdf: this.overlays.getActivePdfFilePath(),
+					activePdfPage: this.overlays.getActivePdfPageNumber(),
+				});
 				this.overlays.pruneClosedObservers();
 				this.overlays.attachToActivePdf();
 				this.refreshFloatingPaletteButton();
@@ -222,6 +273,10 @@ export default class JotPlugin extends Plugin {
 
 		this.registerEvent(
 			this.app.workspace.on('active-leaf-change', () => {
+				this.diagnostics.record('workspace.active-leaf-change', {
+					activePdf: this.overlays.getActivePdfFilePath(),
+					activePdfPage: this.overlays.getActivePdfPageNumber(),
+				});
 				this.refreshFloatingPaletteButton();
 			}),
 		);
@@ -263,15 +318,33 @@ export default class JotPlugin extends Plugin {
 		const workspaceDocument = this.app.workspace.containerEl.ownerDocument;
 		const workspaceWindow = workspaceDocument.defaultView;
 		this.registerDomEvent(workspaceDocument, 'visibilitychange', () => {
-			if (workspaceDocument.visibilityState === 'hidden') this.flushDirtyBestEffort();
+			this.diagnostics.record('lifecycle.visibilitychange', {
+				state: workspaceDocument.visibilityState,
+			});
+			if (workspaceDocument.visibilityState === 'hidden') {
+				this.flushDirtyBestEffort();
+				void this.diagnostics.flush();
+			}
 		});
 		if (workspaceWindow) {
-			this.registerDomEvent(workspaceWindow, 'pagehide', () => this.flushDirtyBestEffort());
-			this.registerDomEvent(workspaceWindow, 'resize', () => this.refreshFloatingPaletteButton());
+			this.registerDomEvent(workspaceWindow, 'pagehide', () => {
+				this.diagnostics.record('lifecycle.pagehide');
+				this.flushDirtyBestEffort();
+				void this.diagnostics.flush();
+			});
+			this.registerDomEvent(workspaceWindow, 'resize', () => {
+				this.diagnostics.record('window.resize', {
+					width: workspaceWindow.innerWidth,
+					height: workspaceWindow.innerHeight,
+					dpr: workspaceWindow.devicePixelRatio,
+				});
+				this.refreshFloatingPaletteButton();
+			});
 		}
 
 		this.app.workspace.onLayoutReady(async () => {
 			const filePath = this.overlays.getActivePdfFilePath();
+			this.diagnostics.record('workspace.layout-ready', { activePdf: filePath });
 			this.lastActivePdfPath = filePath;
 			if (!filePath) {
 				this.refreshFloatingPaletteButton();
@@ -287,12 +360,63 @@ export default class JotPlugin extends Plugin {
 		// Obsidian's unload hook is synchronous, so this is a best-effort final
 		// flush. Normal file switches, visibility loss, page hide, renames, merges,
 		// and notebook closes flush before the lifecycle transition itself.
+		this.diagnostics?.record('plugin.unload-begin');
 		this.flushDirtyBestEffort();
 		for (const timer of this.notebookRetryTimers.values()) window.clearTimeout(timer);
 		this.notebookRetryTimers.clear();
 		this.overlays?.disconnectAll();
 		this.palette?.hide();
 		this.floatingPaletteButton?.hide();
+		void this.diagnostics?.markCleanShutdown();
+	}
+
+	private async startPersistentDiagnostics(): Promise<void> {
+		const started = await this.diagnostics.start();
+		if (!started) {
+			new Notice('Jot: persistent diagnostics are already recording.');
+			return;
+		}
+		this.diagnostics.record('diagnostics.manual-start-confirmed', {
+			activePdf: this.overlays.getActivePdfFilePath(),
+			activePdfPage: this.overlays.getActivePdfPageNumber(),
+		});
+		await this.diagnostics.flush();
+		new Notice(
+			'Jot: persistent diagnostics started. Recording will automatically resume after an unclean restart until you stop it.',
+			8000,
+		);
+	}
+
+	private async stopPersistentDiagnostics(): Promise<void> {
+		const stopped = await this.diagnostics.stop();
+		new Notice(
+			stopped
+				? 'Jot: persistent diagnostics stopped.'
+				: 'Jot: persistent diagnostics were not recording.',
+		);
+	}
+
+	private async exportLastDiagnostics(): Promise<void> {
+		const path = await this.diagnostics.exportLast();
+		if (!path) {
+			new Notice('Jot: no diagnostic recording is available to export.');
+			return;
+		}
+		new Notice(`Jot: diagnostic recording exported to ${path}.`, 8000);
+	}
+
+	private async clearDiagnosticRecordings(): Promise<void> {
+		const recording = this.diagnostics.isEnabled();
+		const cleared = await this.diagnostics.clearRecordings();
+		if (!cleared) {
+			new Notice('Jot: diagnostic recordings could not be cleared.', 8000);
+			return;
+		}
+		new Notice(
+			recording
+				? 'Jot: diagnostic recordings cleared; recording continues in a fresh session.'
+				: 'Jot: diagnostic recordings cleared.',
+		);
 	}
 
 	private flushDirtyBestEffort(): void {
