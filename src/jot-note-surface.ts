@@ -1,5 +1,6 @@
 import {
 	applyBackingStoreSize,
+	type CanvasBackingStoreLimits,
 	devicePixelRatioFor,
 	readCanvasSurface,
 	safeBackingStoreDpr,
@@ -17,6 +18,13 @@ const PAPER_CLASS = 'jot-note-paper';
 const PERSISTENT_CLASS = 'jot-note-ink';
 const LIVE_CLASS = 'jot-note-live-ink';
 const CANVAS_ERROR_CLASS = 'jot-note-canvas-error';
+
+export interface JotNoteSurfaceOptions {
+	observerRoot?: Element;
+	eagerMountFirstPage?: boolean;
+	rootMargin?: string;
+	backingStoreLimits?: CanvasBackingStoreLimits;
+}
 
 interface NotebookPageMount {
 	sheet: HTMLElement;
@@ -38,7 +46,7 @@ export class JotNoteSurface implements InkSurfaceController {
 		private host: HTMLElement,
 		private strokes: StrokeStore,
 		private wireOverlay: (canvas: HTMLCanvasElement) => (() => void) | void,
-		private observerRoot?: Element,
+		private options: JotNoteSurfaceOptions = {},
 	) {}
 
 	render(note: JotNoteFile, documentPath: string): void {
@@ -140,8 +148,8 @@ export class JotNoteSurface implements InkSurfaceController {
 				}
 			},
 			{
-				root: this.observerRoot ?? this.host.parentElement,
-				rootMargin: '100% 0px 100% 0px',
+				root: this.options.observerRoot ?? this.host.parentElement,
+				rootMargin: this.options.rootMargin ?? '100% 0px 100% 0px',
 				threshold: 0,
 			},
 		);
@@ -197,7 +205,9 @@ export class JotNoteSurface implements InkSurfaceController {
 
 		if (this.intersectionObserver) {
 			this.intersectionObserver.observe(sheet);
-			if (index === 0) this.mountPage(sheet);
+			if (index === 0 && (this.options.eagerMountFirstPage ?? true)) {
+				this.mountPage(sheet);
+			}
 		} else {
 			this.mountPage(sheet);
 		}
@@ -309,7 +319,12 @@ export class JotNoteSurface implements InkSurfaceController {
 		if (rect.width <= 0 || rect.height <= 0) return false;
 		const win = sheet.ownerDocument.defaultView ?? window;
 		const requestedDpr = devicePixelRatioFor(win);
-		const effectiveDpr = safeBackingStoreDpr(rect.width, rect.height, requestedDpr);
+		const effectiveDpr = safeBackingStoreDpr(
+			rect.width,
+			rect.height,
+			requestedDpr,
+			this.options.backingStoreLimits,
+		);
 		return applyBackingStoreSize(canvas, rect.width, rect.height, effectiveDpr);
 	}
 
