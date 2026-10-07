@@ -326,10 +326,11 @@ export class OverlayManager {
 	private mutationsNeedPdfSync(records: MutationRecord[]): boolean {
 		for (const record of records) {
 			const target = record.target;
-			if (!(target instanceof Element)) return true;
+			if (target.nodeType !== 1) return true;
+			const element = target as Element;
 			if (
-				target.closest('.jot-pdf-inserted-page') ||
-				target.closest('.jot-pdf-inserted-gap')
+				element.closest('.jot-pdf-inserted-page') ||
+				element.closest('.jot-pdf-inserted-gap')
 			) {
 				continue;
 			}
