@@ -247,6 +247,7 @@ export class JotNoteSurface implements InkSurfaceController {
 			applyResize: null,
 			contextRetryCount: 0,
 			onPointerDown: (event) => {
+				if (event.target !== mount.live) return;
 				if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
 				mount.activePointerId = event.pointerId;
 				mount.contextRetryCount = 0;
@@ -367,9 +368,10 @@ export class JotNoteSurface implements InkSurfaceController {
 		const canvas = this.makeCanvas(mount.sheet.ownerDocument, LIVE_CLASS, mount.key);
 		mount.live = canvas;
 		mount.sheet.appendChild(canvas);
-		canvas.addEventListener('pointerdown', mount.onPointerDown, true);
+		// Page capture runs before a newly promoted canvas sees the event.
+		mount.sheet.addEventListener('pointerdown', mount.onPointerDown, true);
 		for (const event of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
-			canvas.addEventListener(event, mount.onPointerEnd, true);
+			mount.sheet.addEventListener(event, mount.onPointerEnd, true);
 		}
 		// Offscreen pages own a 1x1 hit target but no native 2D context
 		// or drawing listener until intersection or a real pointer-down.
@@ -457,9 +459,9 @@ export class JotNoteSurface implements InkSurfaceController {
 		mount.inputWired = false;
 		if (final) {
 			if (mount.live) {
-				mount.live.removeEventListener('pointerdown', mount.onPointerDown, true);
+				mount.sheet.removeEventListener('pointerdown', mount.onPointerDown, true);
 				for (const event of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
-					mount.live.removeEventListener(event, mount.onPointerEnd, true);
+					mount.sheet.removeEventListener(event, mount.onPointerEnd, true);
 				}
 			}
 			mount.activePointerId = null;
