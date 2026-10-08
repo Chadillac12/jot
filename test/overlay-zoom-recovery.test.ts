@@ -446,8 +446,25 @@ describe('OverlayManager zoom recovery', () => {
 			expect(activeLive?.height).toBe(1);
 			expect(activeLive?.isConnected).toBe(true);
 
+			// A late lostcapture from an earlier pointer must not release the
+			// current gesture's pin and unmount the real drawing backing store.
+			activeLive?.dispatchEvent(penDown);
+			activeLive?.dispatchEvent(new PointerEvent('pointerdown', {
+				pointerId: 78, pointerType: 'pen', bubbles: true,
+			}));
+			activeLive?.dispatchEvent(new PointerEvent('lostpointercapture', {
+				pointerId: 77, pointerType: 'pen', bubbles: true,
+			}));
+			await vi.advanceTimersByTimeAsync(900);
+			expect(secondPage.querySelector('canvas.jot-overlay')).not.toBeNull();
+			activeLive?.dispatchEvent(new PointerEvent('pointerup', {
+				pointerId: 78, pointerType: 'pen', bubbles: true,
+			}));
+			await vi.advanceTimersByTimeAsync(750);
+			expect(secondPage.querySelector('canvas.jot-overlay')).toBeNull();
+
 			// Losing the original live canvas during an active gesture must not
-			// strand pointerActive and keep its heavy buffer alive forever.
+			// strand pointer ownership and keep its heavy buffer alive forever.
 			activeLive?.dispatchEvent(penDown);
 			activeLive?.remove();
 			await flushMutations();
