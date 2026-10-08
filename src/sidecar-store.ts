@@ -31,6 +31,7 @@ export class SidecarStore {
 	private unreadableLoads = new Set<string>();
 	private resourceFailures = new Set<string>();
 	private saveChains = new Map<string, Promise<boolean>>();
+	private loadChains = new Map<string, Promise<SidecarLoadStatus>>();
 
 	constructor(
 		private adapter: DataAdapter,
@@ -41,6 +42,23 @@ export class SidecarStore {
 	) {}
 
 	async load(pdfPath: string): Promise<SidecarLoadStatus> {
+		// Queue duplicate modify notifications rather than returning `dirty`
+		// while a previous disk read is still pending. The final read observes
+		// the latest file state without replacing genuinely dirty local ink.
+		const previous = this.loadChains.get(pdfPath) ?? Promise.resolve('missing' as SidecarLoadStatus);
+		const current = previous.then(
+			() => this.loadFromDisk(pdfPath),
+			() => this.loadFromDisk(pdfPath),
+		);
+		this.loadChains.set(pdfPath, current);
+		try {
+			return await current;
+		} finally {
+			if (this.loadChains.get(pdfPath) === current) this.loadChains.delete(pdfPath);
+		}
+	}
+
+	private async loadFromDisk(pdfPath: string): Promise<SidecarLoadStatus> {
 		const session = this.sessions.get(pdfPath);
 		if (!session.beginLoad()) return 'dirty';
 
