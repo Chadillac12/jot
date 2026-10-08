@@ -299,7 +299,7 @@ export class PdfPageBinding {
 		canvas.addEventListener('pointerup', this.handleInputPointerEnd, true);
 		canvas.addEventListener('pointercancel', this.handleInputPointerEnd, true);
 		canvas.addEventListener('lostpointercapture', this.handleInputPointerEnd, true);
-				// Native contexts and drawing handlers are allocated only on activation.
+		// Native contexts and drawing handlers are allocated only on activation.
 	}
 
 	private ensureLiveHandler(): void {
@@ -324,6 +324,7 @@ export class PdfPageBinding {
 		this.ensureLiveInputCanvas();
 		if (this.active) {
 			this.ensureCanvases();
+			this.ensureLiveHandler();
 		} else {
 			this.makeLiveInputDormant();
 		}
@@ -474,6 +475,7 @@ export class PdfPageBinding {
 			this.ensureLiveInputCanvas();
 			if (this.active) {
 				this.ensureCanvases();
+				this.ensureLiveHandler();
 				this.resizeAndRedraw();
 			} else {
 				this.makeLiveInputDormant();
