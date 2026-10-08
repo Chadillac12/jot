@@ -490,7 +490,8 @@ export default class JotPlugin extends Plugin {
 	}
 
 	private async handlePdfRename(oldPath: string, newPath: string): Promise<void> {
-		await this.sidecar.flush(oldPath);
+		const flushed = await this.sidecar.flush(oldPath);
+		if (!flushed) new Notice('Jot: PDF rename continues with unsaved ink; recovery is pending at the new path.', 8000);
 		this.strokes.rekeyDocumentPath(oldPath, newPath);
 		this.history.rekeyPath(oldPath, newPath);
 		await this.sidecar.renamePdfPath(oldPath, newPath);
