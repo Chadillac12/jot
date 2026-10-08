@@ -176,7 +176,10 @@ export class SidecarStore {
 
 	async renamePdfPath(oldPdfPath: string, newPdfPath: string): Promise<boolean> {
 		if (oldPdfPath === newPdfPath) return true;
-		await this.flush(oldPdfPath);
+		// Caller must finish the old-path flush BEFORE rekeying strokes.
+		// Flushing here would serialize an empty document after main.ts rekeys ink.
+		this.clearTimer(this.saveTimers, oldPdfPath);
+		this.clearTimer(this.retryTimers, oldPdfPath);
 
 		const oldSidecar = jotPathFor(oldPdfPath);
 		const newSidecar = jotPathFor(newPdfPath);
@@ -205,6 +208,9 @@ export class SidecarStore {
 				await this.adapter.rename(oldSidecar, newSidecar);
 			}
 			this.recentSelfSaves.delete(oldSidecar);
+			// Preserve dirty edits from a failed pre-rename flush; never strand the
+			// retry under an obsolete source PDF path.
+			if (session.isDirty && !this.isWriteBlocked(newPdfPath)) this.scheduleRetry(newPdfPath);
 			return true;
 		} catch (error) {
 			// Restore any displaced destination if the actual migration failed.
