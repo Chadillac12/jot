@@ -47,17 +47,18 @@ export class PdfPageBinding {
 	private deactivationTimer: number | null = null;
 	private active = false;
 	private nearViewport = false;
-	private pointerActive = false;
+	private activePointerId: number | null = null;
 	private disposed = false;
 	private readonly handleInputPointerDown = (event: PointerEvent) => {
 		if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
-		this.pointerActive = true;
+		this.activePointerId = event.pointerId;
 		this.cancelDeactivate();
 		this.activate('input');
 	};
 	private readonly handleInputPointerEnd = (event: PointerEvent) => {
 		if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
-		this.pointerActive = false;
+		if (event.pointerId !== this.activePointerId) return;
+		this.activePointerId = null;
 		if (!this.nearViewport) this.scheduleDeactivate();
 	};
 
@@ -235,7 +236,7 @@ export class PdfPageBinding {
 		this.releaseAllCanvases();
 		this.active = false;
 		this.nearViewport = false;
-		this.pointerActive = false;
+		this.activePointerId = null;
 		this.page.classList.remove(PDF_PAGE_ANCHOR_CLASS);
 		this.page.querySelector<HTMLElement>('.textLayer')?.classList.remove(PDF_PASSTHROUGH_CLASS);
 		this.page.querySelector<HTMLElement>('.annotationLayer')?.classList.remove(PDF_PASSTHROUGH_CLASS);
@@ -298,12 +299,17 @@ export class PdfPageBinding {
 		canvas.addEventListener('pointerup', this.handleInputPointerEnd, true);
 		canvas.addEventListener('pointercancel', this.handleInputPointerEnd, true);
 		canvas.addEventListener('lostpointercapture', this.handleInputPointerEnd, true);
-		this.liveDisposer = this.wireLiveCanvas(canvas) ?? null;
+				// Native contexts and drawing handlers are allocated only on activation.
+	}
+
+	private ensureLiveHandler(): void {
+		if (!this.live || this.liveDisposer) return;
+		this.liveDisposer = this.wireLiveCanvas(this.live) ?? (() => {});
 	}
 
 	private detachLiveInput(canvas: HTMLCanvasElement): void {
 		// PDF.js can remove the hit target mid-stroke without dispatching pointerup.
-		this.pointerActive = false;
+		this.activePointerId = null;
 		if (!this.nearViewport) this.scheduleDeactivate();
 		canvas.removeEventListener('pointerdown', this.handleInputPointerDown, true);
 		canvas.removeEventListener('pointerup', this.handleInputPointerEnd, true);
@@ -338,12 +344,13 @@ export class PdfPageBinding {
 			this.diagnostics.record('pdf.page-activate', { key: this.keyValue, reason });
 		}
 		this.ensureCanvases();
+		this.ensureLiveHandler();
 		this.disablePdfInteractionLayers();
 		this.resizeAndRedraw();
 	}
 
 	private scheduleDeactivate(): void {
-		if (this.disposed || !this.active || this.nearViewport || this.pointerActive) return;
+		if (this.disposed || !this.active || this.nearViewport || this.activePointerId !== null) return;
 		const win = this.page.ownerDocument.defaultView;
 		if (!win) {
 			this.deactivateNow();
@@ -357,7 +364,7 @@ export class PdfPageBinding {
 		});
 		this.deactivationTimer = win.setTimeout(() => {
 			this.deactivationTimer = null;
-			if (this.disposed || this.nearViewport || this.pointerActive) return;
+			if (this.disposed || this.nearViewport || this.activePointerId !== null) return;
 			this.deactivateNow();
 		}, delay);
 	}
@@ -378,6 +385,8 @@ export class PdfPageBinding {
 			this.releaseCanvas(this.persistent);
 			this.persistent = null;
 		}
+		this.liveDisposer?.();
+		this.liveDisposer = null;
 		this.makeLiveInputDormant();
 	}
 
