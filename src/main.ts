@@ -464,6 +464,7 @@ export default class JotPlugin extends Plugin {
 
 	private async handleSidecarModification(path: string): Promise<void> {
 		if (this.pluginUnloading || await this.sidecar.isOwnRecentSave(path)) return;
+		if (this.pluginUnloading) return;
 		const pdfPath = pdfPathFromSidecar(path);
 		if (!pdfPath) return;
 		if (this.sidecar.hasUnsavedChanges(pdfPath)) {
@@ -475,7 +476,7 @@ export default class JotPlugin extends Plugin {
 
 	private async reloadSidecar(pdfPath: string) {
 		const status = await this.sidecar.load(pdfPath);
-		if (status === 'dirty') return;
+		if (this.pluginUnloading || status === 'dirty') return;
 		if (status === 'loaded' || status === 'missing') {
 			// An external disk update establishes a new history boundary. Undoing
 			// across it could resurrect stale pre-sync annotations.
@@ -504,6 +505,7 @@ export default class JotPlugin extends Plugin {
 
 	private async resolveExternalSidecarConflict(pdfPath: string): Promise<void> {
 		const conflictPath = await this.sidecar.preserveExternalConflictAndFlushLocal(pdfPath);
+		if (this.pluginUnloading) return;
 		if (!conflictPath) {
 			new Notice(
 				'Jot: an external annotation update arrived while local ink was unsaved. Local ink was kept in memory; avoid closing the PDF until the conflict is resolved.',
