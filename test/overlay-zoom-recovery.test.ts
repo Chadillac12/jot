@@ -373,7 +373,7 @@ describe('OverlayManager zoom recovery', () => {
 			expect(IntersectionObserverVirtualizationMock.instances).toHaveLength(53);
 			expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(0);
 			expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(53);
-			expect(wire).toHaveBeenCalledTimes(53);
+			expect(wire).toHaveBeenCalledTimes(0);
 			for (const canvas of Array.from(
 				container.querySelectorAll<HTMLCanvasElement>('canvas.jot-live-overlay'),
 			)) {
@@ -385,6 +385,7 @@ describe('OverlayManager zoom recovery', () => {
 			IntersectionObserverVirtualizationMock.instances[1]?.fire(true);
 			IntersectionObserverVirtualizationMock.instances[2]?.fire(true);
 			IntersectionObserverVirtualizationMock.instances[3]?.fire(true);
+			expect(wire).toHaveBeenCalledTimes(3);
 			expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(3);
 			expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(53);
 
