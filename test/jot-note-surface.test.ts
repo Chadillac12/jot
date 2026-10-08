@@ -424,6 +424,76 @@ describe('JotNoteSurface', () => {
 		}
 	});
 
+	it('sizes the live canvas before the very first Pencil event even when rAF is delayed', () => {
+		const frames: FrameRequestCallback[] = [];
+		window.requestAnimationFrame = (cb) => { frames.push(cb); return frames.length; };
+		const host = document.createElement('div');
+		document.body.appendChild(host);
+		const surface = new JotNoteSurface(host, new StrokeStore(), vi.fn(() => vi.fn()));
+		surface.render(createJotNote(), 'Delayed.jot');
+		const live = host.querySelector<HTMLCanvasElement>('canvas.jot-note-live-ink')!;
+		expect(live.width).toBe(1);
+		live.dispatchEvent(new PointerEvent('pointerdown', {
+			pointerType: 'pen', pointerId: 23, bubbles: true,
+		}));
+		expect(live.width).toBeGreaterThan(1);
+		expect(live.height).toBeGreaterThan(1);
+		expect(host.querySelector<HTMLCanvasElement>('canvas.jot-note-ink')?.width).toBeGreaterThan(1);
+		surface.disconnect();
+	});
+
+	it('ignores stale pointer-end events that belong to an older Pencil gesture', async () => {
+		vi.useFakeTimers();
+		try {
+			const host = document.createElement('div');
+			document.body.appendChild(host);
+			const surface = new JotNoteSurface(host, new StrokeStore(), vi.fn(() => vi.fn()));
+			surface.render(createJotNote(), 'Pointer.jot');
+			const live = host.querySelector<HTMLCanvasElement>('canvas.jot-note-live-ink')!;
+			const emit = (type: string, pointerId: number) => live.dispatchEvent(
+				new PointerEvent(type, { pointerType: 'pen', pointerId, bubbles: true }),
+			);
+			emit('pointerdown', 11);
+			emit('pointerdown', 12);
+			emit('lostpointercapture', 11);
+			await vi.advanceTimersByTimeAsync(900);
+			expect(host.querySelectorAll('canvas.jot-note-ink')).toHaveLength(1);
+			emit('pointerup', 12);
+			await vi.advanceTimersByTimeAsync(750);
+			expect(host.querySelectorAll('canvas.jot-note-ink')).toHaveLength(0);
+			surface.disconnect();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('retains hundreds of cheap notebook hit targets without preallocating 2D contexts', () => {
+		class Observer {
+			constructor(private cb: IntersectionObserverCallback) {}
+			observe(): void {}
+			unobserve(): void {}
+			disconnect(): void {}
+		}
+		Object.defineProperty(window, 'IntersectionObserver', {
+			value: Observer, configurable: true, writable: true,
+		});
+		const host = document.createElement('div');
+		document.body.appendChild(host);
+		const note = createJotNote();
+		note.pages = Array.from({ length: 120 }, (_, i) => createJotPage(`page-${i + 1}`));
+		const contexts = vi.spyOn(HTMLCanvasElement.prototype, 'getContext');
+		const wire = vi.fn(() => vi.fn());
+		const surface = new JotNoteSurface(host, new StrokeStore(), wire, {
+			eagerMountFirstPage: false, observerRoot: document.body,
+		});
+		surface.render(note, 'Long.jot');
+		expect(host.querySelectorAll('canvas.jot-note-live-ink')).toHaveLength(120);
+		expect(host.querySelectorAll('canvas.jot-note-ink')).toHaveLength(0);
+		expect(wire).not.toHaveBeenCalled();
+		expect(contexts).not.toHaveBeenCalled();
+		surface.disconnect();
+	});
+
 	it('caps both notebook canvas backing stores at the iPad-safe area', () => {
 		const host = document.createElement('div');
 		const surface = new JotNoteSurface(host, new StrokeStore(), vi.fn());
