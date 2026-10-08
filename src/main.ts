@@ -95,7 +95,11 @@ export default class JotPlugin extends Plugin {
 			this.insertedPdfPages,
 			{
 				onInsertedPagePaperChange: (pdfPath, pageId, paper) => {
-					if (!this.canMutatePdf(pdfPath)) return;
+					if (!this.canMutatePdf(pdfPath)) {
+						// Restore the dropdown to persisted model state when read-only.
+						this.overlays.refreshPdf(pdfPath);
+						return;
+					}
 					if (!this.insertedPdfPages.updatePaper(pdfPath, pageId, paper)) return;
 					this.sidecar.scheduleSave(pdfPath);
 					this.overlays.refreshPdf(pdfPath);
