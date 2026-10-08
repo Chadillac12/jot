@@ -462,7 +462,6 @@ export class JotNoteSurface implements InkSurfaceController {
 					mount.live.removeEventListener(event, mount.onPointerEnd, true);
 				}
 			}
-			mount.disposeInput?.();
 			mount.activePointerId = null;
 			if (mount.live) this.releaseCanvas(mount.live);
 			mount.live = null;
