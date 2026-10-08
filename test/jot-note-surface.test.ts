@@ -310,7 +310,7 @@ describe('JotNoteSurface', () => {
 
 		expect(observe).toHaveBeenCalledTimes(1);
 		expect(host.querySelectorAll('canvas')).toHaveLength(1);
-		expect(wire).toHaveBeenCalledTimes(1);
+		expect(wire).toHaveBeenCalledTimes(0);
 
 		callback(
 			[
@@ -323,6 +323,7 @@ describe('JotNoteSurface', () => {
 			{} as IntersectionObserver,
 		);
 
+		expect(wire).toHaveBeenCalledTimes(1);
 		const canvases = Array.from(host.querySelectorAll<HTMLCanvasElement>('canvas'));
 		expect(canvases).toHaveLength(2);
 		expect(wire).toHaveBeenCalledTimes(1);
@@ -394,12 +395,13 @@ describe('JotNoteSurface', () => {
 			const sheet = host.querySelector<HTMLElement>('.jot-note-sheet')!;
 			const live = host.querySelector<HTMLCanvasElement>('canvas.jot-note-live-ink')!;
 			expect(live.width).toBe(1);
-			expect(wire).toHaveBeenCalledTimes(1);
+			expect(wire).toHaveBeenCalledTimes(0);
 			const intersection = (isIntersecting: boolean) => callback(
 				[{ target: sheet, isIntersecting, intersectionRatio: isIntersecting ? 1 : 0 } as unknown as IntersectionObserverEntry],
 				{} as IntersectionObserver,
 			);
 			intersection(true);
+			expect(wire).toHaveBeenCalledTimes(1);
 			expect(host.querySelectorAll('canvas.jot-note-ink')).toHaveLength(1);
 			intersection(false);
 			await vi.advanceTimersByTimeAsync(749);
@@ -414,7 +416,7 @@ describe('JotNoteSurface', () => {
 			await vi.advanceTimersByTimeAsync(750);
 			expect(host.querySelectorAll('canvas.jot-note-ink')).toHaveLength(0);
 			expect(live.isConnected).toBe(true);
-			expect(wire).toHaveBeenCalledTimes(1);
+			expect(wire).toHaveBeenCalledTimes(2);
 			surface.disconnect();
 			expect(live.isConnected).toBe(false);
 		} finally {
