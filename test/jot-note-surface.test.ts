@@ -482,6 +482,7 @@ describe('JotNoteSurface', () => {
 		const note = createJotNote();
 		note.pages = Array.from({ length: 120 }, (_, i) => createJotPage(`page-${i + 1}`));
 		const contexts = vi.spyOn(HTMLCanvasElement.prototype, 'getContext');
+		contexts.mockClear();
 		const wire = vi.fn(() => vi.fn());
 		const surface = new JotNoteSurface(host, new StrokeStore(), wire, {
 			eagerMountFirstPage: false, observerRoot: document.body,
