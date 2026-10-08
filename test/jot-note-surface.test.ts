@@ -494,6 +494,40 @@ describe('JotNoteSurface', () => {
 		surface.disconnect();
 	});
 
+	it('bounds WebKit context-allocation retries under sustained resource failure', async () => {
+		vi.useFakeTimers();
+		try {
+			let callback: IntersectionObserverCallback = () => {};
+			class Observer {
+				constructor(cb: IntersectionObserverCallback) { callback = cb; }
+				observe(): void {}
+				unobserve(): void {}
+				disconnect(): void {}
+			}
+			Object.defineProperty(window, 'IntersectionObserver', {
+				value: Observer, configurable: true, writable: true,
+			});
+			const failedContexts = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+			const host = document.createElement('div');
+			document.body.appendChild(host);
+			const surface = new JotNoteSurface(host, new StrokeStore(), vi.fn(), {
+				eagerMountFirstPage: false, observerRoot: document.body,
+			});
+			surface.render(createJotNote(), 'Unavailable.jot');
+			const sheet = host.querySelector<HTMLElement>('.jot-note-sheet')!;
+			callback([{ target: sheet, isIntersecting: true, intersectionRatio: 1 } as unknown as IntersectionObserverEntry], {} as IntersectionObserver);
+			await vi.advanceTimersByTimeAsync(60000);
+			const attempts = failedContexts.mock.calls.length;
+			expect(attempts).toBeGreaterThan(0);
+			expect(attempts).toBeLessThan(20);
+			expect(vi.getTimerCount()).toBe(0);
+			expect(host.querySelector('.jot-note-canvas-error')).not.toBeNull();
+			surface.disconnect();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('caps both notebook canvas backing stores at the iPad-safe area', () => {
 		const host = document.createElement('div');
 		const surface = new JotNoteSurface(host, new StrokeStore(), vi.fn());
