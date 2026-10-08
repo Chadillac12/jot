@@ -520,7 +520,8 @@ describe('JotNoteSurface', () => {
 			await vi.advanceTimersByTimeAsync(60000);
 			const attempts = failedContexts.mock.calls.length;
 			expect(attempts).toBeGreaterThan(0);
-			expect(attempts).toBeLessThan(20);
+			// Each bounded attempt may probe both input and persistent contexts.
+			expect(attempts).toBeLessThanOrEqual(25);
 			expect(vi.getTimerCount()).toBe(0);
 			expect(host.querySelector('.jot-note-canvas-error')).not.toBeNull();
 			surface.disconnect();
