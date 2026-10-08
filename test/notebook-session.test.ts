@@ -1,7 +1,36 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DocumentSessionManager } from '../src/document-session';
+import { MAX_POINTS_PER_STROKE } from '../src/jot-file';
 import { createJotNote, serializeJotNote } from '../src/jot-note-file';
 import { NotebookExternalConflictError, NotebookSessionManager } from '../src/notebook-session';
+
+describe('Notebook DER serialization safety', () => {
+	it('preserves the last-good document and stops retrying when live ink exceeds limits', async () => {
+		const manager = new NotebookSessionManager(new DocumentSessionManager());
+		const session = manager.get('Large.jot');
+		session.load(serializeJotNote(createJotNote()));
+		const key = 'Large.jot::page-1';
+		const full = {
+			points: Array.from({ length: MAX_POINTS_PER_STROKE + 1 }, () => ({
+				x: 0.5, y: 0.5, pressure: 0.5,
+			})),
+			color: '#000000', width: 0.005, tool: 'pen' as const,
+			render: { version: 2 as const, smoothing: 0.5, pressureSensitivity: 0.5 },
+		};
+		session.strokes.setForKey(key, [full]);
+		session.markDirty();
+		const writer = vi.fn(async () => {});
+		expect(await session.save(writer)).toBe(false);
+		expect(writer).not.toHaveBeenCalled();
+		expect(session.resourceLimitExceeded).toBe(true);
+		expect(session.state.isDirty).toBe(true);
+		session.strokes.setForKey(key, []);
+		session.markDirty();
+		expect(await session.save(writer)).toBe(true);
+		expect(session.resourceLimitExceeded).toBe(false);
+		expect(writer).toHaveBeenCalledTimes(1);
+	});
+});
 
 describe('NotebookSessionManager', () => {
 	it('keeps a protected notebook protected on an idempotent second-view attach', () => {
