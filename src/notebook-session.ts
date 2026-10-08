@@ -1,5 +1,6 @@
 import type { DocumentSession, DocumentSessionManager } from './document-session';
 import { documentPageKey } from './jot-file';
+import { InkResourceLimitError } from './ink-resource-error';
 import {
 	createJotNote,
 	parseJotNoteTextResult,
@@ -33,6 +34,7 @@ export class NotebookDocumentSession {
 	private noteValue: JotNoteFile = createJotNote();
 	private rawDataValue = '';
 	private loadErrorValue: string | null = null;
+	private resourceLimitValue = false;
 	private persistedDataValue = '';
 	private conflictDataValue: string | null = null;
 	private listeners = new Set<(
@@ -61,6 +63,10 @@ export class NotebookDocumentSession {
 
 	get loadError(): string | null {
 		return this.loadErrorValue;
+	}
+
+	get resourceLimitExceeded(): boolean {
+		return this.resourceLimitValue;
 	}
 
 	get rawData(): string {
@@ -136,6 +142,7 @@ export class NotebookDocumentSession {
 
 	markDirty(change: NotebookSessionChange = 'ink', key?: string, source?: object): void {
 		if (this.loadErrorValue) return;
+		this.resourceLimitValue = false;
 		this.stateSession.markDirty();
 		this.emit(change, key, source);
 	}
@@ -161,11 +168,15 @@ export class NotebookDocumentSession {
 		const serialized = this.serialize();
 		const expectedData = this.persistedDataValue;
 		try {
+			if (!parseJotNoteTextResult(serialized).ok) {
+				throw new InkResourceLimitError('Notebook exceeds mobile-safe serialization limits. Your last saved notebook remains unchanged; undo or remove some ink.');
+			}
 			await writer(expectedData, serialized);
 			this.persistedDataValue = serialized;
 			this.conflictDataValue = null;
 			this.rawDataValue = serialized;
 			this.stateSession.completeSave(revision);
+			this.resourceLimitValue = false;
 			return true;
 		} catch (error) {
 			if (error instanceof NotebookExternalConflictError) {
@@ -174,6 +185,7 @@ export class NotebookDocumentSession {
 				this.emit('conflict');
 				return false;
 			}
+			if (error instanceof InkResourceLimitError) this.resourceLimitValue = true;
 			this.stateSession.failSave(error);
 			this.emit('save-error');
 			return false;
