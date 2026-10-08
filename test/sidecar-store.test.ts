@@ -1,7 +1,7 @@
 import type { DataAdapter } from 'obsidian';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DocumentSessionManager } from '../src/document-session';
-import { JOT_FORMAT_VERSION } from '../src/jot-file';
+import { JOT_FORMAT_VERSION, MAX_POINTS_PER_STROKE } from '../src/jot-file';
 import { PdfInsertedPageStore } from '../src/pdf-inserted-page-store';
 import { SidecarStore } from '../src/sidecar-store';
 import { StrokeStore } from '../src/stroke-store';
@@ -324,6 +324,80 @@ describe('SidecarStore conflicts and recovery', () => {
 	});
 });
 
+
+describe('DER sidecar state and failure injection', () => {
+	it('keeps failed-flush ink dirty and retries at the renamed PDF path', async () => {
+		vi.useFakeTimers();
+		try {
+			const h = makeStore(makeFs({ 'Old/a.pdf.jot.json': validPayload }));
+			expect(await h.store.load('Old/a.pdf')).toBe('loaded');
+			h.strokes.setForKey('Old/a.pdf::1', [stroke('#123456')]);
+			h.store.scheduleSave('Old/a.pdf');
+			h.fs.failNextWrite();
+			expect(await h.store.flush('Old/a.pdf')).toBe(false);
+			h.strokes.rekeyDocumentPath('Old/a.pdf', 'New/a.pdf');
+			expect(await h.store.renamePdfPath('Old/a.pdf', 'New/a.pdf')).toBe(true);
+			expect(h.sessions.get('New/a.pdf').isDirty).toBe(true);
+			expect(h.fs.files['New/a.pdf.jot.json']).toBe(validPayload);
+			await vi.advanceTimersByTimeAsync(1500);
+			expect(h.fs.files['New/a.pdf.jot.json']).toContain('#123456');
+			expect(h.sessions.get('New/a.pdf').isDirty).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('queues concurrent sidecar loads so the final load sees the latest on-disk bytes', async () => {
+		const fs = makeFs({ 'a.pdf.jot.json': validPayload });
+		const h = makeStore(fs);
+		const actualRead = fs.adapter.read.bind(fs.adapter);
+		let resolveFirst: (value: string) => void = () => {};
+		const firstRead = new Promise<string>((resolve) => { resolveFirst = resolve; });
+		let reads = 0;
+		vi.spyOn(fs.adapter, 'read').mockImplementation(async (path) => {
+			if (path === 'a.pdf.jot.json' && ++reads === 1) return firstRead;
+			return actualRead(path);
+		});
+		const first = h.store.load('a.pdf');
+		await Promise.resolve();
+		await Promise.resolve();
+		fs.files['a.pdf.jot.json'] = JSON.stringify({
+			version: JOT_FORMAT_VERSION,
+			pages: { '1': [stroke('#abcdef')] },
+		});
+		const second = h.store.load('a.pdf');
+		resolveFirst(validPayload);
+		expect(await first).toBe('loaded');
+		expect(await second).toBe('loaded');
+		expect(h.strokes.forPage('a.pdf', 1)[0]?.color).toBe('#abcdef');
+	});
+
+	it('refuses to overwrite last-good sidecar with oversized runtime ink and does not keep retrying', async () => {
+		vi.useFakeTimers();
+		try {
+			const h = makeStore(makeFs({ 'a.pdf.jot.json': validPayload }));
+			await h.store.load('a.pdf');
+			const oversized = { ...stroke('#987654'), points: Array.from(
+				{ length: MAX_POINTS_PER_STROKE + 1 },
+				() => ({ x: 0.1, y: 0.2, pressure: 0.5 }),
+			) };
+			h.strokes.setForKey('a.pdf::1', [oversized]);
+			h.store.scheduleSave('a.pdf');
+			expect(await h.store.flush('a.pdf')).toBe(false);
+			expect(h.fs.files['a.pdf.jot.json']).toBe(validPayload);
+			expect(h.sessions.get('a.pdf').isDirty).toBe(true);
+			expect(h.store.hasPendingSave('a.pdf')).toBe(false);
+			await vi.advanceTimersByTimeAsync(5000);
+			expect(h.fs.files['a.pdf.jot.json']).toBe(validPayload);
+			h.strokes.setForKey('a.pdf::1', [stroke('#112233')]);
+			h.store.scheduleSave('a.pdf');
+			expect(await h.store.flush('a.pdf')).toBe(true);
+			expect(h.fs.files['a.pdf.jot.json']).toContain('#112233');
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
 
 describe('SidecarStore rename failure containment', () => {
 	it('keeps session identity on the new PDF path and retries persistence after sidecar move failure', async () => {
