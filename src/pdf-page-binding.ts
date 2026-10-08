@@ -50,6 +50,7 @@ export class PdfPageBinding {
 	private activePointerId: number | null = null;
 	private disposed = false;
 	private readonly handleInputPointerDown = (event: PointerEvent) => {
+		if (event.target !== this.live) return;
 		if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
 		this.activePointerId = event.pointerId;
 		this.cancelDeactivate();
@@ -82,6 +83,8 @@ export class PdfPageBinding {
 			pageNumber: this.page.getAttribute('data-page-number'),
 		});
 		this.page.classList.add(PDF_PAGE_ANCHOR_CLASS);
+		// Parent capture precedes canvas target dispatch, including on iPad WebKit.
+		this.page.addEventListener('pointerdown', this.handleInputPointerDown, true);
 		this.ensureLiveInputCanvas();
 		this.makeLiveInputDormant();
 		this.disablePdfInteractionLayers();
@@ -237,6 +240,7 @@ export class PdfPageBinding {
 		this.active = false;
 		this.nearViewport = false;
 		this.activePointerId = null;
+		this.page.removeEventListener('pointerdown', this.handleInputPointerDown, true);
 		this.page.classList.remove(PDF_PAGE_ANCHOR_CLASS);
 		this.page.querySelector<HTMLElement>('.textLayer')?.classList.remove(PDF_PASSTHROUGH_CLASS);
 		this.page.querySelector<HTMLElement>('.annotationLayer')?.classList.remove(PDF_PASSTHROUGH_CLASS);
@@ -295,7 +299,6 @@ export class PdfPageBinding {
 	}
 
 	private attachLiveInput(canvas: HTMLCanvasElement): void {
-		canvas.addEventListener('pointerdown', this.handleInputPointerDown, true);
 		canvas.addEventListener('pointerup', this.handleInputPointerEnd, true);
 		canvas.addEventListener('pointercancel', this.handleInputPointerEnd, true);
 		canvas.addEventListener('lostpointercapture', this.handleInputPointerEnd, true);
@@ -311,7 +314,6 @@ export class PdfPageBinding {
 		// PDF.js can remove the hit target mid-stroke without dispatching pointerup.
 		this.activePointerId = null;
 		if (!this.nearViewport) this.scheduleDeactivate();
-		canvas.removeEventListener('pointerdown', this.handleInputPointerDown, true);
 		canvas.removeEventListener('pointerup', this.handleInputPointerEnd, true);
 		canvas.removeEventListener('pointercancel', this.handleInputPointerEnd, true);
 		canvas.removeEventListener('lostpointercapture', this.handleInputPointerEnd, true);
