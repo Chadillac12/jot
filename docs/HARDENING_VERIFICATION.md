@@ -114,6 +114,25 @@ verification. It is engineering traceability for Jot; it is not FAA certificatio
 The automated checks do not replace real iPad acceptance testing of Pencil, zoom,
 scroll, background/foreground, sidecar sync, PDF merge, and app restart.
 
+## DER-01 through DER-10 corrective review (iPad.9 candidate)
+
+| ID | Corrective control | Verification |
+| --- | --- | --- |
+| DER-01 | PDF rename moves dirty save/retry to destination and never flushes after stroke rekey | injected failed-write then rename/recovery in `test/sidecar-store.test.ts` |
+| DER-02 | Central document mutation gate controls Pencil, inserted-page edits, clear and undo/redo | `test/undo-write-protection.test.ts`; source review of `src/main.ts` command callbacks |
+| DER-03 | Previously persisted notebook recovery copy is reusable if revision/path remain valid | `test/notebook-recovery-cache.test.ts` |
+| DER-04 | Oversized runtime ink never replaces last-good bytes or schedules endless retries | `test/sidecar-store.test.ts`, `test/notebook-session.test.ts` |
+| DER-05 | Dormant Pencil activation sizes backing stores synchronously before target dispatch | `test/jot-note-surface.test.ts` with delayed animation frame |
+| DER-06 | Pointer pinning is matched by pointerId, not unrelated late capture events | `test/jot-note-surface.test.ts`, `test/overlay-zoom-recovery.test.ts` |
+| DER-07 | Duplicate sidecar modification reads queue and reconcile final disk state | `test/sidecar-store.test.ts` deferred-read failure injection |
+| DER-08 | Offscreen notebook/PDF pages retain tiny hit targets, not hundreds of active contexts/handlers | 120-page lazy-context and 53-page PDF tests |
+| DER-09 | Context allocation failures use capped exponential backoff; later input can retry | `test/jot-note-surface.test.ts` sustained-failure test |
+| DER-10 | Async sidecar watcher callbacks recheck plugin unload after awaited work | `src/main.ts` lifecycle state code review |
+
+A green Node matrix does not prove WKWebView behavior. Independent iPad acceptance
+is required: zoom/Pencil/gesture input, 53-page memory usage, protected-read recovery,
+rename during failed save, background/restart, hybrid insertion, and PDF merge.
+
 ## Required release gate
 
 A candidate is releasable only when the exact versioned commit passes:
