@@ -282,6 +282,27 @@ solely because they occur within a time window.
 Persistent diagnostics also record synchronous best-effort clean-unload intent to
 reduce false crash recovery classification when WKWebView ends an async unload early.
 
+## DER corrective-action ownership invariants
+
+- **Dirty persistence after rename:** flush the old PDF before rekeying strokes;
+  after path migration, any unsaved state is retryable at the new path only.
+- **Document authorization:** blocking an unreadable sidecar blocks every editing
+  entry point, not just Pencil. Read-only tools and viewing remain available.
+- **Recovery identity:** an existing durable notebook recovery copy satisfies
+  protection for the same revision; missing copies or newer revisions require a
+  fresh durable copy.
+- **Resource budget:** all generated PDF sidecars and standalone notebooks are
+  validated before overwriting persisted files. Nonretryable budget violations
+  retain last-good data, emit errors and await corrective edits instead of
+  retrying identical oversized bytes.
+- **Input lifecycle:** parent capture activates a dormant page before input
+  reaches a canvas. Only the matching active pointer may release its gesture pin.
+  First-Pencil sizing is synchronous even if animation frames are delayed.
+  Offscreen hit targets are lightweight and do not own permanent 2D contexts.
+- **Concurrency/lifetime:** sidecar reads serialize by document; file-change
+  continuations recheck unload after awaits. Context exhaustion uses capped
+  retries with backoff instead of constant allocation churn.
+
 ## Release configuration management
 
 Published release versions are immutable. The release workflow fails if a release with the same
