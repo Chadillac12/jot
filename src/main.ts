@@ -94,6 +94,7 @@ export default class JotPlugin extends Plugin {
 			this.insertedPdfPages,
 			{
 				onInsertedPagePaperChange: (pdfPath, pageId, paper) => {
+					if (!this.canMutatePdf(pdfPath)) return;
 					if (!this.insertedPdfPages.updatePaper(pdfPath, pageId, paper)) return;
 					this.sidecar.scheduleSave(pdfPath);
 					this.overlays.refreshPdf(pdfPath);
@@ -104,6 +105,7 @@ export default class JotPlugin extends Plugin {
 		this.undoController = new UndoController(this.history, this.strokes, this.overlays, {
 			activeDocumentPath: () => this.overlays.getActivePdfFilePath(),
 			onAfterApply: (pdfPath) => this.scheduleSave(pdfPath),
+			canMutateDocument: (pdfPath) => this.canMutatePdf(pdfPath),
 		});
 		this.merge = new MergeService(
 			this.app,
@@ -514,6 +516,12 @@ export default class JotPlugin extends Plugin {
 		);
 	}
 
+	private canMutatePdf(pdfPath: string): boolean {
+		if (!this.sidecar.isWriteBlocked(pdfPath)) return true;
+		new Notice('Jot: this PDF is read-only until its annotation sidecar can be loaded safely.', 8000);
+		return false;
+	}
+
 	private scheduleSave(pdfPath: string): void {
 		this.sidecar.scheduleSave(pdfPath);
 	}
@@ -783,6 +791,7 @@ export default class JotPlugin extends Plugin {
 		const pdfPath = this.overlays.getActivePdfFilePath();
 		const pageNumber = this.overlays.getActivePdfPageNumber();
 		if (!pdfPath || pageNumber === null) return;
+		if (!this.canMutatePdf(pdfPath)) return;
 		const slot = position === 'after' ? pageNumber : Math.max(0, pageNumber - 1);
 		const page = this.insertedPdfPages.add(pdfPath, slot, 'ruled');
 		this.sidecar.scheduleSave(pdfPath);
@@ -817,6 +826,7 @@ export default class JotPlugin extends Plugin {
 	}
 
 	private applyClear(pdfPath: string) {
+		if (!this.canMutatePdf(pdfPath)) return;
 		const operations = collectClearOperations(pdfPath, this.strokes.asMap());
 		const totalStrokes = countStrokes(operations);
 		if (totalStrokes === 0) return;
