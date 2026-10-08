@@ -35,7 +35,7 @@ export default class JotPlugin extends Plugin {
 	private pdfAttachTimer: number | null = null;
 	private pluginUnloading = false;
 	private notebookRetryTimers = new Map<string, number>();
-	private notebookConflictRecoveries = new Map<string, number>();
+	private notebookConflictRecoveries = new Map<string, { revision: number; path: string }>();
 	private notebookRenameChain: Promise<void> = Promise.resolve();
 	private sidecar!: SidecarStore;
 	private merge!: MergeService;
@@ -657,7 +657,8 @@ export default class JotPlugin extends Plugin {
 
 	async preserveNotebookConflict(session: NotebookDocumentSession): Promise<string | null> {
 		const revision = session.state.revision;
-		if (this.notebookConflictRecoveries.get(session.path) === revision) return null;
+		const prior = this.notebookConflictRecoveries.get(session.path);
+		if (prior?.revision === revision && this.app.vault.getAbstractFileByPath(prior.path)) return prior.path;
 		const extension = `.${JOT_NOTE_EXTENSION}`;
 		const base = session.path.endsWith(extension)
 			? session.path.slice(0, -extension.length)
@@ -671,7 +672,7 @@ export default class JotPlugin extends Plugin {
 		}
 		try {
 			await this.app.vault.create(recoveryPath, session.serialize());
-			this.notebookConflictRecoveries.set(session.path, revision);
+			this.notebookConflictRecoveries.set(session.path, { revision, path: recoveryPath });
 			new Notice(`Jot: preserved local conflicted ink at ${recoveryPath}.`, 8000);
 			return recoveryPath;
 		} catch (error) {
