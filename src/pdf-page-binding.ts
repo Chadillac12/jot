@@ -499,6 +499,7 @@ export class PdfPageBinding {
 			this.ensureLiveInputCanvas();
 			if (this.active) {
 				this.ensureCanvases();
+				this.ensureLiveHandler();
 				this.resizeAndRedraw();
 			} else {
 				this.makeLiveInputDormant();
