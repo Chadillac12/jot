@@ -1,6 +1,7 @@
 import type { DataAdapter } from 'obsidian';
 import { DocumentSessionManager } from './document-session';
-import { isSupportedVersion, jotPathFor, parseJotText } from './jot-file';
+import { MAX_INK_JSON_CHARACTERS, isSupportedVersion, jotPathFor, parseJotText } from './jot-file';
+import { InkResourceLimitError } from './ink-resource-error';
 import { PdfInsertedPageStore } from './pdf-inserted-page-store';
 import type { StrokeStore } from './stroke-store';
 
@@ -28,6 +29,7 @@ export class SidecarStore {
 	private protectedOriginals = new Map<string, string>();
 	// An unreadable existing sidecar must never be overwritten by partial in-memory ink.
 	private unreadableLoads = new Set<string>();
+	private resourceFailures = new Set<string>();
 	private saveChains = new Map<string, Promise<boolean>>();
 
 	constructor(
@@ -88,6 +90,7 @@ export class SidecarStore {
 
 	scheduleSave(pdfPath: string): void {
 		const session = this.sessions.get(pdfPath);
+		this.resourceFailures.delete(pdfPath); // An edit may have reduced the document below its limit.
 		const wasDirty = session.isDirty;
 		session.markDirty();
 		if (this.isWriteBlocked(pdfPath)) {
@@ -143,7 +146,7 @@ export class SidecarStore {
 	}
 
 	retry(pdfPath: string): void {
-		if (!this.sessions.get(pdfPath).isDirty) return;
+		if (!this.sessions.get(pdfPath).isDirty || this.resourceFailures.has(pdfPath)) return;
 		this.clearTimer(this.retryTimers, pdfPath);
 		void this.save(pdfPath);
 	}
@@ -194,6 +197,7 @@ export class SidecarStore {
 		this.insertedPages.rekeyDocumentPath(oldPdfPath, newPdfPath);
 		const session = this.sessions.rename(oldPdfPath, newPdfPath);
 		if (this.unreadableLoads.delete(oldPdfPath)) this.unreadableLoads.add(newPdfPath);
+		if (this.resourceFailures.delete(oldPdfPath)) this.resourceFailures.add(newPdfPath);
 		let displacedDestination: string | null = null;
 		let displacedConflictPath: string | null = null;
 
@@ -308,6 +312,9 @@ export class SidecarStore {
 				this.protectedOriginals.delete(pdfPath);
 			} else {
 				const text = JSON.stringify(payload, null, 2);
+				if (text.length > MAX_INK_JSON_CHARACTERS || !parseJotText(text)) {
+					throw new InkResourceLimitError('PDF annotations exceed mobile-safe serialization limits. The previous sidecar was preserved; undo or clear some ink before retrying.');
+				}
 				await this.atomicWriteText(path, text, true);
 				this.protectedOriginals.delete(pdfPath);
 				this.recentSelfSaves.set(path, { at: Date.now(), content: text });
@@ -320,14 +327,15 @@ export class SidecarStore {
 		} catch (error) {
 			session.failSave(error);
 			this.callbacks.onSaveError?.(pdfPath, error);
-			this.scheduleRetry(pdfPath);
+			if (error instanceof InkResourceLimitError) this.resourceFailures.add(pdfPath);
+			else this.scheduleRetry(pdfPath);
 			console.error(`${PLUGIN_LOG} save failed for ${path}:`, error);
 			return false;
 		}
 	}
 
 	private scheduleRetry(pdfPath: string): void {
-		if (!this.sessions.get(pdfPath).isDirty || this.retryTimers.has(pdfPath)) return;
+		if (!this.sessions.get(pdfPath).isDirty || this.resourceFailures.has(pdfPath) || this.isWriteBlocked(pdfPath) || this.retryTimers.has(pdfPath)) return;
 		const id = window.setTimeout(() => {
 			this.retryTimers.delete(pdfPath);
 			void this.save(pdfPath);
