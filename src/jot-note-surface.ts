@@ -47,7 +47,9 @@ interface NotebookPageMount {
 	deactivationTimer: number | null;
 	retryTimer: number | null;
 	nearViewport: boolean;
-	pointerActive: boolean;
+	activePointerId: number | null;
+	applyResize: (() => void) | null;
+	contextRetryCount: number;
 	onPointerDown: (event: PointerEvent) => void;
 	onPointerEnd: (event: PointerEvent) => void;
 	painted: boolean;
@@ -241,16 +243,20 @@ export class JotNoteSurface implements InkSurfaceController {
 			deactivationTimer: null,
 			retryTimer: null,
 			nearViewport: false,
-			pointerActive: false,
+			activePointerId: null,
+			applyResize: null,
+			contextRetryCount: 0,
 			onPointerDown: (event) => {
 				if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
-				mount.pointerActive = true;
+				mount.activePointerId = event.pointerId;
+				mount.contextRetryCount = 0;
 				this.cancelDeactivation(mount);
-				this.mountPage(sheet);
+				this.mountPage(sheet, true);
 			},
 			onPointerEnd: (event) => {
 				if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
-				mount.pointerActive = false;
+				if (event.pointerId !== mount.activePointerId) return;
+				mount.activePointerId = null;
 				if (!mount.nearViewport) this.scheduleDeactivation(mount);
 			},
 			painted: false,
@@ -272,9 +278,18 @@ export class JotNoteSurface implements InkSurfaceController {
 		}
 	}
 
-	private mountPage(sheet: HTMLElement): void {
+	private mountPage(sheet: HTMLElement, immediate = false): void {
 		const mount = this.pageMounts.get(sheet);
-		if (!mount || mount.persistent) return;
+		if (!mount) return;
+		if (mount.persistent) {
+			if (immediate) {
+				const win = sheet.ownerDocument.defaultView;
+				if (mount.resizeFrame !== null) win?.cancelAnimationFrame(mount.resizeFrame);
+				mount.resizeFrame = null;
+				mount.applyResize?.();
+			}
+			return;
+		}
 		this.diagnostics().record('jot-surface.mount-page', {
 			key: mount.key,
 			sourceWidth: mount.sourceWidth,
@@ -290,6 +305,7 @@ export class JotNoteSurface implements InkSurfaceController {
 		sheet.insertBefore(persistent, live);
 		mount.persistent = persistent;
 
+		this.wireInputIfPossible(mount);
 		const persistentCtx = persistent.getContext('2d');
 		const liveCtx = live.getContext('2d');
 		if (!persistentCtx || !liveCtx) {
@@ -314,6 +330,7 @@ export class JotNoteSurface implements InkSurfaceController {
 			this.clearLivePage(mount.live);
 		};
 
+		mount.applyResize = applyResize;
 		const scheduleResize = () => {
 			const win = doc.defaultView;
 			if (!win) {
@@ -338,7 +355,8 @@ export class JotNoteSurface implements InkSurfaceController {
 				mount.resizeObserver.observe(sheet);
 			}
 		}
-		scheduleResize();
+		if (immediate) applyResize();
+		else scheduleResize();
 	}
 
 	private ensureInputTarget(mount: NotebookPageMount): void {
@@ -353,7 +371,8 @@ export class JotNoteSurface implements InkSurfaceController {
 		for (const event of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
 			canvas.addEventListener(event, mount.onPointerEnd, true);
 		}
-		this.wireInputIfPossible(mount);
+		// Offscreen pages own a 1x1 hit target but no native 2D context
+		// or drawing listener until intersection or a real pointer-down.
 		this.makeInputDormant(mount);
 	}
 
@@ -366,6 +385,7 @@ export class JotNoteSurface implements InkSurfaceController {
 		}
 		mount.disposeInput = this.wireOverlay(mount.live) ?? null;
 		mount.inputWired = true;
+		mount.contextRetryCount = 0;
 		mount.errorEl?.remove();
 		mount.errorEl = null;
 	}
@@ -381,13 +401,13 @@ export class JotNoteSurface implements InkSurfaceController {
 	}
 
 	private scheduleDeactivation(mount: NotebookPageMount): void {
-		if (mount.nearViewport || mount.pointerActive || !mount.persistent) return;
+		if (mount.nearViewport || mount.activePointerId !== null || !mount.persistent) return;
 		this.cancelDeactivation(mount);
 		const win = mount.sheet.ownerDocument.defaultView;
 		if (!win) return;
 		mount.deactivationTimer = win.setTimeout(() => {
 			mount.deactivationTimer = null;
-			if (!mount.nearViewport && !mount.pointerActive) this.unmountPage(mount.sheet);
+			if (!mount.nearViewport && mount.activePointerId === null) this.unmountPage(mount.sheet);
 		}, this.options.deactivationGraceMs ?? DEACTIVATION_GRACE_MS);
 	}
 
@@ -398,14 +418,16 @@ export class JotNoteSurface implements InkSurfaceController {
 	}
 
 	private scheduleContextRetry(mount: NotebookPageMount): void {
-		if (mount.retryTimer !== null) return;
+		if (mount.retryTimer !== null || mount.contextRetryCount >= 5) return;
 		const win = mount.sheet.ownerDocument.defaultView;
 		if (!win) return;
+		const delayMs = Math.min(8000, 500 * (2 ** mount.contextRetryCount));
+		mount.contextRetryCount += 1;
 		mount.retryTimer = win.setTimeout(() => {
 			mount.retryTimer = null;
 			if (this.pageMounts.get(mount.sheet) !== mount) return;
-			if (mount.nearViewport || mount.pointerActive) this.mountPage(mount.sheet);
-		}, 1000);
+			if (mount.nearViewport || mount.activePointerId !== null) this.mountPage(mount.sheet);
+		}, delayMs);
 	}
 
 	private unmountPage(sheet: HTMLElement, final = false): void {
@@ -426,9 +448,13 @@ export class JotNoteSurface implements InkSurfaceController {
 		mount.resizeObserver = null;
 		if (win && mount.resizeFrame !== null) win.cancelAnimationFrame(mount.resizeFrame);
 		mount.resizeFrame = null;
+		mount.applyResize = null;
 		mount.painted = false;
 		if (mount.persistent) this.releaseCanvas(mount.persistent);
 		mount.persistent = null;
+		mount.disposeInput?.();
+		mount.disposeInput = null;
+		mount.inputWired = false;
 		if (final) {
 			if (mount.live) {
 				mount.live.removeEventListener('pointerdown', mount.onPointerDown, true);
@@ -437,8 +463,7 @@ export class JotNoteSurface implements InkSurfaceController {
 				}
 			}
 			mount.disposeInput?.();
-			mount.disposeInput = null;
-			mount.inputWired = false;
+			mount.activePointerId = null;
 			if (mount.live) this.releaseCanvas(mount.live);
 			mount.live = null;
 			mount.errorEl?.remove();
