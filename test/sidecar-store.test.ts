@@ -350,13 +350,12 @@ describe('DER sidecar state and failure injection', () => {
 	it('queues concurrent sidecar loads so the final load sees the latest on-disk bytes', async () => {
 		const fs = makeFs({ 'a.pdf.jot.json': validPayload });
 		const h = makeStore(fs);
-		const actualRead = fs.adapter.read.bind(fs.adapter);
 		let resolveFirst: (value: string) => void = () => {};
 		const firstRead = new Promise<string>((resolve) => { resolveFirst = resolve; });
 		let reads = 0;
 		vi.spyOn(fs.adapter, 'read').mockImplementation(async (path) => {
 			if (path === 'a.pdf.jot.json' && ++reads === 1) return firstRead;
-			return actualRead(path);
+			return fs.files[path] ?? '';
 		});
 		const first = h.store.load('a.pdf');
 		await Promise.resolve();
