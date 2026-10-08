@@ -13,6 +13,7 @@ import { JOT_NOTE_EXTENSION, JOT_NOTE_VIEW_TYPE, createJotNote, serializeJotNote
 import { JotNoteView } from './jot-note-view';
 import { MergeService } from './merge-service';
 import { NotebookExternalConflictError, NotebookSessionManager, type NotebookDocumentSession } from './notebook-session';
+import { reusableRecoveryPath } from './notebook-recovery-cache';
 import { OverlayManager } from './overlay-manager';
 import { PdfInsertedPageStore } from './pdf-inserted-page-store';
 import { SidecarStore, type SidecarLoadStatus } from './sidecar-store';
@@ -659,8 +660,13 @@ export default class JotPlugin extends Plugin {
 
 	async preserveNotebookConflict(session: NotebookDocumentSession): Promise<string | null> {
 		const revision = session.state.revision;
-		const prior = this.notebookConflictRecoveries.get(session.path);
-		if (prior?.revision === revision && this.app.vault.getAbstractFileByPath(prior.path)) return prior.path;
+		const prior = reusableRecoveryPath(
+			this.notebookConflictRecoveries,
+			session.path,
+			revision,
+			(path) => this.app.vault.getAbstractFileByPath(path) !== null,
+		);
+		if (prior) return prior;
 		const extension = `.${JOT_NOTE_EXTENSION}`;
 		const base = session.path.endsWith(extension)
 			? session.path.slice(0, -extension.length)
