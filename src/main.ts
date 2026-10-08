@@ -651,7 +651,7 @@ export default class JotPlugin extends Plugin {
 		}
 
 		if (session.state.state === 'conflict') void this.preserveNotebookConflict(session);
-		if (session.state.state === 'error') this.scheduleNotebookRetry(session.path);
+		if (session.state.state === 'error' && !session.resourceLimitExceeded) this.scheduleNotebookRetry(session.path);
 		return false;
 	}
 
@@ -690,7 +690,7 @@ export default class JotPlugin extends Plugin {
 			this.notebookRetryTimers.delete(path);
 			const file = this.app.vault.getAbstractFileByPath(path);
 			const session = this.notebooks.peek(path);
-			if (!(file instanceof TFile) || !session || !session.state.isDirty || session.state.state === 'conflict') {
+			if (!(file instanceof TFile) || !session || !session.state.isDirty || session.state.state === 'conflict' || session.resourceLimitExceeded) {
 				return;
 			}
 			void this.saveNotebookSession(file, session);
