@@ -68,9 +68,11 @@ export class PdfPageBinding {
 				liveAttached: this.liveInputAttached(),
 			});
 		}
-		this.activePointerId = event.pointerId;
 		this.cancelDeactivate();
 		this.activate('input');
+		// Canvas replacement can clear an old pointer pin. Claim the new ID
+		// only after activation/replacement has completed.
+		this.activePointerId = event.pointerId;
 		if (!originalTargetWasLive) {
 			if (this.pointerForwarder) {
 				this.pointerForwarder(event);
