@@ -7,6 +7,7 @@ import { ConfirmClearModal } from './clear';
 import { collectClearOperations, countStrokes, toUndoEntries } from './clear-ops';
 import { FloatingPaletteButton } from './floating-palette-button';
 import { PointerEventHandler } from './pointer-event-handler';
+import type { PdfPointerForwarder } from './pdf-page-binding';
 import { PersistentDiagnostics } from './persistent-diagnostics';
 import { documentPathFromKey, isSidecarPath, pdfPathFromSidecar } from './jot-file';
 import { JOT_NOTE_EXTENSION, JOT_NOTE_VIEW_TYPE, createJotNote, serializeJotNote } from './jot-note-file';
@@ -533,8 +534,8 @@ export default class JotPlugin extends Plugin {
 		this.sidecar.scheduleSave(pdfPath);
 	}
 
-	private wirePointerEvents(canvas: HTMLCanvasElement): () => void {
-		return this.wireInkCanvas(canvas, this.overlays, this.sidecar, this.undoController, this.strokes);
+	private wirePointerEvents(canvas: HTMLCanvasElement, registerForwarder?: (forwarder: PdfPointerForwarder | null) => void): () => void {
+		return this.wireInkCanvas(canvas, this.overlays, this.sidecar, this.undoController, this.strokes, registerForwarder);
 	}
 
 	wireInkCanvas(
@@ -543,6 +544,7 @@ export default class JotPlugin extends Plugin {
 		saveScheduler: InkSaveScheduler,
 		undo: UndoController,
 		strokes = this.strokes,
+		registerForwarder?: (forwarder: PdfPointerForwarder | null) => void,
 	): () => void {
 		const ctx = canvas.getContext('2d');
 		if (!ctx) {
@@ -558,6 +560,13 @@ export default class JotPlugin extends Plugin {
 			toolState: () => this.toolState,
 			handedness: () => this.settings.handedness,
 			paletteActivation: () => this.settings.paletteActivation,
+			onInputDecision: (result, reason) => {
+				this.diagnostics.record('ink.input-decision', {
+					result,
+					reason,
+					key: canvas.getAttribute('data-jot-key'),
+				});
+			},
 			allowInput: () => {
 				if (saveScheduler !== this.sidecar) return true;
 				const key = canvas.getAttribute('data-jot-key');
@@ -566,7 +575,11 @@ export default class JotPlugin extends Plugin {
 			},
 		});
 		handler.attach();
-		return () => handler.detach();
+		registerForwarder?.((event) => handler.forwardPointerEvent(event));
+		return () => {
+			registerForwarder?.(null);
+			handler.detach();
+		};
 	}
 
 	async loadSettings() {
