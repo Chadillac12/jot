@@ -71,6 +71,28 @@ beforeEach(() => {
 });
 
 describe('JotNoteSurface', () => {
+	it('retries notebook ink wiring if WebKit temporarily cannot initialize input', async () => {
+		vi.useFakeTimers();
+		try {
+			const host = document.createElement('div');
+			document.body.appendChild(host);
+			let attempts = 0;
+			const wire = vi.fn((): (() => void) | null => {
+				attempts += 1;
+				return attempts === 1 ? null : () => {};
+			});
+			const surface = new JotNoteSurface(host, new StrokeStore(), wire);
+			surface.render(createJotNote(), 'Lecture.jot');
+			expect(wire).toHaveBeenCalledTimes(1);
+			await vi.advanceTimersByTimeAsync(500);
+			expect(wire).toHaveBeenCalledTimes(2);
+			expect(host.querySelector('canvas.jot-note-live-ink')).not.toBeNull();
+			surface.disconnect();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('renders one persistent and one live Ink Engine layer per page', () => {
 		const host = document.createElement('div');
 		document.body.appendChild(host);

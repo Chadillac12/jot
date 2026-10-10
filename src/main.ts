@@ -8,6 +8,7 @@ import { collectClearOperations, countStrokes, toUndoEntries } from './clear-ops
 import { FloatingPaletteButton } from './floating-palette-button';
 import { PointerEventHandler } from './pointer-event-handler';
 import type { PdfPointerForwarder } from './pdf-page-binding';
+import { createPdfInputWiring } from './pdf-input-wiring';
 import { PersistentDiagnostics } from './persistent-diagnostics';
 import { documentPathFromKey, isSidecarPath, pdfPathFromSidecar } from './jot-file';
 import { JOT_NOTE_EXTENSION, JOT_NOTE_VIEW_TYPE, createJotNote, serializeJotNote } from './jot-note-file';
@@ -92,7 +93,7 @@ export default class JotPlugin extends Plugin {
 		this.overlays = new OverlayManager(
 			this.app,
 			this.strokes,
-			(canvas) => this.wirePointerEvents(canvas),
+			createPdfInputWiring(this.wirePointerEvents.bind(this)),
 			this.insertedPdfPages,
 			{
 				onInsertedPagePaperChange: (pdfPath, pageId, paper) => {
@@ -533,7 +534,7 @@ export default class JotPlugin extends Plugin {
 		this.sidecar.scheduleSave(pdfPath);
 	}
 
-	private wirePointerEvents(canvas: HTMLCanvasElement, registerForwarder?: (forwarder: PdfPointerForwarder | null) => void): () => void {
+	private wirePointerEvents(canvas: HTMLCanvasElement, registerForwarder?: (forwarder: PdfPointerForwarder | null) => void): (() => void) | null {
 		return this.wireInkCanvas(canvas, this.overlays, this.sidecar, this.undoController, this.strokes, registerForwarder);
 	}
 
@@ -544,11 +545,12 @@ export default class JotPlugin extends Plugin {
 		undo: UndoController,
 		strokes = this.strokes,
 		registerForwarder?: (forwarder: PdfPointerForwarder | null) => void,
-	): () => void {
+	): (() => void) | null {
 		const ctx = canvas.getContext('2d');
 		if (!ctx) {
 			console.error(`${PLUGIN_LOG} no 2d context`);
-			return () => {};
+			this.diagnostics.record('ink.canvas-context-unavailable', { key: canvas.getAttribute('data-jot-key') });
+			return null; // A no-op disposer would permanently suppress PDF input recovery.
 		}
 		const handler = new PointerEventHandler(canvas, ctx, {
 			palette: this.palette,

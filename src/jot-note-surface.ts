@@ -422,9 +422,17 @@ export class JotNoteSurface implements InkSurfaceController {
 			this.scheduleContextRetry(mount);
 			return;
 		}
-		mount.disposeInput = this.wireOverlay(mount.live, (forwarder) => {
+		const disposer = this.wireOverlay(mount.live, (forwarder) => {
 			mount.inputForwarder = forwarder;
-		}) ?? null;
+		});
+		if (disposer === null) {
+			// A failed 2D context request must not masquerade as a wired input.
+			mount.inputForwarder = null;
+			this.showCanvasUnavailable(mount);
+			this.scheduleContextRetry(mount);
+			return;
+		}
+		mount.disposeInput = disposer ?? null;
 		mount.inputWired = true;
 		mount.contextRetryCount = 0;
 		mount.errorEl?.remove();
@@ -467,7 +475,7 @@ export class JotNoteSurface implements InkSurfaceController {
 		mount.retryTimer = win.setTimeout(() => {
 			mount.retryTimer = null;
 			if (this.pageMounts.get(mount.sheet) !== mount) return;
-			if (mount.nearViewport || mount.activePointerId !== null) this.mountPage(mount.sheet);
+			if (mount.persistent || mount.nearViewport || mount.activePointerId !== null) this.mountPage(mount.sheet);
 		}, delayMs);
 	}
 

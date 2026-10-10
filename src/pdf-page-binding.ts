@@ -31,7 +31,7 @@ export type PdfPointerForwarder = (event: PointerEvent) => void;
 export type PdfLiveWiring = (
 	canvas: HTMLCanvasElement,
 	registerForwarder?: (forwarder: PdfPointerForwarder | null) => void,
-) => (() => void) | void;
+) => (() => void) | null | void;
 
 export interface PdfPageBindingOptions {
 	observerRoot?: Element;
@@ -55,6 +55,7 @@ export class PdfPageBinding {
 	private nearViewport = false;
 	private activePointerId: number | null = null;
 	private pointerForwarder: PdfPointerForwarder | null = null;
+	private contextRetryCount = 0;
 	private disposed = false;
 	private readonly handleInputPointerDown = (event: PointerEvent) => {
 		if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
@@ -69,6 +70,8 @@ export class PdfPageBinding {
 			});
 		}
 		this.cancelDeactivate();
+		// A later Pencil contact may retry after an earlier bounded failure.
+		if (this.contextRetryCount >= 5) this.contextRetryCount = 0;
 		this.activate('input');
 		// Canvas replacement can clear an old pointer pin. Claim the new ID
 		// only after activation/replacement has completed.
@@ -361,9 +364,22 @@ export class PdfPageBinding {
 
 	private ensureLiveHandler(): void {
 		if (!this.live || this.liveDisposer) return;
-		this.liveDisposer = this.wireLiveCanvas(this.live, (forwarder) => {
+		const disposer = this.wireLiveCanvas(this.live, (forwarder) => {
 			this.pointerForwarder = forwarder;
-		}) ?? (() => {});
+		});
+		if (disposer === null) {
+			// WebKit can transiently refuse a 2D context under memory pressure.
+			// Never mark a failed handler as connected with a no-op disposer.
+			this.pointerForwarder = null;
+			if (this.contextRetryCount < 5 && this.page.ownerDocument.defaultView) {
+				const delayMs = Math.min(8000, 500 * (2 ** this.contextRetryCount));
+				this.contextRetryCount += 1;
+				this.scheduleRecovery(delayMs);
+			}
+			return;
+		}
+		this.contextRetryCount = 0;
+		this.liveDisposer = disposer ?? (() => {});
 	}
 
 	private detachLiveInput(canvas: HTMLCanvasElement): void {
@@ -528,7 +544,7 @@ export class PdfPageBinding {
 		canvas.remove();
 	}
 
-	private scheduleRecovery(): void {
+	private scheduleRecovery(delayOverrideMs?: number): void {
 		if (this.disposed) return;
 		const win = this.page.ownerDocument.defaultView;
 		if (!win) {
@@ -543,7 +559,7 @@ export class PdfPageBinding {
 			return;
 		}
 		if (this.recoveryTimer !== null) win.clearTimeout(this.recoveryTimer);
-		const delay = this.options.recoveryDelayMs ?? PDF_OVERLAY_RECOVERY_DELAY_MS;
+		const delay = delayOverrideMs ?? this.options.recoveryDelayMs ?? PDF_OVERLAY_RECOVERY_DELAY_MS;
 		this.diagnostics.record('pdf.overlay-recovery-scheduled', {
 			key: this.keyValue,
 			delayMs: delay,
