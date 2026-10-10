@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 // The overlay recovery tests deliberately inject a correctly wired handler.
@@ -7,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 // plugin from forwarding any page-targeted Pencil stroke.
 describe('production PDF Pencil wiring', () => {
 	it('forwards the callback provided by OverlayManager to the real ink handler', () => {
-		const main = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
+		const main = readFileSync(resolve(process.cwd(), 'src/main.ts'), 'utf8');
 		expect(main).toMatch(
 			/\(canvas,\s*registerForwarder\)\s*=>\s*this\.wirePointerEvents\(canvas,\s*registerForwarder\)/,
 		);
