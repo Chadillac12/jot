@@ -189,11 +189,7 @@ export default class JotPlugin extends Plugin {
 		this.addCommand({
 			id: 'open-palette',
 			name: 'Open palette',
-			checkCallback: (checking) => {
-				if (!this.activeInkContainer()) return false;
-				if (!checking) this.openPaletteForActiveSurface();
-				return true;
-			},
+			callback: () => this.openPaletteForActiveSurface(),
 		});
 		this.addCommand({
 			id: 'start-persistent-diagnostics',
@@ -232,6 +228,9 @@ export default class JotPlugin extends Plugin {
 				canUndo: () => this.activeUndoController()?.canUndo() ?? false,
 				canRedo: () => this.activeUndoController()?.canRedo() ?? false,
 				getColors: () => this.settings.colors,
+				onVisibilityChanged: (visible, reason) => {
+					this.diagnostics.record(visible ? 'palette.open' : 'palette.close', { reason });
+				},
 			},
 			{
 				pen: this.settings.penState,
@@ -239,7 +238,7 @@ export default class JotPlugin extends Plugin {
 			},
 		);
 		this.floatingPaletteButton = new FloatingPaletteButton((doc, x, y) => {
-			this.palette.show(doc.body, x, y, this.settings.handedness);
+			this.palette.show(doc.body, x, y, this.settings.handedness, 'floating-button');
 		});
 		this.registerObsidianProtocolHandler('jot-palette', () => {
 			this.openPaletteForActiveSurface();
@@ -608,17 +607,29 @@ export default class JotPlugin extends Plugin {
 	}
 
 	openPaletteForActiveSurface(): void {
-		const container = this.activeInkContainer();
-		if (!container) return;
+		const container = this.activeInkContainer() ?? this.app.workspace.containerEl;
 		const doc = container.ownerDocument;
 		const win = doc.defaultView;
-		if (!win) return;
+		if (!win) {
+			this.diagnostics.record('palette.open-unavailable', { reason: 'missing-window' });
+			return;
+		}
 		const rect = container.getBoundingClientRect();
-		if (rect.width <= 0 || rect.height <= 0) return;
 		const margin = 64;
-		const x = Math.min(win.innerWidth - margin, Math.max(margin, rect.left + rect.width / 2));
-		const y = Math.min(win.innerHeight - margin, Math.max(margin, rect.top + rect.height / 2));
-		this.palette.show(doc.body, x, y, this.settings.handedness);
+		const geometryUsable = rect.width > 0 && rect.height > 0;
+		const x = geometryUsable ? rect.left + rect.width / 2 : win.innerWidth / 2;
+		const y = geometryUsable ? rect.top + rect.height / 2 : win.innerHeight / 2;
+		this.diagnostics.record('palette.open-command', {
+			activeSurface: this.activeInkContainer() !== null,
+			geometryUsable,
+		});
+		this.palette.show(
+			doc.body,
+			Math.min(win.innerWidth - margin, Math.max(margin, x)),
+			Math.min(win.innerHeight - margin, Math.max(margin, y)),
+			this.settings.handedness,
+			'command',
+		);
 	}
 
 	getToolState(): ToolState {
