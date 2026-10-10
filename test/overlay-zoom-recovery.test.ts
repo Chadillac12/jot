@@ -9,6 +9,7 @@
 */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OverlayManager, OVERLAY_KEY_ATTR } from '../src/overlay-manager';
+import { PdfPageBinding } from '../src/pdf-page-binding';
 import { PdfInsertedPageStore } from '../src/pdf-inserted-page-store';
 import { StrokeStore } from '../src/stroke-store';
 import { PointerEventHandler } from '../src/pointer-event-handler';
@@ -105,6 +106,32 @@ beforeEach(() => {
 });
 
 describe('OverlayManager zoom recovery', () => {
+\tit('retries an unavailable PDF ink handler rather than permanently disabling writing', async () => {
+		vi.useFakeTimers();
+		try {
+			const page = document.createElement('div');
+			page.className = 'page';
+			page.setAttribute('data-page-number', '1');
+			setRect(page, 800, 1000);
+			document.body.appendChild(page);
+			let attempts = 0;
+			const wire = vi.fn((): (() => void) | null => {
+				attempts += 1;
+				return attempts === 1 ? null : () => {};
+			});
+			const binding = new PdfPageBinding(page, 'notes.pdf::1', new StrokeStore(), wire);
+			binding.mount();
+			expect(wire).toHaveBeenCalledTimes(1);
+			await vi.advanceTimersByTimeAsync(499);
+			expect(wire).toHaveBeenCalledTimes(1);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(wire).toHaveBeenCalledTimes(2);
+			binding.dispose();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('does zero hybrid reconciliation during ordinary PDF zoom mutations', async () => {
 		const container = document.createElement('div');
 		const page = document.createElement('div');
