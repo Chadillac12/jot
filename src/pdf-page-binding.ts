@@ -27,6 +27,12 @@ export const PDF_OVERLAY_BACKING_STORE_LIMITS: CanvasBackingStoreLimits = {
 const PDF_OVERLAY_RECOVERY_DELAY_MS = 150;
 const PDF_OVERLAY_DEACTIVATION_GRACE_MS = 750;
 
+export type PdfPointerForwarder = (event: PointerEvent) => void;
+export type PdfLiveWiring = (
+	canvas: HTMLCanvasElement,
+	registerForwarder?: (forwarder: PdfPointerForwarder | null) => void,
+) => (() => void) | void;
+
 export interface PdfPageBindingOptions {
 	observerRoot?: Element;
 	rootMargin?: string;
@@ -48,26 +54,60 @@ export class PdfPageBinding {
 	private active = false;
 	private nearViewport = false;
 	private activePointerId: number | null = null;
+	private pointerForwarder: PdfPointerForwarder | null = null;
 	private disposed = false;
 	private readonly handleInputPointerDown = (event: PointerEvent) => {
-		if (event.target !== this.live) return;
 		if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
+		const originalTargetWasLive = event.target === this.live;
+		if (this.diagnostics.isEnabled()) {
+			this.diagnostics.record('pdf.input-pointerdown', {
+				key: this.keyValue,
+				pointerType: event.pointerType,
+				source: originalTargetWasLive ? 'live-canvas' : 'page-fallback',
+				active: this.active,
+				liveAttached: this.liveInputAttached(),
+			});
+		}
 		this.activePointerId = event.pointerId;
 		this.cancelDeactivate();
 		this.activate('input');
+		if (!originalTargetWasLive) {
+			if (this.pointerForwarder) {
+				this.pointerForwarder(event);
+				this.diagnostics.record('pdf.input-forwarded', { key: this.keyValue, phase: 'down' });
+			} else {
+				this.diagnostics.record('pdf.input-unavailable', { key: this.keyValue, reason: 'no-live-handler' });
+				this.activePointerId = null;
+				if (!this.nearViewport) this.scheduleDeactivate();
+			}
+		}
+	};
+	private readonly handleInputPointerContinuation = (event: PointerEvent) => {
+		if (event.pointerId !== this.activePointerId) return;
+		if (event.target !== this.live) {
+			this.pointerForwarder?.(event);
+			if (!this.pointerForwarder && event.type !== 'pointermove') {
+				this.diagnostics.record('pdf.input-unavailable', { key: this.keyValue, reason: 'lost-forwarder', phase: event.type });
+			}
+		}
+		if (event.type === 'pointerup' || event.type === 'pointercancel' ||
+			event.type === 'lostpointercapture') this.finishInputPointer(event);
 	};
 	private readonly handleInputPointerEnd = (event: PointerEvent) => {
+		this.finishInputPointer(event);
+	};
+	private finishInputPointer(event: PointerEvent): void {
 		if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
 		if (event.pointerId !== this.activePointerId) return;
 		this.activePointerId = null;
 		if (!this.nearViewport) this.scheduleDeactivate();
-	};
+	}
 
 	constructor(
 		private page: HTMLElement,
 		private keyValue: string,
 		private strokes: StrokeStore,
-		private wireLiveCanvas: (canvas: HTMLCanvasElement) => (() => void) | void,
+		private wireLiveCanvas: PdfLiveWiring,
 		private diagnostics: DiagnosticSink = NULL_DIAGNOSTICS,
 		private options: PdfPageBindingOptions = {},
 	) {}
@@ -85,6 +125,10 @@ export class PdfPageBinding {
 		this.page.classList.add(PDF_PAGE_ANCHOR_CLASS);
 		// Parent capture precedes canvas target dispatch, including on iPad WebKit.
 		this.page.addEventListener('pointerdown', this.handleInputPointerDown, true);
+		this.page.addEventListener('pointermove', this.handleInputPointerContinuation, true);
+		this.page.addEventListener('pointerup', this.handleInputPointerContinuation, true);
+		this.page.addEventListener('pointercancel', this.handleInputPointerContinuation, true);
+		this.page.addEventListener('lostpointercapture', this.handleInputPointerContinuation, true);
 		this.ensureLiveInputCanvas();
 		this.makeLiveInputDormant();
 		this.disablePdfInteractionLayers();
@@ -115,7 +159,11 @@ export class PdfPageBinding {
 					!this.page.contains(this.persistent));
 			if (liveMissing || activePersistentMissing) {
 				this.releaseDetachedCanvases();
-				this.scheduleRecovery();
+				// PDF.js may clear 51+ offscreen children in a single zoom.
+				// Restore only visible/active input; page capture still works
+				// even with no offscreen canvas at all.
+				if (this.active || this.nearViewport) this.scheduleRecovery();
+				else this.cancelRecovery();
 			}
 		});
 		// PDF.js replaces direct page layers during zoom. Watching the entire
@@ -241,6 +289,10 @@ export class PdfPageBinding {
 		this.nearViewport = false;
 		this.activePointerId = null;
 		this.page.removeEventListener('pointerdown', this.handleInputPointerDown, true);
+		this.page.removeEventListener('pointermove', this.handleInputPointerContinuation, true);
+		this.page.removeEventListener('pointerup', this.handleInputPointerContinuation, true);
+		this.page.removeEventListener('pointercancel', this.handleInputPointerContinuation, true);
+		this.page.removeEventListener('lostpointercapture', this.handleInputPointerContinuation, true);
 		this.page.classList.remove(PDF_PAGE_ANCHOR_CLASS);
 		this.page.querySelector<HTMLElement>('.textLayer')?.classList.remove(PDF_PASSTHROUGH_CLASS);
 		this.page.querySelector<HTMLElement>('.annotationLayer')?.classList.remove(PDF_PASSTHROUGH_CLASS);
@@ -307,7 +359,9 @@ export class PdfPageBinding {
 
 	private ensureLiveHandler(): void {
 		if (!this.live || this.liveDisposer) return;
-		this.liveDisposer = this.wireLiveCanvas(this.live) ?? (() => {});
+		this.liveDisposer = this.wireLiveCanvas(this.live, (forwarder) => {
+			this.pointerForwarder = forwarder;
+		}) ?? (() => {});
 	}
 
 	private detachLiveInput(canvas: HTMLCanvasElement): void {
@@ -319,6 +373,7 @@ export class PdfPageBinding {
 		canvas.removeEventListener('lostpointercapture', this.handleInputPointerEnd, true);
 		this.liveDisposer?.();
 		this.liveDisposer = null;
+		this.pointerForwarder = null;
 	}
 
 	private replaceCanvases(): void {
@@ -390,6 +445,7 @@ export class PdfPageBinding {
 		}
 		this.liveDisposer?.();
 		this.liveDisposer = null;
+		this.pointerForwarder = null;
 		this.makeLiveInputDormant();
 	}
 
