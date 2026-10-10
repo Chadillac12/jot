@@ -535,7 +535,7 @@ export default class JotPlugin extends Plugin {
 		this.sidecar.scheduleSave(pdfPath);
 	}
 
-	private wirePointerEvents(canvas: HTMLCanvasElement, registerForwarder?: (forwarder: PdfPointerForwarder | null) => void): () => void {
+	private wirePointerEvents(canvas: HTMLCanvasElement, registerForwarder?: (forwarder: PdfPointerForwarder | null) => void): (() => void) | null {
 		return this.wireInkCanvas(canvas, this.overlays, this.sidecar, this.undoController, this.strokes, registerForwarder);
 	}
 
@@ -546,11 +546,12 @@ export default class JotPlugin extends Plugin {
 		undo: UndoController,
 		strokes = this.strokes,
 		registerForwarder?: (forwarder: PdfPointerForwarder | null) => void,
-	): () => void {
+	): (() => void) | null {
 		const ctx = canvas.getContext('2d');
 		if (!ctx) {
 			console.error(`${PLUGIN_LOG} no 2d context`);
-			return () => {};
+			this.diagnostics.record('ink.canvas-context-unavailable', { key: canvas.getAttribute('data-jot-key') });
+			return null; // A no-op disposer would permanently suppress PDF input recovery.
 		}
 		const handler = new PointerEventHandler(canvas, ctx, {
 			palette: this.palette,
