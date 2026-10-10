@@ -174,6 +174,11 @@ export class Palette {
 	}
 
 	isOpen(): boolean {
+		// Obsidian/WebKit can replace detached UI DOM without calling hide().
+		// A stale non-null palette reference must NEVER block Pencil input.
+		if (this.element && !this.element.isConnected) {
+			this.hide('detached');
+		}
 		return this.element !== null;
 	}
 
