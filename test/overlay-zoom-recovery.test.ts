@@ -12,6 +12,9 @@ import { OverlayManager, OVERLAY_KEY_ATTR } from '../src/overlay-manager';
 import { PdfInsertedPageStore } from '../src/pdf-inserted-page-store';
 import { StrokeStore } from '../src/stroke-store';
 import { PointerEventHandler } from '../src/pointer-event-handler';
+import type { Palette } from '../src/palette';
+import type { InkSaveScheduler } from '../src/ink-surface';
+import type { UndoController } from '../src/undo-controller';
 
 vi.mock('obsidian', () => ({}));
 
@@ -583,11 +586,11 @@ describe('OverlayManager zoom recovery', () => {
 			const wire = vi.fn((canvas: HTMLCanvasElement, register?: (forwarder: ((event: PointerEvent) => void) | null) => void) => {
 				canvas.getBoundingClientRect = () => page.getBoundingClientRect();
 				const handler = new PointerEventHandler(canvas, canvas.getContext('2d')!, {
-					palette: { isOpen: () => false, show: vi.fn() } as any,
+					palette: { isOpen: () => false, show: vi.fn() } as unknown as Palette,
 					strokes,
 					overlays: manager,
-					sidecar: { scheduleSave } as any,
-					undo: { push: vi.fn() } as any,
+					sidecar: { scheduleSave } as InkSaveScheduler,
+					undo: { push: vi.fn() } as unknown as UndoController,
 					toolState: () => ({ tool: 'pen', color: '#345678', width: 0.0025 }),
 					handedness: () => 'right',
 					paletteActivation: () => 'pencil-double-tap-hold',
