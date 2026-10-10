@@ -84,6 +84,7 @@ export interface PaletteHooks {
 	canUndo: () => boolean;
 	canRedo: () => boolean;
 	getColors?: () => string[];
+	onVisibilityChanged?: (visible: boolean, reason: string) => void;
 }
 
 const SUB_SLOT_OF: Record<Exclude<SubArc, null>, number> = {
@@ -130,7 +131,7 @@ export class Palette {
 		this.hooks = hooks;
 		this.outsideCloseListener = new OutsideCloseListener(
 			() => this.element,
-			() => this.hide(),
+			() => this.hide('outside-pointer'),
 		);
 		this.confirmAnimator = new ConfirmAnimator(() => this.hide());
 		if (memory?.pen) this.penMemory = { ...memory.pen };
@@ -176,8 +177,8 @@ export class Palette {
 		return this.element !== null;
 	}
 
-	show(parent: HTMLElement, clientX: number, clientY: number, handedness: Handedness) {
-		this.hide();
+	show(parent: HTMLElement, clientX: number, clientY: number, handedness: Handedness, source = 'pointer') {
+		this.hide('replaced');
 		const doc = parent.ownerDocument;
 		const win = doc.defaultView ?? window;
 		this.handedness = handedness;
@@ -205,13 +206,15 @@ export class Palette {
 		parent.appendChild(el);
 
 		this.element = el;
+		this.hooks.onVisibilityChanged?.(true, source);
 		this.bindDrag(el);
 		this.outsideCloseListener.attach(doc);
 	}
 
-	hide() {
+	hide(reason = 'manual') {
 		if (!this.element) return;
 		this.element.remove();
+		this.hooks.onVisibilityChanged?.(false, reason);
 		this.element = null;
 		this.subArc = null;
 		this.outsideCloseListener.detach();
