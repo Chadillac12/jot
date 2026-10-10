@@ -71,7 +71,7 @@ beforeEach(() => {
 });
 
 describe('JotNoteSurface', () => {
-\tit('retries notebook ink wiring if WebKit temporarily cannot initialize input', async () => {
+	it('retries notebook ink wiring if WebKit temporarily cannot initialize input', async () => {
 		vi.useFakeTimers();
 		try {
 			const host = document.createElement('div');
