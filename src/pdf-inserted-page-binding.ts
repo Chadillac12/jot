@@ -6,6 +6,7 @@ import {
 	type PdfInsertedPage,
 } from './jot-file';
 import { JotNoteSurface } from './jot-note-surface';
+import type { PdfLiveWiring } from './pdf-page-binding';
 import {
 	NULL_DIAGNOSTICS,
 	type DiagnosticSink,
@@ -36,7 +37,7 @@ export class PdfInsertedPageBinding {
 		pdfPath: string,
 		page: PdfInsertedPage,
 		strokes: StrokeStore,
-		wireOverlay: (canvas: HTMLCanvasElement) => (() => void) | void,
+		wireOverlay: PdfLiveWiring,
 		private callbacks: PdfInsertedPageBindingCallbacks,
 		doc: Document,
 		observerRoot: Element,
