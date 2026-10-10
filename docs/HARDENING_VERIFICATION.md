@@ -133,6 +133,24 @@ A green Node matrix does not prove WKWebView behavior. Independent iPad acceptan
 is required: zoom/Pencil/gesture input, 53-page memory usage, protected-read recovery,
 rename during failed save, background/restart, hybrid insertion, and PDF merge.
 
+## iPad.10 zoom/Pencil recovery verification
+
+| ID | Invariant | Evidence |
+| --- | --- | --- |
+| Z10-01 | 53 detached offscreen PDF hit targets are not reconstructed by zoom mutation storms | `test/overlay-zoom-recovery.test.ts` |
+| Z10-02 | The first Pencil stroke succeeds when PDF.js has removed the input canvas, including before the mutation callback runs | real `PointerEventHandler` end-to-end regression in `test/overlay-zoom-recovery.test.ts` |
+| Z10-03 | Underlying PDF pointer continuation is delivered to the same in-flight gesture until pointerup/cancel | end-to-end stored stroke assertion |
+| Z10-04 | Inserted Jot pages and notebooks recover from a detached live canvas during the first Pencil event | `test/jot-note-surface.test.ts` |
+| Z10-05 | Palette cannot remain logically open after DOM detachment | `test/palette-detached-lifecycle.test.ts` |
+| Z10-06 | Opening a palette cannot be dismissed by a late pointerdown from the opener | `test/outside-close-listener.test.ts` |
+| Z10-07 | Palette command works even when PDF geometry is temporarily zero or the workspace has no active PDF leaf | source review of `src/main.ts` |
+| Z10-08 | Diagnostics differentiate page fallback, accepted/rejected input, and palette visibility reasons | `pdf.input-pointerdown`, `pdf.input-forwarded`, `pdf.input-unavailable`, `ink.input-decision`, `palette.open/close` |
+
+Hardware acceptance still required: zoom the original 53-page PDF, draw after
+zoom-out, open/close the palette from Pencil and the command palette, navigate
+hybrid Jot pages, verify no crash or missing first strokes, and confirm ink
+survives a full app restart. The log by itself cannot establish WebKit behavior.
+
 ## Required release gate
 
 A candidate is releasable only when the exact versioned commit passes:
