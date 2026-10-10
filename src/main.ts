@@ -92,7 +92,9 @@ export default class JotPlugin extends Plugin {
 		this.overlays = new OverlayManager(
 			this.app,
 			this.strokes,
-			(canvas) => this.wirePointerEvents(canvas),
+			// Preserve the page-level Pencil recovery channel as well as the canvas handler.
+			// Dropping registerForwarder silently disables the first-stroke fallback.
+			(canvas, registerForwarder) => this.wirePointerEvents(canvas, registerForwarder),
 			this.insertedPdfPages,
 			{
 				onInsertedPagePaperChange: (pdfPath, pageId, paper) => {
