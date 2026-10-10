@@ -308,6 +308,7 @@ export class JotNoteSurface implements InkSurfaceController {
 		// Reactivate from the original page-level Pencil event.
 		this.ensureInputTarget(mount);
 		if (mount.persistent) {
+			this.wireInputIfPossible(mount);
 			if (immediate) {
 				const win = sheet.ownerDocument.defaultView;
 				if (mount.resizeFrame !== null) win?.cancelAnimationFrame(mount.resizeFrame);
