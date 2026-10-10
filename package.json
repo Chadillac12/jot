@@ -1,6 +1,6 @@
 {
 	"name": "jot",
-	"version": "1.1.4-ipad.9",
+	"version": "1.1.4-ipad.10",
 	"description": "Handwrite on PDFs and standalone notes in Obsidian with Apple Pencil.",
 	"main": "main.js",
 	"type": "module",
