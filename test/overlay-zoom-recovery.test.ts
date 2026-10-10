@@ -603,8 +603,8 @@ describe('OverlayManager zoom recovery', () => {
 			manager.attachToActivePdf();
 			const original = page.querySelector('canvas.jot-live-overlay');
 			original?.remove();
-			await flushMutations();
-			await vi.advanceTimersByTimeAsync(200);
+			// Deliberately do NOT flush the mutation observer. Pencil may land
+			// before the observer has noticed the detached native input canvas.
 			expect(page.querySelector('canvas.jot-live-overlay')).toBeNull();
 
 			const nativeLayer = document.createElement('div');
