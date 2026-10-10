@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OverlayManager, OVERLAY_KEY_ATTR } from '../src/overlay-manager';
 import { PdfInsertedPageStore } from '../src/pdf-inserted-page-store';
 import { StrokeStore } from '../src/stroke-store';
+import { PointerEventHandler } from '../src/pointer-event-handler';
 
 vi.mock('obsidian', () => ({}));
 
@@ -477,6 +478,140 @@ describe('OverlayManager zoom recovery', () => {
 		}
 	});
 
+
+	it('does not rebuild 53 offscreen PDF input canvases after PDF.js removes them', async () => {
+		vi.useFakeTimers();
+		try {
+			class NoIntersectionMock {
+				observe(): void {}
+				disconnect(): void {}
+				unobserve(): void {}
+			}
+			Object.defineProperty(window, 'IntersectionObserver', {
+				value: NoIntersectionMock, configurable: true, writable: true,
+			});
+			const container = document.createElement('div');
+			for (let i = 1; i <= 53; i++) {
+				const page = document.createElement('div');
+				page.className = 'page';
+				page.setAttribute('data-page-number', String(i));
+				setRect(page, 800, 1000);
+				container.appendChild(page);
+			}
+			document.body.appendChild(container);
+			const leaf = { view: {
+				containerEl: container,
+				file: { path: '53-pages.pdf' },
+				getViewType: () => 'pdf',
+			} };
+			const app = { workspace: {
+				getMostRecentLeaf: () => leaf,
+				iterateAllLeaves: (fn: (value: unknown) => void) => fn(leaf),
+			} };
+			const wire = vi.fn(() => vi.fn());
+			const manager = new OverlayManager(app as any, new StrokeStore(), wire);
+			manager.attachToActivePdf();
+			expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(53);
+			expect(wire).not.toHaveBeenCalled();
+
+			for (const canvas of Array.from(container.querySelectorAll('canvas.jot-live-overlay'))) {
+				canvas.remove();
+			}
+			await flushMutations();
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(0);
+			expect(container.querySelectorAll('canvas.jot-overlay')).toHaveLength(0);
+			expect(wire).not.toHaveBeenCalled();
+
+			// Page-level capture restores only the touched page on demand.
+			const target = container.querySelector<HTMLElement>('[data-page-number="3"]')!;
+			target.dispatchEvent(new PointerEvent('pointerdown', {
+				pointerType: 'pen', pointerId: 50, bubbles: true, clientX: 30, clientY: 35,
+			}));
+			expect(target.querySelector('canvas.jot-live-overlay')).not.toBeNull();
+			expect(target.querySelector('canvas.jot-overlay')).not.toBeNull();
+			expect(container.querySelectorAll('canvas.jot-live-overlay')).toHaveLength(1);
+			expect(wire).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('forwards the first Pencil stroke that targets the underlying PDF after zoom', async () => {
+		vi.useFakeTimers();
+		try {
+			class NoIntersectionMock {
+				observe(): void {}
+				disconnect(): void {}
+				unobserve(): void {}
+			}
+			Object.defineProperty(window, 'IntersectionObserver', {
+				value: NoIntersectionMock, configurable: true, writable: true,
+			});
+			const container = document.createElement('div');
+			const page = document.createElement('div');
+			page.className = 'page';
+			page.setAttribute('data-page-number', '1');
+			setRect(page, 800, 1000);
+			container.appendChild(page);
+			document.body.appendChild(container);
+			const leaf = { view: {
+				containerEl: container,
+				file: { path: 'notes.pdf' },
+				getViewType: () => 'pdf',
+			} };
+			const app = { workspace: {
+				getMostRecentLeaf: () => leaf,
+				iterateAllLeaves: (fn: (value: unknown) => void) => fn(leaf),
+			} };
+			const strokes = new StrokeStore();
+			const scheduleSave = vi.fn();
+			let manager!: OverlayManager;
+			const wire = vi.fn((canvas: HTMLCanvasElement, register?: (forwarder: ((event: PointerEvent) => void) | null) => void) => {
+				canvas.getBoundingClientRect = () => page.getBoundingClientRect();
+				const handler = new PointerEventHandler(canvas, canvas.getContext('2d')!, {
+					palette: { isOpen: () => false, show: vi.fn() } as any,
+					strokes,
+					overlays: manager,
+					sidecar: { scheduleSave } as any,
+					undo: { push: vi.fn() } as any,
+					toolState: () => ({ tool: 'pen', color: '#345678', width: 0.0025 }),
+					handedness: () => 'right',
+					paletteActivation: () => 'pencil-double-tap-hold',
+				});
+				handler.attach();
+				register?.((event) => handler.forwardPointerEvent(event));
+				return () => { register?.(null); handler.detach(); };
+			});
+			manager = new OverlayManager(app as any, strokes, wire);
+			manager.attachToActivePdf();
+			const original = page.querySelector('canvas.jot-live-overlay');
+			original?.remove();
+			await flushMutations();
+			await vi.advanceTimersByTimeAsync(200);
+			expect(page.querySelector('canvas.jot-live-overlay')).toBeNull();
+
+			const nativeLayer = document.createElement('div');
+			page.appendChild(nativeLayer);
+			const pointer = (type: string, x: number, y: number) =>
+				nativeLayer.dispatchEvent(new PointerEvent(type, {
+					bubbles: true,
+					pointerId: 99,
+					pointerType: 'pen',
+					pressure: 0.65,
+					clientX: x,
+					clientY: y,
+				}));
+			pointer('pointerdown', 75, 95);
+			pointer('pointermove', 98, 125);
+			pointer('pointerup', 110, 140);
+			expect(strokes.forKey('notes.pdf::1')).toHaveLength(1);
+			expect(strokes.forKey('notes.pdf::1')[0]?.points.length).toBeGreaterThan(1);
+			expect(scheduleSave).toHaveBeenCalledWith('notes.pdf');
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 
 	it('rebinds inserted page ink keys when the owning PDF path changes', () => {
 		const container = document.createElement('div');
