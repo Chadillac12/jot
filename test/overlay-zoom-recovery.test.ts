@@ -540,6 +540,19 @@ describe('OverlayManager zoom recovery', () => {
 	it('forwards the first Pencil stroke that targets the underlying PDF after zoom', async () => {
 		vi.useFakeTimers();
 		try {
+			vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+				setTransform: vi.fn(),
+				clearRect: vi.fn(),
+				beginPath: vi.fn(),
+				moveTo: vi.fn(),
+				lineTo: vi.fn(),
+				quadraticCurveTo: vi.fn(),
+				closePath: vi.fn(),
+				fill: vi.fn(),
+				stroke: vi.fn(),
+				save: vi.fn(),
+				restore: vi.fn(),
+			} as any);
 			class NoIntersectionMock {
 				observe(): void {}
 				disconnect(): void {}
