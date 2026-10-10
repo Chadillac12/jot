@@ -8,6 +8,7 @@ import { collectClearOperations, countStrokes, toUndoEntries } from './clear-ops
 import { FloatingPaletteButton } from './floating-palette-button';
 import { PointerEventHandler } from './pointer-event-handler';
 import type { PdfPointerForwarder } from './pdf-page-binding';
+import { createPdfInputWiring } from './pdf-input-wiring';
 import { PersistentDiagnostics } from './persistent-diagnostics';
 import { documentPathFromKey, isSidecarPath, pdfPathFromSidecar } from './jot-file';
 import { JOT_NOTE_EXTENSION, JOT_NOTE_VIEW_TYPE, createJotNote, serializeJotNote } from './jot-note-file';
@@ -92,9 +93,7 @@ export default class JotPlugin extends Plugin {
 		this.overlays = new OverlayManager(
 			this.app,
 			this.strokes,
-			// Preserve the page-level Pencil recovery channel as well as the canvas handler.
-			// Dropping registerForwarder silently disables the first-stroke fallback.
-			(canvas, registerForwarder) => this.wirePointerEvents(canvas, registerForwarder),
+			createPdfInputWiring(this.wirePointerEvents.bind(this)),
 			this.insertedPdfPages,
 			{
 				onInsertedPagePaperChange: (pdfPath, pageId, paper) => {
