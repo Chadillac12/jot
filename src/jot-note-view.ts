@@ -15,6 +15,7 @@ import {
 	type JotPaperStyle,
 } from './jot-note-file';
 import { JotNoteSurface } from './jot-note-surface';
+import type { PdfPointerForwarder } from './pdf-page-binding';
 import type { NotebookDocumentSession, NotebookSessionChange } from './notebook-session';
 import { UndoController } from './undo-controller';
 import type JotPlugin from './main';
@@ -210,7 +211,7 @@ export class JotNoteView extends TextFileView {
 		this.syncToolButtons(this.plugin.getToolState());
 
 		this.pagesEl = this.contentEl.createDiv({ cls: 'jot-note-pages' });
-		this.surface = new JotNoteSurface(this.pagesEl, session.strokes, (canvas) => {
+		this.surface = new JotNoteSurface(this.pagesEl, session.strokes, (canvas, registerForwarder?: (forwarder: PdfPointerForwarder | null) => void) => {
 			if (!this.surface || !this.undoController) return;
 			return this.plugin.wireInkCanvas(
 				canvas,
@@ -224,6 +225,7 @@ export class JotNoteView extends TextFileView {
 				},
 				this.undoController,
 				session.strokes,
+				registerForwarder,
 			);
 		});
 
