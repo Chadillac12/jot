@@ -59,6 +59,7 @@ export interface PointerEventHandlerDeps {
 	handedness: () => Handedness;
 	paletteActivation: () => PaletteActivation;
 	allowInput?: () => boolean;
+	onInputDecision?: (result: 'accepted' | 'rejected', reason: string) => void;
 }
 
 export class PointerEventHandler {
@@ -154,6 +155,23 @@ export class PointerEventHandler {
 		this.releasePointerCapture();
 	}
 
+	/**
+	 * Receives real Pencil events from a PDF page when PDF.js has removed the
+	 * live canvas or the initial hit target is the underlying PDF layer.
+	 * Calling the same event handler directly preserves event coordinates,
+	 * pressure, pointer ID, and Pencil double-tap timing.
+	 */
+	forwardPointerEvent(event: PointerEvent): void {
+		if (!this.attached) return;
+		switch (event.type) {
+			case 'pointerdown': this.onPointerDown(event); break;
+			case 'pointermove': this.onPointerMove(event); break;
+			case 'pointerup': this.onFinish(event); break;
+			case 'pointercancel':
+			case 'lostpointercapture': this.onCancel(event); break;
+		}
+	}
+
 	private onPointerDown(e: PointerEvent): void {
 		if (e.pointerType === 'touch') {
 			if (usesTwoFingerHold(this.deps.paletteActivation())) {
@@ -164,8 +182,15 @@ export class PointerEventHandler {
 			return;
 		}
 		if (e.pointerType !== 'pen' && e.pointerType !== 'mouse') return;
-		if (this.deps.allowInput && !this.deps.allowInput()) return;
-		if (this.deps.palette.isOpen()) return;
+		if (this.deps.allowInput && !this.deps.allowInput()) {
+			this.deps.onInputDecision?.('rejected', 'write-protected');
+			return;
+		}
+		if (this.deps.palette.isOpen()) {
+			this.deps.onInputDecision?.('rejected', 'palette-open');
+			return;
+		}
+		this.deps.onInputDecision?.('accepted', 'pointerdown');
 
 		this.cancelLiveFrame();
 		this.deps.overlays.clearLivePage(this.canvas);
