@@ -6,6 +6,7 @@ import {
 	safeBackingStoreDpr,
 } from './canvas-surface';
 import { INK_KEY_ATTR, type InkSurfaceController } from './ink-surface';
+import type { PdfLiveWiring, PdfPointerForwarder } from './pdf-page-binding';
 import {
 	NULL_DIAGNOSTICS,
 	type DiagnosticSink,
@@ -52,6 +53,9 @@ interface NotebookPageMount {
 	contextRetryCount: number;
 	onPointerDown: (event: PointerEvent) => void;
 	onPointerEnd: (event: PointerEvent) => void;
+	onPointerContinuation: (event: PointerEvent) => void;
+	inputForwarder: PdfPointerForwarder | null;
+	pointerListenersAttached: boolean;
 	painted: boolean;
 	disposeInput: (() => void) | null;
 	inputWired: boolean;
@@ -65,7 +69,7 @@ export class JotNoteSurface implements InkSurfaceController {
 	constructor(
 		private host: HTMLElement,
 		private strokes: StrokeStore,
-		private wireOverlay: (canvas: HTMLCanvasElement) => (() => void) | void,
+		private wireOverlay: PdfLiveWiring,
 		private options: JotNoteSurfaceOptions = {},
 	) {}
 
@@ -247,12 +251,22 @@ export class JotNoteSurface implements InkSurfaceController {
 			applyResize: null,
 			contextRetryCount: 0,
 			onPointerDown: (event) => {
-				if (event.target !== mount.live) return;
 				if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
+				const originalTargetWasLive = event.target === mount.live;
 				mount.activePointerId = event.pointerId;
 				mount.contextRetryCount = 0;
 				this.cancelDeactivation(mount);
 				this.mountPage(sheet, true);
+				if (!originalTargetWasLive) {
+					if (mount.inputForwarder) {
+						mount.inputForwarder(event);
+						this.diagnostics().record('jot-surface.input-forwarded', { key: mount.key, phase: 'down' });
+					} else {
+						this.diagnostics().record('jot-surface.input-unavailable', { key: mount.key, reason: 'no-live-handler' });
+						mount.activePointerId = null;
+						if (!mount.nearViewport) this.scheduleDeactivation(mount);
+					}
+				}
 			},
 			onPointerEnd: (event) => {
 				if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
@@ -260,6 +274,14 @@ export class JotNoteSurface implements InkSurfaceController {
 				mount.activePointerId = null;
 				if (!mount.nearViewport) this.scheduleDeactivation(mount);
 			},
+			onPointerContinuation: (event) => {
+				if (event.pointerId !== mount.activePointerId) return;
+				if (event.target !== mount.live) mount.inputForwarder?.(event);
+				if (event.type === 'pointerup' || event.type === 'pointercancel' ||
+					event.type === 'lostpointercapture') mount.onPointerEnd(event);
+			},
+			inputForwarder: null,
+			pointerListenersAttached: false,
 			painted: false,
 			disposeInput: null,
 			inputWired: false,
@@ -282,6 +304,9 @@ export class JotNoteSurface implements InkSurfaceController {
 	private mountPage(sheet: HTMLElement, immediate = false): void {
 		const mount = this.pageMounts.get(sheet);
 		if (!mount) return;
+		// The PDF viewer can remove the canvas while keeping the parent sheet.
+		// Reactivate from the original page-level Pencil event.
+		this.ensureInputTarget(mount);
 		if (mount.persistent) {
 			if (immediate) {
 				const win = sheet.ownerDocument.defaultView;
@@ -361,20 +386,29 @@ export class JotNoteSurface implements InkSurfaceController {
 	}
 
 	private ensureInputTarget(mount: NotebookPageMount): void {
-		if (mount.live) {
-			this.wireInputIfPossible(mount);
+		if (!mount.pointerListenersAttached) {
+			mount.sheet.addEventListener('pointerdown', mount.onPointerDown, true);
+			for (const event of ['pointermove', 'pointerup', 'pointercancel', 'lostpointercapture'] as const) {
+				mount.sheet.addEventListener(event, mount.onPointerContinuation, true);
+			}
+			mount.pointerListenersAttached = true;
+		}
+		if (mount.live && mount.live.isConnected && mount.sheet.contains(mount.live)) {
 			return;
+		}
+		if (mount.live) {
+			mount.disposeInput?.();
+			mount.disposeInput = null;
+			mount.inputWired = false;
+			mount.inputForwarder = null;
+			this.releaseCanvas(mount.live);
+			mount.live = null;
+			mount.activePointerId = null;
 		}
 		const canvas = this.makeCanvas(mount.sheet.ownerDocument, LIVE_CLASS, mount.key);
 		mount.live = canvas;
 		mount.sheet.appendChild(canvas);
-		// Page capture runs before a newly promoted canvas sees the event.
-		mount.sheet.addEventListener('pointerdown', mount.onPointerDown, true);
-		for (const event of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
-			mount.sheet.addEventListener(event, mount.onPointerEnd, true);
-		}
-		// Offscreen pages own a 1x1 hit target but no native 2D context
-		// or drawing listener until intersection or a real pointer-down.
+		// Offscreen pages retain a tiny hit target, but no expensive 2D context.
 		this.makeInputDormant(mount);
 	}
 
@@ -385,7 +419,9 @@ export class JotNoteSurface implements InkSurfaceController {
 			this.scheduleContextRetry(mount);
 			return;
 		}
-		mount.disposeInput = this.wireOverlay(mount.live) ?? null;
+		mount.disposeInput = this.wireOverlay(mount.live, (forwarder) => {
+			mount.inputForwarder = forwarder;
+		}) ?? null;
 		mount.inputWired = true;
 		mount.contextRetryCount = 0;
 		mount.errorEl?.remove();
@@ -456,13 +492,15 @@ export class JotNoteSurface implements InkSurfaceController {
 		mount.persistent = null;
 		mount.disposeInput?.();
 		mount.disposeInput = null;
+		mount.inputForwarder = null;
 		mount.inputWired = false;
 		if (final) {
-			if (mount.live) {
+			if (mount.pointerListenersAttached) {
 				mount.sheet.removeEventListener('pointerdown', mount.onPointerDown, true);
-				for (const event of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
-					mount.sheet.removeEventListener(event, mount.onPointerEnd, true);
+				for (const event of ['pointermove', 'pointerup', 'pointercancel', 'lostpointercapture'] as const) {
+					mount.sheet.removeEventListener(event, mount.onPointerContinuation, true);
 				}
+				mount.pointerListenersAttached = false;
 			}
 			mount.activePointerId = null;
 			if (mount.live) this.releaseCanvas(mount.live);
