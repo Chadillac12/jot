@@ -10,7 +10,7 @@ import {
 	PdfInsertedPageBinding,
 } from './pdf-inserted-page-binding';
 import { PdfInsertedPageStore } from './pdf-inserted-page-store';
-import { PdfPageBinding } from './pdf-page-binding';
+import { PdfPageBinding, type PdfLiveWiring } from './pdf-page-binding';
 import type { Stroke } from './stroke-math';
 import type { StrokeStore } from './stroke-store';
 
@@ -42,7 +42,7 @@ export class OverlayManager {
 	constructor(
 		private app: App,
 		private strokes: StrokeStore,
-		private wireOverlay: (canvas: HTMLCanvasElement) => (() => void) | void,
+		private wireOverlay: PdfLiveWiring,
 		private insertedPageStore: PdfInsertedPageStore = new PdfInsertedPageStore(),
 		private callbacks: OverlayManagerCallbacks = {
 			onInsertedPagePaperChange: () => {},
