@@ -530,6 +530,48 @@ describe('JotNoteSurface', () => {
 		}
 	});
 
+	it('recovers missing hybrid Jot live canvas from the sheet and forwards first Pencil gesture', () => {
+		class NoIntersectionMock {
+			observe(): void {}
+			disconnect(): void {}
+			unobserve(): void {}
+		}
+		Object.defineProperty(window, 'IntersectionObserver', {
+			value: NoIntersectionMock, configurable: true, writable: true,
+		});
+		const host = document.createElement('div');
+		document.body.appendChild(host);
+		const forwarded: string[] = [];
+		const wire = vi.fn((_canvas: HTMLCanvasElement, register?: (forwarder: ((event: PointerEvent) => void) | null) => void) => {
+			register?.((event) => forwarded.push(event.type));
+			return () => register?.(null);
+		});
+		const surface = new JotNoteSurface(host, new StrokeStore(), wire, {
+			eagerMountFirstPage: false,
+			observerRoot: document.body,
+			fixedLogicalBackingStore: true,
+		});
+		surface.render(createJotNote(), 'hybrid.pdf');
+		const sheet = host.querySelector<HTMLElement>('.jot-note-sheet')!;
+		const live = sheet.querySelector('canvas.jot-note-live-ink');
+		expect(wire).not.toHaveBeenCalled();
+		live?.remove();
+		sheet.dispatchEvent(new PointerEvent('pointerdown', {
+			bubbles: true, pointerId: 51, pointerType: 'pen',
+		}));
+		sheet.dispatchEvent(new PointerEvent('pointermove', {
+			bubbles: true, pointerId: 51, pointerType: 'pen',
+		}));
+		sheet.dispatchEvent(new PointerEvent('pointerup', {
+			bubbles: true, pointerId: 51, pointerType: 'pen',
+		}));
+		expect(forwarded).toEqual(['pointerdown', 'pointermove', 'pointerup']);
+		expect(sheet.querySelector('canvas.jot-note-live-ink')).not.toBeNull();
+		expect(sheet.querySelector('canvas.jot-note-ink')).not.toBeNull();
+		expect(wire).toHaveBeenCalledTimes(1);
+		surface.disconnect();
+	});
+
 	it('caps both notebook canvas backing stores at the iPad-safe area', () => {
 		const host = document.createElement('div');
 		const surface = new JotNoteSurface(host, new StrokeStore(), vi.fn());
