@@ -106,7 +106,7 @@ beforeEach(() => {
 });
 
 describe('OverlayManager zoom recovery', () => {
-\tit('retries an unavailable PDF ink handler rather than permanently disabling writing', async () => {
+	it('retries an unavailable PDF ink handler rather than permanently disabling writing', async () => {
 		vi.useFakeTimers();
 		try {
 			const page = document.createElement('div');
