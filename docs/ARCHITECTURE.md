@@ -303,6 +303,35 @@ reduce false crash recovery classification when WKWebView ends an async unload e
   continuations recheck unload after awaits. Context exhaustion uses capped
   retries with backoff instead of constant allocation churn.
 
+## Zoom input recovery (iPad.10)
+
+The diagnostic trace from the 53-page PDF demonstrated repeated removal of
+offscreen 1x1 input canvases during PDF.js zoom/re-render. Ordinary PDF pages
+retain lightweight page-level capture listeners even if PDF.js removes their
+transparent live input canvas. Inactive pages **do not** synchronously or
+automatically reconstruct the removed 1x1 hit target from a mutation; real
+viewport activation or direct Pencil/mouse contact promotes just that page.
+
+The real pointer-down is forwarded directly to the shared `PointerEventHandler`
+when its initial target is the underlying PDF layer instead of a Jot canvas.
+Pointer move/up/cancel from that same ID are forwarded from the page capture
+listener unless WebKit retargets to the newly captured canvas. The forwarding
+contract does not fabricate synthetic PointerEvents. The new pointer ID is
+claimed **after** replacement, so a detached old canvas cannot clear the
+current gesture while being disposed.
+
+Hybrid handwritten pages and standalone notebooks use equivalent sheet-level
+fallback and callback forwarding. The first Pencil gesture must work even
+when the live input canvas has just been removed by PDF.js/WebKit.
+
+Palette state also follows DOM ownership: an externally detached radial
+palette is no longer considered open, so it cannot permanently block ink.
+Outside-dismiss is armed after the opening pointer burst, command opening is
+available even when the active pane has transient zero geometry, and
+diagnostics include palette open/close reasons, page fallback activations,
+forwarded contacts and rejected/accepted ink input. No Pencil coordinates,
+stroke points, or PDF contents are logged.
+
 ## Release configuration management
 
 Published release versions are immutable. The release workflow fails if a release with the same
