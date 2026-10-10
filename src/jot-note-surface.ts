@@ -253,10 +253,12 @@ export class JotNoteSurface implements InkSurfaceController {
 			onPointerDown: (event) => {
 				if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
 				const originalTargetWasLive = event.target === mount.live;
-				mount.activePointerId = event.pointerId;
 				mount.contextRetryCount = 0;
 				this.cancelDeactivation(mount);
 				this.mountPage(sheet, true);
+				// A stale-canvas replacement clears the old pointer; claim the
+				// new contact only after that replacement has finished.
+				mount.activePointerId = event.pointerId;
 				if (!originalTargetWasLive) {
 					if (mount.inputForwarder) {
 						mount.inputForwarder(event);
