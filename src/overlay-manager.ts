@@ -142,7 +142,24 @@ export class OverlayManager {
 	}
 
 	appendPersistedStroke(canvas: HTMLCanvasElement, stroke: Stroke): void {
-		this.bindingForCanvas(canvas)?.appendStroke(stroke);
+		const binding = this.bindingForCanvas(canvas);
+		if (!binding) {
+			this.diagnostics.record('ink.render-target-missing', {
+				key: canvas.getAttribute(INK_KEY_ATTR), reason: 'no-page-binding',
+			});
+			return;
+		}
+		if (this.diagnostics.isEnabled()) {
+			const target = binding.persistentCanvas();
+			this.diagnostics.record('ink.render-target', {
+				key: canvas.getAttribute(INK_KEY_ATTR),
+				available: !!target,
+				connected: target?.isConnected ?? false,
+				canvasWidth: target?.width ?? null,
+				canvasHeight: target?.height ?? null,
+			});
+		}
+		binding.appendStroke(stroke);
 	}
 
 	clearLivePage(canvas: HTMLCanvasElement): void {
