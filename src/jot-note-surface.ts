@@ -29,6 +29,9 @@ const DEACTIVATION_GRACE_MS = 750;
 export interface JotNoteSurfaceOptions {
 	observerRoot?: Element;
 	eagerMountFirstPage?: boolean;
+	/** For PDF-inserted ink pages, retain a working canvas across PDF.js zoom
+	 * intersection churn. Ordinary standalone notebook pages stay virtualized. */
+	retainMountedOnViewportExit?: boolean;
 	rootMargin?: string;
 	backingStoreLimits?: CanvasBackingStoreLimits;
 	fixedLogicalBackingStore?: boolean;
@@ -450,6 +453,7 @@ export class JotNoteSurface implements InkSurfaceController {
 	}
 
 	private scheduleDeactivation(mount: NotebookPageMount): void {
+		if (this.options.retainMountedOnViewportExit) return;
 		if (mount.nearViewport || mount.activePointerId !== null || !mount.persistent) return;
 		this.cancelDeactivation(mount);
 		const win = mount.sheet.ownerDocument.defaultView;

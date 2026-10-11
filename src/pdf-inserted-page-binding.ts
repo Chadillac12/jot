@@ -94,7 +94,12 @@ export class PdfInsertedPageBinding {
 
 		this.surface = new JotNoteSurface(this.host, strokes, wireOverlay, {
 			observerRoot,
-			eagerMountFirstPage: false,
+			// A PDF zoom can deliver a false exit intersection and never send an
+			// enter for the same inserted Jot page. Allocate its page immediately
+			// and retain it until the PDF leaf is disposed. Preserve virtualization
+			// for ordinary PDF pages and standalone multi-page notebooks.
+			eagerMountFirstPage: true,
+			retainMountedOnViewportExit: true,
 			rootMargin: '50% 0px 50% 0px',
 			backingStoreLimits: PDF_INSERTED_BACKING_STORE_LIMITS,
 			fixedLogicalBackingStore: true,

@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { documentPageKey } from '../src/jot-file';
 import { createJotNote, createJotPage } from '../src/jot-note-file';
 import { JotNoteSurface } from '../src/jot-note-surface';
+import { PdfInsertedPageBinding } from '../src/pdf-inserted-page-binding';
 import { StrokeStore } from '../src/stroke-store';
 
 class ResizeObserverMock {
@@ -387,6 +388,131 @@ describe('JotNoteSurface', () => {
 		expect(host.querySelectorAll('canvas')).toHaveLength(2);
 		surface.disconnect();
 		expect(host.querySelectorAll('canvas')).toHaveLength(0);
+	});
+
+	it('wires a real PdfInsertedPageBinding on construction and keeps it writable after an exit intersection', async () => {
+		vi.useFakeTimers();
+		try {
+			let callback: IntersectionObserverCallback = () => {};
+			class Observer {
+				constructor(cb: IntersectionObserverCallback) { callback = cb; }
+				observe(): void {}
+				unobserve(): void {}
+				disconnect(): void {}
+			}
+			Object.defineProperty(window, 'IntersectionObserver', {
+				value: Observer, configurable: true, writable: true,
+			});
+			const viewer = document.createElement('div');
+			document.body.appendChild(viewer);
+			const wire = vi.fn(() => vi.fn());
+			const page = { id: 'ink-1', slot: 3, paper: 'grid' as const, width: 1536, height: 2048 };
+			const makeBinding = () => new PdfInsertedPageBinding('notes.pdf', page, new StrokeStore(), wire, {
+				onPaperChange: vi.fn(),
+			}, document, viewer);
+			const first = makeBinding();
+			viewer.appendChild(first.root);
+			const firstCanvas = first.persistentCanvas();
+			expect(firstCanvas).not.toBeNull();
+			expect(wire).toHaveBeenCalledTimes(1);
+			const sheet = first.root.querySelector<HTMLElement>('.jot-note-sheet')!;
+			callback([{ target: sheet, isIntersecting: false, intersectionRatio: 0 } as unknown as IntersectionObserverEntry],
+				{} as IntersectionObserver);
+			await vi.advanceTimersByTimeAsync(3000);
+			expect(first.persistentCanvas()).toBe(firstCanvas);
+			first.dispose();
+			const reopened = makeBinding();
+			viewer.appendChild(reopened.root);
+			expect(reopened.persistentCanvas()).not.toBeNull();
+			expect(wire).toHaveBeenCalledTimes(2);
+			reopened.dispose();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('retains a previously usable inserted Jot page through repeated false zoom intersections', async () => {
+		vi.useFakeTimers();
+		try {
+			let callback: IntersectionObserverCallback = () => {};
+			class Observer {
+				constructor(cb: IntersectionObserverCallback) { callback = cb; }
+				observe(): void {}
+				unobserve(): void {}
+				disconnect(): void {}
+			}
+			Object.defineProperty(window, 'IntersectionObserver', {
+				value: Observer, configurable: true, writable: true,
+			});
+			const host = document.createElement('div');
+			document.body.appendChild(host);
+			const disposer = vi.fn();
+			const wire = vi.fn(() => disposer);
+			const surface = new JotNoteSurface(host, new StrokeStore(), wire, {
+				observerRoot: document.body,
+				eagerMountFirstPage: true,
+				retainMountedOnViewportExit: true,
+				fixedLogicalBackingStore: true,
+				deactivationGraceMs: 750,
+			});
+			surface.render(createJotNote(), 'hybrid.pdf');
+			const sheet = host.querySelector<HTMLElement>('.jot-note-sheet')!;
+			const persistent = host.querySelector<HTMLCanvasElement>('canvas.jot-note-ink');
+			const live = host.querySelector<HTMLCanvasElement>('canvas.jot-note-live-ink');
+			expect(persistent).not.toBeNull();
+			expect(wire).toHaveBeenCalledTimes(1);
+			for (let i = 0; i < 3; i++) {
+				callback(
+					[{ target: sheet, isIntersecting: false, intersectionRatio: 0 } as unknown as IntersectionObserverEntry],
+					{} as IntersectionObserver,
+				);
+				await vi.advanceTimersByTimeAsync(1000);
+				expect(host.querySelector('canvas.jot-note-ink')).toBe(persistent);
+				expect(host.querySelector('canvas.jot-note-live-ink')).toBe(live);
+			}
+			// PDF zoom must not dispose a live input handler even if the observer
+			// never reports a matching entry intersection afterwards.
+			expect(disposer).not.toHaveBeenCalled();
+			surface.disconnect();
+			expect(disposer).toHaveBeenCalledTimes(1);
+			expect(host.querySelectorAll('canvas')).toHaveLength(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('rebuilds inserted Jot input immediately after PDF leaf remount without an intersection entry', () => {
+		class Observer {
+			observe(): void {}
+			unobserve(): void {}
+			disconnect(): void {}
+		}
+		Object.defineProperty(window, 'IntersectionObserver', {
+			value: Observer, configurable: true, writable: true,
+		});
+		const host = document.createElement('div');
+		document.body.appendChild(host);
+		const wire = vi.fn(() => vi.fn());
+		const page = createJotNote();
+		const first = new JotNoteSurface(host, new StrokeStore(), wire, {
+			observerRoot: document.body,
+			eagerMountFirstPage: true,
+			retainMountedOnViewportExit: true,
+			fixedLogicalBackingStore: true,
+		});
+		first.render(page, 'hybrid.pdf');
+		expect(host.querySelector('canvas.jot-note-ink')).not.toBeNull();
+		first.disconnect();
+		const reopened = new JotNoteSurface(host, new StrokeStore(), wire, {
+			observerRoot: document.body,
+			eagerMountFirstPage: true,
+			retainMountedOnViewportExit: true,
+			fixedLogicalBackingStore: true,
+		});
+		reopened.render(page, 'hybrid.pdf');
+		expect(host.querySelector('canvas.jot-note-ink')).not.toBeNull();
+		expect(wire).toHaveBeenCalledTimes(2);
+		reopened.disconnect();
 	});
 
 	it('retains a hybrid Pencil target through zoom jitter and reactivates on pen-down', async () => {
