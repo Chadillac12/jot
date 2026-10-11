@@ -68,6 +68,7 @@ interface NotebookPageMount {
 export class JotNoteSurface implements InkSurfaceController {
 	private intersectionObserver: IntersectionObserver | null = null;
 	private pageMounts = new Map<HTMLElement, NotebookPageMount>();
+	private readonly externallyHandledEvents = new WeakSet<PointerEvent>();
 
 	constructor(
 		private host: HTMLElement,
@@ -115,6 +116,18 @@ export class JotNoteSurface implements InkSurfaceController {
 	redrawKey(key: string): void {
 		const canvas = this.overlayForKey(key);
 		if (canvas) this.redrawPage(canvas);
+	}
+
+	forwardExternalPointerEvent(key: string, event: PointerEvent): void {
+		if (this.externallyHandledEvents.has(event)) return;
+		for (const mount of this.pageMounts.values()) {
+			if (mount.key !== key) continue;
+			if (event.type === 'pointerdown') mount.onPointerDown(event);
+			else mount.onPointerContinuation(event);
+			if (event.target === mount.live) mount.inputForwarder?.(event);
+			this.externallyHandledEvents.add(event);
+			return;
+		}
 	}
 
 	disconnect(): void {
@@ -254,6 +267,7 @@ export class JotNoteSurface implements InkSurfaceController {
 			applyResize: null,
 			contextRetryCount: 0,
 			onPointerDown: (event) => {
+				if (this.externallyHandledEvents.has(event)) return;
 				if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
 				const originalTargetWasLive = event.target === mount.live;
 				mount.contextRetryCount = 0;
@@ -280,6 +294,7 @@ export class JotNoteSurface implements InkSurfaceController {
 				if (!mount.nearViewport) this.scheduleDeactivation(mount);
 			},
 			onPointerContinuation: (event) => {
+				if (this.externallyHandledEvents.has(event)) return;
 				if (event.pointerId !== mount.activePointerId) return;
 				if (event.target !== mount.live) mount.inputForwarder?.(event);
 				if (event.type === 'pointerup' || event.type === 'pointercancel' ||

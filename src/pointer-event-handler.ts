@@ -86,11 +86,12 @@ export class PointerEventHandler {
 	private secondTapY = 0;
 	private secondTapTimer: number | null = null;
 	private attached = false;
-	private readonly handlePointerDown = (event: PointerEvent) => this.onPointerDown(event);
-	private readonly handlePointerMove = (event: PointerEvent) => this.onPointerMove(event);
-	private readonly handlePointerUp = (event: PointerEvent) => this.onFinish(event);
-	private readonly handlePointerCancel = (event: PointerEvent) => this.onCancel(event);
-	private readonly handleLostPointerCapture = (event: PointerEvent) => this.onCancel(event);
+	private readonly handledEvents = new WeakSet<PointerEvent>();
+	private readonly handlePointerDown = (event: PointerEvent) => this.forwardPointerEvent(event);
+	private readonly handlePointerMove = (event: PointerEvent) => this.forwardPointerEvent(event);
+	private readonly handlePointerUp = (event: PointerEvent) => this.forwardPointerEvent(event);
+	private readonly handlePointerCancel = (event: PointerEvent) => this.forwardPointerEvent(event);
+	private readonly handleLostPointerCapture = (event: PointerEvent) => this.forwardPointerEvent(event);
 	private readonly blockStylusTouch = (event: TouchEvent) => {
 		for (let i = 0; i < event.touches.length; i++) {
 			const touch = event.touches.item(i) as Touch & { touchType?: string };
@@ -160,13 +161,14 @@ export class PointerEventHandler {
 	}
 
 	/**
-	 * Receives real Pencil events from a PDF page when PDF.js has removed the
-	 * live canvas or the initial hit target is the underlying PDF layer.
+	 * Receives real Pencil events from capture routing when PDF.js has removed
+	 * the live canvas or viewer listeners prevent direct target delivery.
 	 * Calling the same event handler directly preserves event coordinates,
 	 * pressure, pointer ID, and Pencil double-tap timing.
 	 */
 	forwardPointerEvent(event: PointerEvent): void {
-		if (!this.attached) return;
+		if (!this.attached || this.handledEvents.has(event)) return;
+		this.handledEvents.add(event);
 		switch (event.type) {
 			case 'pointerdown': this.onPointerDown(event); break;
 			case 'pointermove': this.onPointerMove(event); break;

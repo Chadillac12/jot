@@ -57,7 +57,9 @@ export class PdfPageBinding {
 	private pointerForwarder: PdfPointerForwarder | null = null;
 	private contextRetryCount = 0;
 	private disposed = false;
+	private readonly externallyHandledEvents = new WeakSet<PointerEvent>();
 	private readonly handleInputPointerDown = (event: PointerEvent) => {
+		if (this.externallyHandledEvents.has(event)) return;
 		if (event.pointerType !== 'pen' && event.pointerType !== 'mouse') return;
 		const originalTargetWasLive = event.target === this.live;
 		if (this.diagnostics.isEnabled()) {
@@ -88,6 +90,7 @@ export class PdfPageBinding {
 		}
 	};
 	private readonly handleInputPointerContinuation = (event: PointerEvent) => {
+		if (this.externallyHandledEvents.has(event)) return;
 		if (event.pointerId !== this.activePointerId) return;
 		if (event.target !== this.live) {
 			this.pointerForwarder?.(event);
@@ -121,12 +124,16 @@ export class PdfPageBinding {
 		return this.keyValue;
 	}
 
-	/** Recover a real Pencil event that was hit-tested onto a PDF viewer layer
-	 * outside the registered page after a PDF.js zoom/reflow. */
+	/** Deliver a real Pencil event from document capture before PDF viewer
+	 * listeners can prevent it from reaching the page or canvas target. */
 	forwardExternalPointerEvent(event: PointerEvent): void {
-		if (this.disposed) return;
+		if (this.disposed || this.externallyHandledEvents.has(event)) return;
 		if (event.type === 'pointerdown') this.handleInputPointerDown(event);
 		else this.handleInputPointerContinuation(event);
+		// Document capture owns delivery even when the original target is the
+		// live canvas: viewer capture may stop the event before it gets there.
+		if (event.target === this.live) this.pointerForwarder?.(event);
+		this.externallyHandledEvents.add(event);
 	}
 
 	mount(): void {

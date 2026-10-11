@@ -160,8 +160,9 @@ describe('OverlayManager zoom recovery', () => {
 		expect(forward).toHaveBeenCalledWith(first);
 		forward.mockClear();
 		const live = page.querySelector<HTMLCanvasElement>('.jot-live-overlay');
-		live?.dispatchEvent(pen('pointerdown')); // native canvas keeps ownership
-		expect(forward).not.toHaveBeenCalled();
+		live?.dispatchEvent(pen('pointerdown')); // document capture owns delivery
+		expect(forward).toHaveBeenCalledTimes(1);
+		forward.mockClear();
 		manager.disconnectAll();
 		obstruction.dispatchEvent(pen('pointerdown'));
 		expect(forward).not.toHaveBeenCalled();
@@ -539,14 +540,14 @@ describe('OverlayManager zoom recovery', () => {
 			// Even when IntersectionObserver still considers the page outside,
 			// Pencil-down on the dormant 1x1 hit target promotes it before the
 			// normal PointerEventHandler runs.
-			const penDown = new PointerEvent('pointerdown', {
+			const penDown = () => new PointerEvent('pointerdown', {
 				pointerId: 77,
 				pointerType: 'pen',
 				clientX: 20,
 				clientY: 20,
 				bubbles: true,
 			});
-			activeLive?.dispatchEvent(penDown);
+			activeLive?.dispatchEvent(penDown());
 			expect(secondPage.querySelector('canvas.jot-overlay')).not.toBeNull();
 			expect(activeLive?.width).toBeGreaterThan(1);
 			expect(activeLive?.height).toBeGreaterThan(1);
@@ -568,7 +569,7 @@ describe('OverlayManager zoom recovery', () => {
 
 			// A late lostcapture from an earlier pointer must not release the
 			// current gesture's pin and unmount the real drawing backing store.
-			activeLive?.dispatchEvent(penDown);
+			activeLive?.dispatchEvent(penDown());
 			activeLive?.dispatchEvent(new PointerEvent('pointerdown', {
 				pointerId: 78, pointerType: 'pen', bubbles: true,
 			}));
@@ -585,7 +586,7 @@ describe('OverlayManager zoom recovery', () => {
 
 			// Losing the original live canvas during an active gesture must not
 			// strand pointer ownership and keep its heavy buffer alive forever.
-			activeLive?.dispatchEvent(penDown);
+			activeLive?.dispatchEvent(penDown());
 			activeLive?.remove();
 			await flushMutations();
 			await vi.advanceTimersByTimeAsync(150);

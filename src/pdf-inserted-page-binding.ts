@@ -154,6 +154,10 @@ export class PdfInsertedPageBinding {
 		return this.root.contains(canvas);
 	}
 
+	forwardExternalPointerEvent(event: PointerEvent): void {
+		this.surface.forwardExternalPointerEvent(this.key, event);
+	}
+
 	persistentCanvas(): HTMLCanvasElement | null {
 		return this.surface.overlayForKey(this.key);
 	}

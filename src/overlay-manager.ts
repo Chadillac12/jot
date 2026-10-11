@@ -26,7 +26,7 @@ interface LeafBinding {
 	gaps: Map<number, HTMLElement>;
 	container: HTMLElement;
 	insertedSyncTimer: number | null;
-	lastExternalPointer: { pointerId: number; page: PdfPageBinding } | null;
+	lastExternalPointer: { pointerId: number; page: PageBinding } | null;
 	documentPointerDown: (event: PointerEvent) => void;
 	documentPointerContinue: (event: PointerEvent) => void;
 }
@@ -531,10 +531,19 @@ export class OverlayManager {
 		const target = event.target as Element | null;
 		const targetPage = typeof target?.closest === 'function'
 			? target.closest<HTMLElement>('.page') : null;
-		// Inserted Jot pages have their own Pencil session and must never fall
-		// through into the underlying PDF page.
-		if (targetPage?.closest(`.${PDF_INSERTED_PAGE_CLASS}`) ||
-			target?.closest?.(`.${PDF_INSERTED_PAGE_CLASS}`)) return;
+		// Route only ink sheets, preserving their toolbar and PDF controls.
+		if (target?.closest?.('button, input, select, textarea, a, [role="button"], [role="dialog"], .modal, .menu, .jot-palette')) return;
+		const insertedRoot = target?.closest?.(`.${PDF_INSERTED_PAGE_CLASS}`);
+		if (insertedRoot) {
+			if (event.pointerType !== 'pen' || !target?.closest?.('.jot-note-sheet')) return;
+			for (const candidate of binding.insertedPages.values()) {
+				if (candidate.root !== insertedRoot) continue;
+				binding.lastExternalPointer = { pointerId: event.pointerId, page: candidate };
+				candidate.forwardExternalPointerEvent(event);
+				return;
+			}
+			return;
+		}
 		const withinViewer = target ? binding.container.contains(target) : false;
 		let pageBinding = targetPage ? binding.pages.get(targetPage) : undefined;
 		const normallyRouted = pageBinding !== undefined;
@@ -565,10 +574,7 @@ export class OverlayManager {
 				targetTag: target?.tagName ?? null,
 			});
 		}
-		if (event.pointerType !== 'pen' || !pageBinding || normallyRouted) return;
-		// Preserve normal PDF controls and modal interactions that happen to
-		// visually overlap a PDF page.
-		if (target?.closest?.('button, input, select, textarea, a, [role="button"], [role="dialog"], .modal, .menu, .jot-palette')) return;
+		if (event.pointerType !== 'pen' || !pageBinding) return;
 		binding.lastExternalPointer = { pointerId: event.pointerId, page: pageBinding };
 		pageBinding.forwardExternalPointerEvent(event);
 		this.diagnostics.record('pdf.document-input-forwarded', { key: pageBinding.key, phase: 'down' });
@@ -577,14 +583,9 @@ export class OverlayManager {
 	private onPdfDocumentPointerContinue(binding: LeafBinding, event: PointerEvent): void {
 		const owner = binding.lastExternalPointer;
 		if (!owner || event.pointerId !== owner.pointerId) return;
-		const target = event.target as Element | null;
-		const targetPage = typeof target?.closest === 'function'
-			? target.closest<HTMLElement>('.page') : null;
-		// When the gesture enters its original page, the page's own capture
-		// listener handles it. Avoid processing the same event twice.
-		if (!targetPage || binding.pages.get(targetPage) !== owner.page) {
-			owner.page.forwardExternalPointerEvent(event);
-		}
+		// Target ancestry cannot prove downstream delivery after PDF zoom.
+		// The owner deduplicates document and page/sheet capture for this event.
+		owner.page.forwardExternalPointerEvent(event);
 		if (event.type === 'pointerup' || event.type === 'pointercancel' ||
 			event.type === 'lostpointercapture') binding.lastExternalPointer = null;
 	}

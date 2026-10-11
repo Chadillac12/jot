@@ -98,8 +98,11 @@ The PDF bytes remain untouched during normal editing. `OverlayManager` inserts l
 page roots into gap containers between PDF.js page elements. Each hybrid page is rendered by the
 same `JotNoteSurface` used for standalone notebooks, so paper rendering, Pencil input, backing
 store limits, deterministic stroke rendering, and page virtualization have one implementation.
-Hybrid surfaces use the PDF view as their IntersectionObserver root so offscreen inserted pages
-release their canvas backing stores. While mounted, hybrid canvases use a fixed logical backing
+Hybrid surfaces use the PDF view as their IntersectionObserver root. Since iPad.14 they eagerly
+mount and retain their buffers for the leaf lifetime because zoom exits were observed without
+matching entry callbacks. Standalone notebooks still virtualize their backing stores. Hybrid
+retention is a memory tradeoff requiring physical iPad validation, not an input-delivery guarantee.
+While mounted, hybrid canvases use a fixed logical backing
 store derived from the inserted page dimensions and a conservative memory budget; PDF zoom changes
 only their CSS display size. The backing-store width/height therefore never churn during a zoom
 gesture, eliminating repeated WebKit canvas allocation pressure while preserving normalized Pencil
@@ -331,6 +334,24 @@ available even when the active pane has transient zero geometry, and
 diagnostics include palette open/close reasons, page fallback activations,
 forwarded contacts and rejected/accepted ink input. No Pencil coordinates,
 stroke points, or PDF contents are logged.
+
+## PDF Pencil delivery after pinch-zoom
+
+Document capture delivers real Pencil events to the owning source page or inserted Jot sheet
+before PDF viewer listeners can prevent downstream delivery. A registered page or canvas target
+does not prove that its listener will receive the event. The leaf remembers the owning binding
+and pointer ID for move/up/cancel, including events retargeted outside that sheet. Source page and
+notebook surface owners activate and size their existing input surfaces before stroke begin;
+they suppress repeated lifecycle work for the same externally delivered event. The shared
+`PointerEventHandler` also deduplicates direct versus forwarded delivery of that event, so a
+stroke produces one commit, save schedule and undo entry.
+
+Toolbar controls and finger gestures keep their normal event paths. Leaf disposal removes the
+document listeners and clears pointer ownership. This routing adds no recovery timer or observer,
+and does not alter normalized ink, stable inserted-page IDs or sidecar schemas.
+
+See `IPAD_ZOOM_ROOT_CAUSE.md` for the pre-implementation findings and
+`IPAD_ZOOM_VERIFICATION.md` for historical and separate WebKit behavioral verification.
 
 ## Release configuration management
 
