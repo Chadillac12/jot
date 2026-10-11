@@ -20,6 +20,7 @@ export type SidecarLoadStatus =
 export interface SidecarStoreCallbacks {
 	onSaveError?: (pdfPath: string, error: unknown) => void;
 	onSaveRecovered?: (pdfPath: string) => void;
+	onSaveCommitted?: (pdfPath: string, hasAnnotations: boolean, stillDirty: boolean) => void;
 }
 
 export class SidecarStore {
@@ -339,6 +340,7 @@ export class SidecarStore {
 			}
 
 			session.completeSave(saveRevision);
+			this.callbacks.onSaveCommitted?.(pdfPath, payload !== null, session.isDirty);
 			if (wasError) this.callbacks.onSaveRecovered?.(pdfPath);
 			if (session.isDirty) this.scheduleRetry(pdfPath);
 			return true;
