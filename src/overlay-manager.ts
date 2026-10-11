@@ -26,6 +26,9 @@ interface LeafBinding {
 	gaps: Map<number, HTMLElement>;
 	container: HTMLElement;
 	insertedSyncTimer: number | null;
+	lastExternalPointer: { pointerId: number; page: PdfPageBinding } | null;
+	documentPointerDown: (event: PointerEvent) => void;
+	documentPointerContinue: (event: PointerEvent) => void;
 }
 
 export interface OverlayManagerCallbacks {
@@ -68,6 +71,8 @@ export class OverlayManager {
 		let binding = this.leaves.get(leaf);
 		if (!binding) {
 			let created!: LeafBinding;
+			const documentPointerDown = (event: PointerEvent) => this.onPdfDocumentPointerDown(leaf, created, event);
+			const documentPointerContinue = (event: PointerEvent) => this.onPdfDocumentPointerContinue(created, event);
 			const observer = new MutationObserver((records) => {
 				const currentPath = this.filePathForLeaf(leaf);
 				if (!currentPath) return;
@@ -100,8 +105,16 @@ export class OverlayManager {
 				gaps: new Map(),
 				container,
 				insertedSyncTimer: null,
+				lastExternalPointer: null,
+				documentPointerDown,
+				documentPointerContinue,
 			};
 			observer.observe(container, { childList: true, subtree: true });
+			const doc = container.ownerDocument;
+			doc.addEventListener('pointerdown', documentPointerDown, true);
+			for (const type of ['pointermove', 'pointerup', 'pointercancel', 'lostpointercapture'] as const) {
+				doc.addEventListener(type, documentPointerContinue, true);
+			}
 			binding = created;
 			this.leaves.set(leaf, binding);
 		}
@@ -512,6 +525,70 @@ export class OverlayManager {
 		return null;
 	}
 
+	private onPdfDocumentPointerDown(leaf: WorkspaceLeaf, binding: LeafBinding, event: PointerEvent): void {
+		if (this.getActivePdfLeaf() !== leaf) return;
+		if (event.pointerType !== 'pen' && event.pointerType !== 'touch') return;
+		const target = event.target as Element | null;
+		const targetPage = typeof target?.closest === 'function'
+			? target.closest<HTMLElement>('.page') : null;
+		// Inserted Jot pages have their own Pencil session and must never fall
+		// through into the underlying PDF page.
+		if (targetPage?.closest(`.${PDF_INSERTED_PAGE_CLASS}`) ||
+			target?.closest?.(`.${PDF_INSERTED_PAGE_CLASS}`)) return;
+		const withinViewer = target ? binding.container.contains(target) : false;
+		let pageBinding = targetPage ? binding.pages.get(targetPage) : undefined;
+		const normallyRouted = pageBinding !== undefined;
+		if (event.pointerType === 'pen' && targetPage && !pageBinding &&
+			binding.container.contains(targetPage)) {
+			// The PDF viewer may replace a page before our MutationObserver runs.
+			const path = this.filePathForLeaf(leaf);
+			if (path) this.syncPdfPages(binding, path);
+			pageBinding = binding.pages.get(targetPage);
+		}
+		if (!pageBinding && !targetPage) {
+			for (const [page, candidate] of binding.pages) {
+				if (!page.isConnected || !binding.container.contains(page)) continue;
+				const rect = page.getBoundingClientRect();
+				if (rect.width <= 0 || rect.height <= 0 ||
+					event.clientX < rect.left || event.clientX > rect.right ||
+					event.clientY < rect.top || event.clientY > rect.bottom) continue;
+				pageBinding = candidate;
+				break;
+			}
+		}
+		if (this.diagnostics.isEnabled() && (withinViewer || pageBinding)) {
+			this.diagnostics.record('pdf.document-pointerdown', {
+				pointerType: event.pointerType,
+				insidePdfPage: normallyRouted,
+				withinViewer,
+				matchedKey: pageBinding?.key ?? null,
+				targetTag: target?.tagName ?? null,
+			});
+		}
+		if (event.pointerType !== 'pen' || !pageBinding || normallyRouted) return;
+		// Preserve normal PDF controls and modal interactions that happen to
+		// visually overlap a PDF page.
+		if (target?.closest?.('button, input, select, textarea, a, [role="button"], [role="dialog"], .modal, .menu, .jot-palette')) return;
+		binding.lastExternalPointer = { pointerId: event.pointerId, page: pageBinding };
+		pageBinding.forwardExternalPointerEvent(event);
+		this.diagnostics.record('pdf.document-input-forwarded', { key: pageBinding.key, phase: 'down' });
+	}
+
+	private onPdfDocumentPointerContinue(binding: LeafBinding, event: PointerEvent): void {
+		const owner = binding.lastExternalPointer;
+		if (!owner || event.pointerId !== owner.pointerId) return;
+		const target = event.target as Element | null;
+		const targetPage = typeof target?.closest === 'function'
+			? target.closest<HTMLElement>('.page') : null;
+		// When the gesture enters its original page, the page's own capture
+		// listener handles it. Avoid processing the same event twice.
+		if (!targetPage || binding.pages.get(targetPage) !== owner.page) {
+			owner.page.forwardExternalPointerEvent(event);
+		}
+		if (event.type === 'pointerup' || event.type === 'pointercancel' ||
+			event.type === 'lostpointercapture') binding.lastExternalPointer = null;
+	}
+
 	private disposeLeaf(leaf: WorkspaceLeaf, binding: LeafBinding): void {
 		this.diagnostics.record('overlay.dispose-leaf', {
 			pdfPath: this.filePathForLeaf(leaf),
@@ -520,6 +597,12 @@ export class OverlayManager {
 			gaps: binding.gaps.size,
 		});
 		binding.containerObserver.disconnect();
+		const doc = binding.container.ownerDocument;
+		doc.removeEventListener('pointerdown', binding.documentPointerDown, true);
+		for (const type of ['pointermove', 'pointerup', 'pointercancel', 'lostpointercapture'] as const) {
+			doc.removeEventListener(type, binding.documentPointerContinue, true);
+		}
+		binding.lastExternalPointer = null;
 		this.cancelInsertedPageSync(binding);
 		for (const page of binding.pages.values()) page.dispose();
 		for (const page of binding.insertedPages.values()) page.dispose();
