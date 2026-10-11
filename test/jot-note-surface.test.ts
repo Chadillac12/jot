@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { documentPageKey } from '../src/jot-file';
 import { createJotNote, createJotPage } from '../src/jot-note-file';
 import { JotNoteSurface } from '../src/jot-note-surface';
+import { PdfInsertedPageBinding } from '../src/pdf-inserted-page-binding';
 import { StrokeStore } from '../src/stroke-store';
 
 class ResizeObserverMock {
@@ -387,6 +388,47 @@ describe('JotNoteSurface', () => {
 		expect(host.querySelectorAll('canvas')).toHaveLength(2);
 		surface.disconnect();
 		expect(host.querySelectorAll('canvas')).toHaveLength(0);
+	});
+
+	it('wires a real PdfInsertedPageBinding on construction and keeps it writable after an exit intersection', async () => {
+		vi.useFakeTimers();
+		try {
+			let callback: IntersectionObserverCallback = () => {};
+			class Observer {
+				constructor(cb: IntersectionObserverCallback) { callback = cb; }
+				observe(): void {}
+				unobserve(): void {}
+				disconnect(): void {}
+			}
+			Object.defineProperty(window, 'IntersectionObserver', {
+				value: Observer, configurable: true, writable: true,
+			});
+			const viewer = document.createElement('div');
+			document.body.appendChild(viewer);
+			const wire = vi.fn(() => vi.fn());
+			const page = { id: 'ink-1', slot: 3, paper: 'grid' as const, width: 1536, height: 2048 };
+			const makeBinding = () => new PdfInsertedPageBinding('notes.pdf', page, new StrokeStore(), wire, {
+				onPaperChange: vi.fn(),
+			}, document, viewer);
+			const first = makeBinding();
+			viewer.appendChild(first.root);
+			const firstCanvas = first.persistentCanvas();
+			expect(firstCanvas).not.toBeNull();
+			expect(wire).toHaveBeenCalledTimes(1);
+			const sheet = first.root.querySelector<HTMLElement>('.jot-note-sheet')!;
+			callback([{ target: sheet, isIntersecting: false, intersectionRatio: 0 } as unknown as IntersectionObserverEntry],
+				{} as IntersectionObserver);
+			await vi.advanceTimersByTimeAsync(3000);
+			expect(first.persistentCanvas()).toBe(firstCanvas);
+			first.dispose();
+			const reopened = makeBinding();
+			viewer.appendChild(reopened.root);
+			expect(reopened.persistentCanvas()).not.toBeNull();
+			expect(wire).toHaveBeenCalledTimes(2);
+			reopened.dispose();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('retains a previously usable inserted Jot page through repeated false zoom intersections', async () => {
