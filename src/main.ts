@@ -78,7 +78,14 @@ export default class JotPlugin extends Plugin {
 			this.strokes,
 			this.sessions,
 			{
+				onSaveCommitted: (path, hasAnnotations, stillDirty) => {
+					this.diagnostics.record('pdf.sidecar-save-committed', { path, hasAnnotations, stillDirty });
+				},
 				onSaveError: (path, error) => {
+					this.diagnostics.record('pdf.sidecar-save-error', {
+						path,
+						error: error instanceof Error ? error.message : String(error),
+					});
 					new Notice(
 						`Jot: save failed for ${path}. Changes remain dirty and Jot will retry: ${error instanceof Error ? error.message : String(error)}`,
 						8000,
