@@ -390,6 +390,48 @@ describe('JotNoteSurface', () => {
 		expect(host.querySelectorAll('canvas')).toHaveLength(0);
 	});
 
+	it('keeps an inserted PDF Jot page aligned when PDF.js zooms its shared transformed viewer', () => {
+		const viewer = document.createElement('div');
+		const page = document.createElement('div');
+		page.className = 'page';
+		page.setAttribute('data-page-number', '3');
+		let layoutWidth = 800;
+		let renderedWidth = 800;
+		Object.defineProperty(page, 'offsetWidth', { get: () => layoutWidth, configurable: true });
+		page.getBoundingClientRect = () => ({
+			x: 0, y: 0, left: 0, top: 0,
+			right: renderedWidth, bottom: 1000,
+			width: renderedWidth, height: 1000,
+			toJSON: () => ({}),
+		});
+		viewer.appendChild(page);
+		document.body.appendChild(viewer);
+		const wire = vi.fn(() => vi.fn());
+		const inserted = new PdfInsertedPageBinding('notes.pdf', {
+			id: 'ink-zoom', slot: 3, paper: 'ruled', width: 1536, height: 2048,
+		}, new StrokeStore(), wire, { onPaperChange: vi.fn() }, document, viewer);
+		viewer.appendChild(inserted.root);
+		inserted.setReferencePage(page);
+		expect(inserted.root.style.width).toBe('800px');
+		expect(inserted.persistentCanvas()).not.toBeNull();
+		const canvasBefore = inserted.persistentCanvas();
+		// CSS transform applied to the shared PDF viewer enlarges screen bounds
+		// but does not change the page's layout width.
+		renderedWidth = 1600;
+		ResizeObserverMock.instances[0]!.fire();
+		expect(inserted.root.style.width).toBe('800px');
+		expect(inserted.persistentCanvas()).toBe(canvasBefore);
+		// A real PDF.js reflow adjusts the untransformed page layout width;
+		// the inserted Jot page must follow it without applying a second zoom.
+		layoutWidth = 900;
+		renderedWidth = 1800;
+		ResizeObserverMock.instances[0]!.fire();
+		expect(inserted.root.style.width).toBe('900px');
+		expect(inserted.persistentCanvas()).toBe(canvasBefore);
+		expect(wire).toHaveBeenCalledTimes(1);
+		inserted.dispose();
+	});
+
 	it('wires a real PdfInsertedPageBinding on construction and keeps it writable after an exit intersection', async () => {
 		vi.useFakeTimers();
 		try {
