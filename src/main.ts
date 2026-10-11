@@ -566,6 +566,15 @@ export default class JotPlugin extends Plugin {
 					result,
 					reason,
 					key: canvas.getAttribute('data-jot-key'),
+					tool: this.toolState.tool,
+					canvasConnected: canvas.isConnected,
+				});
+			},
+			onInputLifecycle: (phase, fields) => {
+				this.diagnostics.record('ink.pointer-lifecycle', {
+					phase,
+					key: canvas.getAttribute('data-jot-key'),
+					...fields,
 				});
 			},
 			allowInput: () => {
