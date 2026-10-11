@@ -176,6 +176,9 @@ export class PdfPageBinding {
 		this.mutationObserver.observe(this.page, { childList: true });
 
 		this.resizeObserver = new ResizeObserver(() => {
+			// PDF.js resizes every page on each pinch frame. Only active Jot pages
+			// need sizing work or verbose diagnostics; keep offscreen callbacks inert.
+			if (!this.active) return;
 			if (this.diagnostics.isEnabled()) {
 				const rect = this.page.getBoundingClientRect();
 				this.diagnostics.record('pdf.page-resize-observed', {
@@ -185,7 +188,7 @@ export class PdfPageBinding {
 					active: this.active,
 				});
 			}
-			if (this.active) this.scheduleResize();
+			this.scheduleResize();
 		});
 		this.resizeObserver.observe(this.page);
 
