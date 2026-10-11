@@ -106,6 +106,67 @@ beforeEach(() => {
 });
 
 describe('OverlayManager zoom recovery', () => {
+	it('keeps the Pencil overlay in untransformed CSS layout dimensions after PDF.js scales a page', () => {
+		const page = document.createElement('div');
+		page.className = 'page';
+		page.setAttribute('data-page-number', '1');
+		setRect(page, 1600, 2000); // screen pixels at 2x CSS zoom
+		Object.defineProperty(page, 'clientWidth', { value: 800, configurable: true });
+		Object.defineProperty(page, 'clientHeight', { value: 1000, configurable: true });
+		document.body.appendChild(page);
+		const binding = new PdfPageBinding(page, 'notes.pdf::1', new StrokeStore(), vi.fn(() => vi.fn()));
+		binding.mount();
+		const live = page.querySelector<HTMLCanvasElement>('.jot-live-overlay');
+		const persistent = page.querySelector<HTMLCanvasElement>('.jot-overlay');
+		expect(live?.style.width).toBe('800px');
+		expect(live?.style.height).toBe('1000px');
+		expect(persistent?.style.width).toBe('800px');
+		expect(persistent?.style.height).toBe('1000px');
+		binding.dispose();
+	});
+
+	it('forwards a post-zoom Pencil stroke from an outside viewer hit target without duplicating page events', () => {
+		const container = document.createElement('div');
+		const page = document.createElement('div');
+		page.className = 'page';
+		page.setAttribute('data-page-number', '1');
+		setRect(page, 800, 1000);
+		container.appendChild(page);
+		document.body.appendChild(container);
+		const obstruction = document.createElement('div');
+		document.body.appendChild(obstruction);
+		const leaf = { view: {
+			containerEl: container, file: { path: 'notes.pdf' }, getViewType: () => 'pdf',
+		} };
+		const app = { workspace: {
+			getMostRecentLeaf: () => leaf,
+			iterateAllLeaves: (fn: (value: unknown) => void) => fn(leaf),
+		} };
+		const forward = vi.fn();
+		const wire = vi.fn((_canvas: HTMLCanvasElement, register?: (callback: ((event: PointerEvent) => void) | null) => void) => {
+			register?.(forward);
+			return () => register?.(null);
+		});
+		const manager = new OverlayManager(app as any, new StrokeStore(), wire);
+		manager.attachToActivePdf();
+		const pen = (type: string) => new PointerEvent(type, {
+			bubbles: true, pointerType: 'pen', pointerId: 27, clientX: 120, clientY: 150,
+		});
+		const first = pen('pointerdown');
+		obstruction.dispatchEvent(first);
+		obstruction.dispatchEvent(pen('pointermove'));
+		obstruction.dispatchEvent(pen('pointerup'));
+		expect(forward).toHaveBeenCalledTimes(3);
+		expect(forward).toHaveBeenCalledWith(first);
+		forward.mockClear();
+		const live = page.querySelector<HTMLCanvasElement>('.jot-live-overlay');
+		live?.dispatchEvent(pen('pointerdown')); // native canvas keeps ownership
+		expect(forward).not.toHaveBeenCalled();
+		manager.disconnectAll();
+		obstruction.dispatchEvent(pen('pointerdown'));
+		expect(forward).not.toHaveBeenCalled();
+	});
+
 	it('does not measure dormant PDF pages on every pinch-resize callback', () => {
 		class IdleIntersectionObserver {
 			observe(): void {}
