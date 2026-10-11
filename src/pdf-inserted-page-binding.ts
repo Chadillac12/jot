@@ -184,18 +184,29 @@ export class PdfInsertedPageBinding {
 	private syncWidth(): void {
 		const reference = this.referencePage;
 		if (!reference) return;
+		// PDF.js transforms its viewer while pinching. getBoundingClientRect()
+		// includes that zoom scale, but the inserted Jot page shares the same
+		// transformed ancestor as the reference PDF page. Reusing the screen
+		// width as a CSS width applies zoom twice and shifts the Pencil target.
+		// offsetWidth/clientWidth are untransformed layout pixels.
+		const layoutWidth = reference.offsetWidth || reference.clientWidth;
 		const rect = reference.getBoundingClientRect();
-		if (rect.width > 0) {
-			const width = `${rect.width}px`;
+		const widthValue = layoutWidth > 0 ? layoutWidth : rect.width;
+		if (widthValue > 0) {
+			const width = `${widthValue}px`;
 			const changed = this.root.style.width !== width;
 			this.root.style.width = width;
-			this.diagnostics.record('hybrid.reference-width-sync', {
-				key: this.key,
-				referencePage: reference.getAttribute('data-page-number'),
-				width: rect.width,
-				height: rect.height,
-				changed,
-			});
+			if (changed) {
+				this.diagnostics.record('hybrid.reference-width-sync', {
+					key: this.key,
+					referencePage: reference.getAttribute('data-page-number'),
+					width: widthValue,
+					screenWidth: rect.width,
+					height: rect.height,
+					source: layoutWidth > 0 ? 'layout' : 'rect-fallback',
+					changed,
+				});
+			}
 			return;
 		}
 		const explicitWidth = reference.style.width;
