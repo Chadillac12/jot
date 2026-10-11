@@ -19,6 +19,7 @@ interface Harness {
 	sidecar: SidecarStore;
 	undo: UndoController;
 	activation: { value: PaletteActivation };
+	lifecycle: ReturnType<typeof vi.fn>;
 }
 
 function makeContext(): CanvasRenderingContext2D {
@@ -89,6 +90,7 @@ function makeHarness(
 		}),
 	} as unknown as UndoController;
 	const currentActivation = { value: activation };
+	const lifecycle = vi.fn();
 
 	new PointerEventHandler(canvas, makeContext(), {
 		palette,
@@ -100,9 +102,10 @@ function makeHarness(
 		handedness: () => 'right',
 		paletteActivation: () => currentActivation.value,
 		allowInput,
+		onInputLifecycle: lifecycle,
 	}).attach();
 
-	return { canvas, palette, strokes, sidecar, undo, activation: currentActivation };
+	return { canvas, palette, strokes, sidecar, undo, activation: currentActivation, lifecycle };
 }
 
 function pointer(
@@ -194,8 +197,22 @@ describe('PointerEventHandler palette activation', () => {
 		expect(sidecar.scheduleSave).toHaveBeenCalledWith('notes.pdf');
 	});
 
+	it('records both Pencil completion and persisted stroke commit with the matching pointer', () => {
+		const { canvas, lifecycle, strokes } = makeHarness();
+		pointer(canvas, 'pointerdown', 'pen', 31, 20, 20);
+		pointer(canvas, 'pointermove', 'pen', 31, 45, 45);
+		pointer(canvas, 'pointerup', 'pen', 31, 50, 50);
+		expect(lifecycle).toHaveBeenCalledWith('up', expect.objectContaining({
+			pointerId: 31, pointerType: 'pen', eventType: 'pointerup',
+		}));
+		expect(lifecycle).toHaveBeenCalledWith('committed', expect.objectContaining({
+			pointerId: 31, saveScheduled: true, points: 3,
+		}));
+		expect(strokes.forKey('notes.pdf::1')).toHaveLength(1);
+	});
+
 	it('discards a cancelled Pencil stroke instead of persisting a partial line', () => {
-		const { canvas, strokes, sidecar, undo } = makeHarness();
+		const { canvas, strokes, sidecar, undo, lifecycle } = makeHarness();
 
 		pointer(canvas, 'pointerdown', 'pen', 1, 20, 20);
 		pointer(canvas, 'pointermove', 'pen', 1, 50, 50);
@@ -204,6 +221,11 @@ describe('PointerEventHandler palette activation', () => {
 		expect(strokes.forKey('notes.pdf::1')).toHaveLength(0);
 		expect(sidecar.scheduleSave).not.toHaveBeenCalled();
 		expect(undo.push).not.toHaveBeenCalled();
+		expect(lifecycle).toHaveBeenCalledWith('cancel', expect.objectContaining({
+			pointerId: 1, pointerType: 'pen', eventType: 'pointercancel',
+		}));
+		const phases = lifecycle.mock.calls.map(([phase]) => phase as string);
+		expect(phases).not.toContain('committed');
 	});
 
 	it('opens the palette on quick tap then nearby hold and removes the gesture mark', () => {
