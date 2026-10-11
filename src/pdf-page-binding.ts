@@ -121,6 +121,14 @@ export class PdfPageBinding {
 		return this.keyValue;
 	}
 
+	/** Recover a real Pencil event that was hit-tested onto a PDF viewer layer
+	 * outside the registered page after a PDF.js zoom/reflow. */
+	forwardExternalPointerEvent(event: PointerEvent): void {
+		if (this.disposed) return;
+		if (event.type === 'pointerdown') this.handleInputPointerDown(event);
+		else this.handleInputPointerContinuation(event);
+	}
+
 	mount(): void {
 		if (this.disposed) return;
 		this.diagnostics.record('pdf.page-binding-mount', {
@@ -657,18 +665,25 @@ export class PdfPageBinding {
 	private sizeCanvas(canvas: HTMLCanvasElement): boolean {
 		canvas.classList.remove(PDF_DORMANT_INPUT_CLASS);
 		const rect = this.page.getBoundingClientRect();
-		if (rect.width <= 0 || rect.height <= 0) return false;
+		// PDF.js can scale a page with CSS transforms during pinch zoom. Its
+		// bounding rect is already screen-scaled: assigning that size to a child
+		// inside the same transformed page scales the Pencil hit target *twice*.
+		// Offset dimensions are untransformed CSS layout pixels. Use the rect only
+		// as a fallback for test DOMs / clients without layout dimensions.
+		const widthCss = this.page.clientWidth > 0 ? this.page.clientWidth : rect.width;
+		const heightCss = this.page.clientHeight > 0 ? this.page.clientHeight : rect.height;
+		if (widthCss <= 0 || heightCss <= 0) return false;
 		const win = this.page.ownerDocument.defaultView;
 		const requestedDpr = devicePixelRatioFor(win ?? { devicePixelRatio: 1 });
 		const effectiveDpr = safeBackingStoreDpr(
-			rect.width,
-			rect.height,
+			widthCss,
+			heightCss,
 			requestedDpr,
 			this.options.backingStoreLimits ?? PDF_OVERLAY_BACKING_STORE_LIMITS,
 		);
-		const changed = applyBackingStoreSize(canvas, rect.width, rect.height, effectiveDpr);
-		const width = `${rect.width}px`;
-		const height = `${rect.height}px`;
+		const changed = applyBackingStoreSize(canvas, widthCss, heightCss, effectiveDpr);
+		const width = `${widthCss}px`;
+		const height = `${heightCss}px`;
 		if (canvas.style.width !== width) canvas.style.width = width;
 		if (canvas.style.height !== height) canvas.style.height = height;
 		return changed;
