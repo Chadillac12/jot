@@ -78,7 +78,14 @@ export default class JotPlugin extends Plugin {
 			this.strokes,
 			this.sessions,
 			{
+				onSaveCommitted: (path, hasAnnotations, stillDirty) => {
+					this.diagnostics.record('pdf.sidecar-save-committed', { path, hasAnnotations, stillDirty });
+				},
 				onSaveError: (path, error) => {
+					this.diagnostics.record('pdf.sidecar-save-error', {
+						path,
+						error: error instanceof Error ? error.message : String(error),
+					});
 					new Notice(
 						`Jot: save failed for ${path}. Changes remain dirty and Jot will retry: ${error instanceof Error ? error.message : String(error)}`,
 						8000,
@@ -566,6 +573,15 @@ export default class JotPlugin extends Plugin {
 					result,
 					reason,
 					key: canvas.getAttribute('data-jot-key'),
+					tool: this.toolState.tool,
+					canvasConnected: canvas.isConnected,
+				});
+			},
+			onInputLifecycle: (phase, fields) => {
+				this.diagnostics.record('ink.pointer-lifecycle', {
+					phase,
+					key: canvas.getAttribute('data-jot-key'),
+					...fields,
 				});
 			},
 			allowInput: () => {

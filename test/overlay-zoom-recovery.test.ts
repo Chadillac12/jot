@@ -106,6 +106,34 @@ beforeEach(() => {
 });
 
 describe('OverlayManager zoom recovery', () => {
+	it('does not measure dormant PDF pages on every pinch-resize callback', () => {
+		class IdleIntersectionObserver {
+			observe(): void {}
+			disconnect(): void {}
+			unobserve(): void {}
+		}
+		Object.defineProperty(window, 'IntersectionObserver', {
+			value: IdleIntersectionObserver, configurable: true, writable: true,
+		});
+		const page = document.createElement('div');
+		page.className = 'page';
+		page.setAttribute('data-page-number', '1');
+		setRect(page, 800, 1000);
+		const root = document.createElement('div');
+		root.appendChild(page);
+		document.body.appendChild(root);
+		const sink = { isEnabled: () => true, record: vi.fn() };
+		const binding = new PdfPageBinding(page, 'notes.pdf::1', new StrokeStore(),
+			vi.fn(() => vi.fn()), sink, { observerRoot: root });
+		binding.mount();
+		const countBefore = sink.record.mock.calls.filter(([event]) => event === 'pdf.page-resize-observed').length;
+		ResizeObserverMock.instances[0]?.fire();
+		ResizeObserverMock.instances[0]?.fire();
+		const countAfter = sink.record.mock.calls.filter(([event]) => event === 'pdf.page-resize-observed').length;
+		expect(countAfter).toBe(countBefore);
+		binding.dispose();
+	});
+
 	it('retries an unavailable PDF ink handler rather than permanently disabling writing', async () => {
 		vi.useFakeTimers();
 		try {

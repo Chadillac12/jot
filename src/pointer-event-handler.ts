@@ -60,6 +60,10 @@ export interface PointerEventHandlerDeps {
 	paletteActivation: () => PaletteActivation;
 	allowInput?: () => boolean;
 	onInputDecision?: (result: 'accepted' | 'rejected', reason: string) => void;
+	onInputLifecycle?: (
+		phase: 'up' | 'cancel' | 'committed' | 'not-committed' | 'capture-failed',
+		fields: { pointerId: number; pointerType: string; points: number; eventType: string; saveScheduled?: boolean },
+	) => void;
 }
 
 export class PointerEventHandler {
@@ -199,6 +203,7 @@ export class PointerEventHandler {
 		try {
 			this.canvas.setPointerCapture(e.pointerId);
 		} catch {
+			this.traceInput('capture-failed', e);
 			/* continue without capture */
 		}
 		this.activePointerId = e.pointerId;
@@ -265,6 +270,7 @@ export class PointerEventHandler {
 			return;
 		}
 		if (this.activePointerId !== e.pointerId) return;
+		this.traceInput('cancel', e);
 
 		if (e.pointerType === 'mouse') this.longPress.cancel();
 		if (
@@ -304,6 +310,7 @@ export class PointerEventHandler {
 			return;
 		}
 		if (this.activePointerId !== e.pointerId) return;
+		this.traceInput('up', e);
 
 		if (
 			e.pointerType === 'pen' &&
@@ -331,6 +338,7 @@ export class PointerEventHandler {
 			// every previous freehand outline on each Pencil-up makes latency grow
 			// with page complexity.
 			if (committed) {
+				this.traceInput('committed', e, committed.stroke.points.length, committed.pdfPath !== null);
 				this.deps.overlays.appendPersistedStroke(this.canvas, committed.stroke);
 				if (isQuickPencilTap) {
 					this.rememberPencilTap(
@@ -340,6 +348,8 @@ export class PointerEventHandler {
 						committed.pdfPath,
 					);
 				}
+			} else {
+				this.traceInput('not-committed', e);
 			}
 			this.deps.overlays.clearLivePage(this.canvas);
 		}
@@ -628,6 +638,21 @@ export class PointerEventHandler {
 	private removeTwoFingerIndicator(): void {
 		this.twoFingerIndicator?.remove();
 		this.twoFingerIndicator = null;
+	}
+
+	private traceInput(
+		phase: 'up' | 'cancel' | 'committed' | 'not-committed' | 'capture-failed',
+		e: PointerEvent,
+		points = this.state.drawingPoints().length,
+		saveScheduled?: boolean,
+	): void {
+		this.deps.onInputLifecycle?.(phase, {
+			pointerId: e.pointerId,
+			pointerType: e.pointerType,
+			points,
+			eventType: e.type,
+			...(saveScheduled !== undefined ? { saveScheduled } : {}),
+		});
 	}
 
 	private releasePointerCapture(): void {
